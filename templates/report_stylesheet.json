@@ -1,0 +1,32 @@
+{
+  "page": {
+    "size": "A4",
+    "margins": { "top": 72, "right": 72, "bottom": 72, "left": 72 },
+    "columns": 1,
+    "column_gap": 0
+  },
+  "styles": {
+    "heading1": {
+      "font_size": 24,
+      "font_weight": "Bold"
+    },
+    "body": {
+      "font_size": 12
+    }
+  },
+  "templates": {
+    "main": {
+      "name": "main",
+      "children": [
+        { "type": "Text", "content": "{{title}}", "style": "heading1" },
+        { "type": "Text", "content": "{{content}}", "style": "body" }
+      ]
+    }
+  },
+  "page_sequences": {
+    "report": {
+      "template": "main",
+      "data_source": "/"
+    }
+  }
+}

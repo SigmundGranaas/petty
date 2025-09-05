@@ -1,0 +1,120 @@
+{
+  "page": {
+    "size": "Letter",
+    "margins": { "top": 40, "right": 40, "bottom": 40, "left": 40 },
+    "columns": 1,
+    "column_gap": 0
+  },
+  "styles": {
+    "h1": {
+      "font_size": 28,
+      "font_weight": "Bold",
+      "color": { "r": 0, "g": 51, "b": 102 },
+      "margin": { "top": 0, "right": 0, "bottom": 25, "left": 0 }
+    },
+    "h2": {
+      "font_size": 14,
+      "font_weight": "Bold",
+      "color": { "r": 102, "g": 102, "b": 102 },
+      "margin": { "top": 0, "right": 0, "bottom": 5, "left": 0 }
+    },
+    "addressBlock": {
+      "margin": { "top": 0, "right": 0, "bottom": 30, "left": 0 },
+      "padding": { "top": 10, "right": 10, "bottom": 10, "left": 10 },
+      "background_color": { "r": 245, "g": 245, "b": 245 },
+      "border": {
+        "width": 1,
+        "style": "Solid",
+        "color": { "r": 220, "g": 220, "b": 220 }
+      }
+    },
+    "body": {
+      "font_size": 11,
+      "line_height": 14,
+      "margin": { "top": 0, "right": 0, "bottom": 2, "left": 0 }
+    },
+    "invoiceMeta": {
+      "font_size": 11,
+      "text_align": "Right",
+      "margin": { "top": 0, "right": 0, "bottom": 2, "left": 0 }
+    },
+    "hr": {
+      "height": 2,
+      "background_color": { "r": 0, "g": 51, "b": 102 },
+      "margin": { "top": 5, "right": 0, "bottom": 30, "left": 0 }
+    },
+    "invoiceTable": {
+      "background_color": { "r": 240, "g": 242, "b": 245 }
+    },
+    "th": {
+      "font_weight": "Bold",
+      "text_align": "Left",
+      "color": { "r": 255, "g": 255, "b": 255 },
+      "background_color": { "r": 70, "g": 85, "b": 105 },
+      "padding": { "top": 8, "right": 5, "bottom": 8, "left": 5 }
+    },
+    "td": {
+      "padding": { "top": 8, "right": 5, "bottom": 8, "left": 5 },
+      "border": {
+        "width": 0.5,
+        "style": "Solid",
+        "color": { "r": 255, "g": 255, "b": 255 }
+      }
+    },
+    "td-right": {
+      "padding": { "top": 8, "right": 5, "bottom": 8, "left": 5 },
+      "text_align": "Right"
+    }
+  },
+  "templates": {
+    "invoicePage": {
+      "name": "invoicePage",
+      "children": [
+        { "type": "Text", "content": "INVOICE", "style": "h1" },
+        { "type": "Rectangle", "style": "hr"},
+        {
+          "type": "Container",
+          "style": "addressBlock",
+          "children": [
+            { "type": "Text", "content": "BILL TO", "style": "h2" },
+            { "type": "Text", "content": "{{name}}", "style": "body" },
+            { "type": "Text", "content": "{{address}}", "style": "body" }
+          ]
+        },
+        { "type": "Text", "content": "Invoice Number: {{invoiceNumber}}", "style": "invoiceMeta" },
+        { "type": "Text", "content": "Date: 2023-10-27", "style": "invoiceMeta" },
+        {
+          "type": "Table",
+          "style": "invoiceTable",
+          "data_source": "/items",
+          "columns": [
+            {
+              "header": "Product / Service",
+              "data_field": "/product",
+              "header_style": "th",
+              "style": "td"
+            },
+            {
+              "header": "Quantity",
+              "data_field": "/quantity",
+              "header_style": "th",
+              "style": "td-right"
+            },
+            {
+              "header": "Unit Price",
+              "data_field": "/price",
+              "header_style": "th",
+              "style": "td-right"
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "page_sequences": {
+    "invoiceRun": {
+      "template": "invoicePage",
+      "data_source": "/customers"
+    }
+  }
+}

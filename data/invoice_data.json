@@ -1,0 +1,23 @@
+{
+  "customers": [
+    {
+      "name": "Acme Corp",
+      "address": "123 Main St, Anytown, USA",
+      "invoiceNumber": "INV-001",
+      "items": [
+        { "product": "Rocket Skates", "quantity": 2, "price": 199.99 },
+        { "product": "Giant Magnet", "quantity": 1, "price": 54.50 },
+        { "product": "Dehydrated Boulders (Box of 10)", "quantity": 5, "price": 25.00 }
+      ]
+    },
+    {
+      "name": "Globex Corporation",
+      "address": "456 Oak Ave, Springfield",
+      "invoiceNumber": "INV-002",
+      "items": [
+        { "product": "Hammock", "quantity": 1, "price": 80.00 },
+        { "product": "Employee Motivation Posters", "quantity": 10, "price": 9.99 }
+      ]
+    }
+  ]
+}
