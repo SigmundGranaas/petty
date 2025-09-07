@@ -3,7 +3,7 @@
     "size": "Letter",
     "margins": { "top": 40, "right": 40, "bottom": 40, "left": 40 },
     "footer_height": 30,
-    "footer_text": "Report ID: {{id}} | Page %p of %t",
+    "footer_text": "Report ID: {{id}} | Page {{page_num}} of {{total_pages}}",
     "footer_style": "footer"
   },
   "styles": {

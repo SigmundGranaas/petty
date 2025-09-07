@@ -1,3 +1,4 @@
+// FILE: /home/sigmund/RustroverProjects/petty/src/render/pdf.rs
 // src/render/pdf.rs
 
 use crate::error::RenderError;
@@ -160,25 +161,31 @@ impl<'a> DocumentRenderer<'a> for PdfDocumentRenderer<'a> {
         let total_pages = pages.len();
 
         for (i, page) in pages.iter_mut().enumerate() {
-            let context = self.page_contexts.get(i).unwrap_or(&&Value::Null);
+            let context_data = self.page_contexts.get(i).unwrap_or(&&Value::Null);
+
+            // Create a mutable copy of the context to add page numbers
+            let mut context_with_pagination = (*context_data).clone();
+            if let Some(obj) = context_with_pagination.as_object_mut() {
+                obj.insert("page_num".to_string(), (i + 1).into());
+                obj.insert("total_pages".to_string(), total_pages.into());
+            }
+
             let page_layout = &self.stylesheet.page;
 
-            if let Some(footer_text) = &page_layout.footer_text {
+            if let Some(footer_template) = &page_layout.footer_text {
                 let mut footer_ops = Vec::new();
                 let style = layout_engine
                     .compute_style_from_default(page_layout.footer_style.as_deref());
 
-                let rendered_text = if let Some(name) = &page_layout.footer_template_name {
-                    template_engine
-                        .render(name, context)
-                        .map_err(|e| RenderError::TemplateError(e.to_string()))?
-                } else {
-                    footer_text.clone()
-                };
+                let rendered_text = template_engine
+                    .render_template(footer_template, &context_with_pagination)
+                    .map_err(|e| RenderError::TemplateError(e.to_string()))?;
 
+                // Legacy %p and %t replacement for backward compatibility, though {{page_num}} is preferred
                 let final_text = rendered_text
                     .replace("%p", &(i + 1).to_string())
                     .replace("%t", &total_pages.to_string());
+
 
                 let (page_width_pt, _) = Self::get_page_dimensions_pt(page_layout);
                 let font_id = self.get_font(&style.font_family);
@@ -360,7 +367,8 @@ impl<'a> PdfDocumentRenderer<'a> {
 
         let page_layout = self.current_page_layout.as_ref().unwrap();
         let (_width_pt, page_height_pt) = Self::get_page_dimensions_pt(page_layout);
-        let lines = layout_engine.wrap_text(&text.content, style, positioned.width);
+        let content_width = positioned.width - style.padding.left - style.padding.right;
+        let lines = layout_engine.wrap_text(&text.content, style, content_width);
 
         for (i, line) in lines.iter().enumerate() {
             let mut x = positioned.x + style.padding.left;
@@ -369,7 +377,7 @@ impl<'a> PdfDocumentRenderer<'a> {
             if style.text_align != TextAlign::Left {
                 let char_width_approx = style.font_size * 0.6;
                 let line_width = line.len() as f32 * char_width_approx;
-                let content_width = positioned.width - style.padding.left - style.padding.right;
+
                 match style.text_align {
                     TextAlign::Right => {
                         x = (positioned.x + positioned.width - style.padding.right) - line_width

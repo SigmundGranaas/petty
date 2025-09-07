@@ -1,3 +1,4 @@
+// FILE: /home/sigmund/RustroverProjects/petty/src/layout/processor.rs
 // src/layout/processor.rs
 
 use crate::error::PipelineError;
@@ -378,10 +379,12 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
         if self.needs_page_break(row_height) {
             self.start_new_page()?;
             // Re-render headers on the new page.
-            // Clone headers to break the immutable borrow on `self` before calling `render_row` mutably.
-            if let Some(headers) = self.current_table_headers.clone() {
+            // Temporarily take the headers to avoid borrow conflicts, which prevents a costly clone.
+            if let Some(headers) = self.current_table_headers.take() {
                 let header_height = self.calculate_row_height_from_events(&headers)?;
                 self.render_row(&headers, header_height)?;
+                // After rendering, put the headers back for subsequent pages.
+                self.current_table_headers = Some(headers);
             }
         }
 
@@ -425,7 +428,7 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
     fn render_row(&mut self, row_events: &[Event<'a>], row_height: f32) -> Result<(), PipelineError> {
         let table = self.current_table.as_ref().unwrap();
         let parent_context = self.context_stack.last().unwrap();
-        let mut current_x = parent_context.content_x;
+        let table_start_x = parent_context.content_x;
 
         for event in row_events {
             if let Event::AddCell {
@@ -434,14 +437,19 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
                 style_override,
             } = event
             {
+                // Calculate position for this cell explicitly instead of accumulating.
+                // This is more robust.
+                let col_offset: f32 = table.column_widths.iter().take(*column_index).sum();
+                let cell_x = table_start_x + col_offset;
+                let col_width = table.column_widths[*column_index];
+
                 let style = self.layout_engine.compute_style_from_parent(
                     style_override.as_deref(),
                     &table.style,
                 );
-                let col_width = table.column_widths[*column_index];
 
                 let cell_bg = PositionedElement {
-                    x: current_x,
+                    x: cell_x,
                     y: self.current_y,
                     width: col_width,
                     height: row_height,
@@ -453,7 +461,7 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
                 self.renderer.render_element(&cell_bg, &self.layout_engine)?;
 
                 let cell_text = PositionedElement {
-                    x: current_x,
+                    x: cell_x,
                     y: self.current_y,
                     width: col_width,
                     height: row_height,
@@ -465,8 +473,6 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
                 };
                 self.renderer
                     .render_element(&cell_text, &self.layout_engine)?;
-
-                current_x += col_width;
             }
         }
         self.current_y += row_height;

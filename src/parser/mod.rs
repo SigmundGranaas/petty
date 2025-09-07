@@ -1,3 +1,4 @@
+// FILE: /home/sigmund/RustroverProjects/petty/src/parser/mod.rs
 // src/parser/mod.rs
 use crate::error::PipelineError;
 use crate::layout::StreamingLayoutProcessor;
@@ -122,12 +123,11 @@ impl<'a> Parser<'a> {
                 TemplateElement::Text {
                     content,
                     style,
-                    template_name,
+                    ..
                 } => {
-                    let rendered_content: Cow<'a, str> = if let Some(name) = template_name {
-                        Cow::Owned(self.template_engine.render(name, context).map_err(|e| {
-                            PipelineError::TemplateParseError(e.to_string())
-                        })?)
+                    let rendered_content: Cow<'a, str> = if content.contains("{{") {
+                        Cow::Owned(self.template_engine.render_template(content, context)
+                            .map_err(|e| PipelineError::TemplateParseError(format!("Failed to render template '{}': {}", content, e)))?)
                     } else {
                         Cow::Borrowed(content)
                     };
@@ -228,22 +228,20 @@ impl<'a> Parser<'a> {
             })?;
 
         for row_item in rows_data {
-            let prefix = row_style_prefix_field.as_ref().and_then(|field| {
-                row_item
-                    .pointer(field)
-                    .and_then(|v| v.as_str().map(String::from))
+            let prefix_str = row_style_prefix_field.as_ref().and_then(|field| {
+                row_item.pointer(field).and_then(|v| v.as_str())
             });
 
             processor.process_event(Event::StartRow {
                 context: row_item,
-                row_style_prefix: prefix,
+                row_style_prefix: prefix_str.map(String::from),
             })?;
 
             for (i, col) in columns.iter().enumerate() {
                 let cell_value = row_item.pointer(&col.data_field).unwrap_or(&Value::Null);
 
-                let cell_text: Cow<'a, str> = if let Some(name) = &col.template_name {
-                    Cow::Owned(self.template_engine.render(name, row_item).map_err(|e| {
+                let cell_text: Cow<'a, str> = if let Some(template_string) = &col.content_template {
+                    Cow::Owned(self.template_engine.render_template(template_string, row_item).map_err(|e| {
                         PipelineError::TemplateParseError(e.to_string())
                     })?)
                 } else {
@@ -256,7 +254,7 @@ impl<'a> Parser<'a> {
                 };
 
                 let final_style = if let (Some(prefix), Some(base_style)) =
-                    (row_item.get("type").and_then(|v| v.as_str()), &col.style)
+                    (prefix_str, &col.style)
                 {
                     Some(format!("{}-{}", prefix, base_style))
                 } else {
