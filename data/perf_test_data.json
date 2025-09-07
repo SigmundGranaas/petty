@@ -1,0 +1,36 @@
+{
+  "records": [
+    {
+      "id": 10000,
+      "user": {
+        "name": "Alice",
+        "account": "ACC-123456"
+      },
+      "items": [
+        {
+          "description": "Premium Support Package",
+          "quantity": 1,
+          "price": 250.00,
+          "line_total": 250.00
+        },
+        {
+          "description": "Cloud Storage (1TB)",
+          "quantity": 12,
+          "price": 9.99,
+          "line_total": 119.88
+        },
+        {
+          "description": "Consulting Hour",
+          "quantity": 2,
+          "price": 150.00,
+          "line_total": 300.00
+        }
+      ],
+      "summary": {
+        "total": 669.88,
+        "tax": 53.59,
+        "grand_total": 723.47
+      }
+    }
+  ]
+}

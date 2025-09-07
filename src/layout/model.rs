@@ -1,24 +1,19 @@
-// src/layout_engine.rs
+// src/layout/model.rs
 
 use crate::stylesheet::*;
-use serde_json::Value;
 use std::collections::HashMap;
 
+/// A helper struct that centralizes style computation and text wrapping logic.
 pub struct LayoutEngine {
     pub page_layout: PageLayout,
     pub styles: HashMap<String, ElementStyle>,
-    pub current_page: usize,
-    pub current_y: f32,
-    pub current_x: f32,
-    pub pages: Vec<Page>,
-    pub current_context: Option<Value>,
 }
 
 #[derive(Debug)]
 pub struct Page {
     pub number: usize,
-    pub elements: Vec<PositionedElement>,
-    pub context: Option<Value>,
+    pub elements: Vec<PositionedElement>, // Lifetimes handled during processing
+    pub context: Option<serde_json::Value>,
 }
 
 #[derive(Clone, Debug)]
@@ -34,65 +29,18 @@ pub struct PositionedElement {
 #[derive(Clone, Debug)]
 pub enum LayoutElement {
     Text(TextElement),
-    Image(ImageElement),
     Rectangle(RectElement),
-    Table(TableElement),
-    Container(ContainerElement),
 }
 
 #[derive(Clone, Debug)]
 pub struct TextElement {
     pub style_name: Option<String>,
-    pub content: String,
-    pub lines: Vec<TextLine>,
-}
-
-#[derive(Clone, Debug)]
-pub struct TextLine {
-    pub text: String,
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-}
-
-#[derive(Clone, Debug)]
-pub struct ImageElement {
-    pub style_name: Option<String>,
-    pub src: Vec<u8>,
-    pub alt: String,
+    pub content: String, // Content is a result of `join`, so it must be owned.
 }
 
 #[derive(Clone, Debug)]
 pub struct RectElement {
     pub style_name: Option<String>,
-}
-
-#[derive(Clone, Debug)]
-pub struct TableElement {
-    pub style_name: Option<String>,
-    pub rows: Vec<TableRow>,
-    pub column_widths: Vec<f32>,
-}
-
-#[derive(Clone, Debug)]
-pub struct TableRow {
-    pub cells: Vec<TableCell>,
-    pub height: f32,
-    pub is_header: bool,
-}
-
-#[derive(Clone, Debug)]
-pub struct TableCell {
-    pub content: Box<LayoutElement>,
-    pub colspan: u32,
-    pub rowspan: u32,
-}
-
-#[derive(Clone, Debug)]
-pub struct ContainerElement {
-    pub style_name: Option<String>,
-    pub children: Vec<LayoutElement>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -117,11 +65,6 @@ impl LayoutEngine {
         LayoutEngine {
             page_layout: stylesheet.page.clone(),
             styles: stylesheet.styles.clone(),
-            current_page: 0,
-            current_y: stylesheet.page.margins.top,
-            current_x: stylesheet.page.margins.left,
-            pages: vec![Page::new(0)],
-            current_context: None,
         }
     }
 
@@ -134,7 +77,6 @@ impl LayoutEngine {
         }
     }
 
-    // NEW: The text wrapping logic, made public for the streaming processor.
     pub fn wrap_text(&self, text: &str, style: &ComputedStyle, max_width: f32) -> Vec<String> {
         if max_width <= 0.0 {
             return text.lines().map(|s| s.to_string()).collect();
@@ -175,7 +117,6 @@ impl LayoutEngine {
         lines
     }
 
-
     pub fn compute_style_from_default(&self, style_name: Option<&str>) -> ComputedStyle {
         let default_style = ComputedStyle {
             font_family: "Helvetica".to_string(),
@@ -184,9 +125,24 @@ impl LayoutEngine {
             font_style: FontStyle::Normal,
             line_height: 14.4,
             text_align: TextAlign::Left,
-            color: Color { r: 0, g: 0, b: 0, a: 1.0 },
-            margin: Margins { top: 0.0, right: 0.0, bottom: 10.0, left: 0.0 },
-            padding: Margins { top: 2.0, right: 2.0, bottom: 2.0, left: 2.0 },
+            color: Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 1.0,
+            },
+            margin: Margins {
+                top: 0.0,
+                right: 0.0,
+                bottom: 10.0,
+                left: 0.0,
+            },
+            padding: Margins {
+                top: 2.0,
+                right: 2.0,
+                bottom: 2.0,
+                left: 2.0,
+            },
             width: None,
             height: None,
             background_color: None,
@@ -256,11 +212,5 @@ impl LayoutEngine {
             }
         }
         computed
-    }
-}
-
-impl Page {
-    pub fn new(number: usize) -> Self {
-        Page { number, elements: Vec::new(), context: None }
     }
 }

@@ -18,15 +18,17 @@ fn main() -> Result<(), PipelineError> {
     let data_json = from_str(&data_json_str)?;
     println!("✓ Data loaded.");
 
-    // 3. Build the pipeline.
+    // 3. Build the document pipeline.
     let pipeline = PipelineBuilder::new()
         .with_stylesheet_json(&stylesheet_json)?
         .build()?;
     println!("✓ Pipeline built.");
 
-    // 4. Generate the PDF. The engine will create a new page for each customer.
+    // 4. Generate the PDF.
+    // The parser will create a BeginPageSequenceItem event for each customer,
+    // which the layout processor uses to start a new page.
     let output_path = "invoices.pdf";
-    pipeline.generate_pdf_file(&data_json, output_path)?;
+    pipeline.generate_to_file(&data_json, output_path)?;
 
     println!("\nSuccess! Generated {}", output_path);
     Ok(())

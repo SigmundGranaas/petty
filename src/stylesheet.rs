@@ -1,3 +1,5 @@
+// src/stylesheet.rs
+
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -21,12 +23,20 @@ pub struct PageSequence {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct PageLayout {
+    #[serde(default)]
+    pub title: Option<String>,
     pub size: PageSize,
     pub margins: Margins,
-    pub header: Option<HeaderFooter>,
-    pub footer: Option<HeaderFooter>,
+    #[serde(default)]
     pub columns: u32,
+    #[serde(default)]
     pub column_gap: f32,
+    #[serde(default)]
+    pub footer_height: f32,
+    pub footer_text: Option<String>,
+    pub footer_style: Option<String>,
+    #[serde(skip)]
+    pub footer_template_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,9 +51,13 @@ impl Default for PageSize {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Margins {
+    #[serde(default)]
     pub top: f32,
+    #[serde(default)]
     pub right: f32,
+    #[serde(default)]
     pub bottom: f32,
+    #[serde(default)]
     pub left: f32,
 }
 
@@ -73,24 +87,32 @@ pub struct Template {
     pub children: Vec<TemplateElement>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type")]
 pub enum TemplateElement {
-    Text { content: String, style: Option<String> },
+    Text {
+        content: String,
+        style: Option<String>,
+        #[serde(skip)]
+        template_name: Option<String>,
+    },
     Image { src: String, alt: Option<String>, style: Option<String> },
-    Table { data_source: String, columns: Vec<TableColumn>, style: Option<String> },
-    Container { children: Vec<TemplateElement>, style: Option<String> },
+    Table { data_source: String, columns: Vec<TableColumn>, style: Option<String>, row_style_prefix_field: Option<String> },
+    Container { children: Vec<TemplateElement>, style: Option<String>, data_source: Option<String> },
     Rectangle { style: Option<String> },
     PageBreak,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TableColumn {
     pub header: String,
     pub data_field: String, // JSON pointer relative to row data
     pub width: Option<Dimension>,
     pub style: Option<String>,
     pub header_style: Option<String>,
+    pub content_template: Option<String>,
+    #[serde(skip)]
+    pub template_name: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,7 +122,7 @@ pub struct StyleRule {
     pub priority: i32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum Dimension { Px(f32), Pt(f32), Percent(f32), Auto }
 
@@ -116,12 +138,11 @@ pub enum TextAlign { Left, Right, Center, Justify }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Display { Block, Inline, InlineBlock, Table, TableRow, TableCell, None }
 
-// Helper function to provide a default alpha value of 1.0 (fully opaque)
 fn default_alpha() -> f32 {
     1.0
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Color {
     pub r: u8,
     pub g: u8,
@@ -133,7 +154,7 @@ pub struct Color {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Border { pub width: f32, pub style: BorderStyle, pub color: Color }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum BorderStyle { Solid, Dashed, Dotted, Double, None }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -142,5 +163,24 @@ pub struct HeaderFooter { pub height: f32, pub children: Vec<TemplateElement>, p
 impl Stylesheet {
     pub fn from_json(json: &str) -> Result<Self, serde_json::Error> {
         serde_json::from_str(json)
+    }
+}
+
+// NEW: Implement Default trait for style enums
+impl Default for FontWeight {
+    fn default() -> Self {
+        FontWeight::Regular
+    }
+}
+
+impl Default for FontStyle {
+    fn default() -> Self {
+        FontStyle::Normal
+    }
+}
+
+impl Default for TextAlign {
+    fn default() -> Self {
+        TextAlign::Left
     }
 }
