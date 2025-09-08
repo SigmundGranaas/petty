@@ -1,8 +1,9 @@
-// This module is responsible for processing the event stream from the parser,
-// calculating element positions, sizes, and handling page breaks.
+mod elements;
+mod engine;
+pub mod processor;
+mod style;
 
-mod model;
-mod processor;
-
-pub(crate) use model::*;
+// Re-export key types for use within the crate.
+pub(crate) use elements::{LayoutElement, PositionedElement, RectElement, TextElement};
+pub(crate) use engine::LayoutEngine;
 pub(crate) use processor::StreamingLayoutProcessor;

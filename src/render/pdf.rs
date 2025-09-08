@@ -244,7 +244,7 @@ impl<'a> DocumentRenderer<'a> for PdfDocumentRenderer<'a> {
         Ok(())
     }
 }
-
+    
 impl<'a> PdfDocumentRenderer<'a> {
     fn to_pdf_color(c: &Color) -> printpdf::color::Color {
         printpdf::color::Color::Rgb(Rgb::new(

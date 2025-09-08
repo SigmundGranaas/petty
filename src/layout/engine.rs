@@ -1,63 +1,14 @@
-// src/layout/model.rs
-
-use crate::stylesheet::*;
+use crate::layout::style::ComputedStyle;
+use crate::stylesheet::{
+    Color, Dimension, ElementStyle, FontStyle, FontWeight, Margins, PageLayout, PageSize,
+    Stylesheet, TextAlign,
+};
 use std::collections::HashMap;
 
 /// A helper struct that centralizes style computation and text wrapping logic.
 pub struct LayoutEngine {
     pub page_layout: PageLayout,
     pub styles: HashMap<String, ElementStyle>,
-}
-
-#[derive(Debug)]
-pub struct Page {
-    pub number: usize,
-    pub elements: Vec<PositionedElement>, // Lifetimes handled during processing
-    pub context: Option<serde_json::Value>,
-}
-
-#[derive(Clone, Debug)]
-pub struct PositionedElement {
-    pub x: f32,
-    pub y: f32,
-    pub width: f32,
-    pub height: f32,
-    pub element: LayoutElement,
-    pub style: ComputedStyle,
-}
-
-#[derive(Clone, Debug)]
-pub enum LayoutElement {
-    Text(TextElement),
-    Rectangle(RectElement),
-}
-
-#[derive(Clone, Debug)]
-pub struct TextElement {
-    pub style_name: Option<String>,
-    pub content: String, // Content is a result of `join`, so it must be owned.
-}
-
-#[derive(Clone, Debug)]
-pub struct RectElement {
-    pub style_name: Option<String>,
-}
-
-#[derive(Clone, Debug, Default)]
-pub struct ComputedStyle {
-    pub font_family: String,
-    pub font_size: f32,
-    pub font_weight: FontWeight,
-    pub font_style: FontStyle,
-    pub line_height: f32,
-    pub text_align: TextAlign,
-    pub color: Color,
-    pub margin: Margins,
-    pub padding: Margins,
-    pub width: Option<f32>,
-    pub height: Option<f32>,
-    pub background_color: Option<Color>,
-    pub border: Option<Border>,
 }
 
 impl LayoutEngine {

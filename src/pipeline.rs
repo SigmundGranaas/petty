@@ -1,4 +1,3 @@
-// src/pipeline.rs
 use crate::error::PipelineError;
 use crate::layout::StreamingLayoutProcessor;
 use crate::parser::Parser;
