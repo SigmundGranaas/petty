@@ -1,0 +1,41 @@
+[package]
+name = "petty"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# PDF generation
+printpdf = "0.8.2"
+
+# Data processing
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Template engines
+handlebars = "6.3.2"
+
+# Utilities
+thiserror = "2.0.12"
+rand = "0.9.1"
+
+[dev-dependencies]
+dhat = { version = "0.3"}
+
+[features]
+dhat-heap = []
+
+[[example]]
+name = "simple_report"
+path = "examples/simple_report.rs"
+
+[[example]]
+name = "invoice_per_customer"
+path = "examples/invoice_per_customer.rs"
+
+[[example]]
+name = "financial_report"
+path = "examples/financial_report.rs"
+
+[[example]]
+name = "performance_test"
+path = "examples/performance_test.rs"
