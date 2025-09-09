@@ -5,7 +5,10 @@ use crate::render::DocumentRenderer;
 use std::borrow::Cow;
 
 impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
-    pub(super) fn handle_add_rectangle(&mut self, style_name: Option<&'a str>) -> Result<(), PipelineError> {
+    pub(super) fn handle_add_rectangle(
+        &mut self,
+        style_name: Option<Cow<'a, str>>,
+    ) -> Result<(), PipelineError> {
         let (parent_style, parent_available_width, parent_content_x) = {
             let parent_context = self.context_stack.last().unwrap();
             (
@@ -16,7 +19,7 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
         };
         let style = self
             .layout_engine
-            .compute_style_from_parent(style_name, &parent_style);
+            .compute_style_from_parent(style_name.as_deref(), &parent_style);
 
         let height = style.height.unwrap_or(2.0);
         let required_space = style.margin.top + height + style.margin.bottom;
@@ -31,7 +34,7 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
             width: parent_available_width - style.margin.left - style.margin.right,
             height,
             element: LayoutElement::Rectangle(RectElement {
-                style_name: style_name.map(String::from),
+                style_name: style_name.as_deref().map(String::from),
             }),
             style,
         };
@@ -44,7 +47,7 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
     pub(super) fn handle_add_text(
         &mut self,
         content: &Cow<'a, str>,
-        style_name: Option<&'a str>,
+        style_name: Option<Cow<'a, str>>,
     ) -> Result<(), PipelineError> {
         let (parent_style, parent_available_width, parent_content_x) = {
             let parent_context = self.context_stack.last().unwrap();
@@ -57,7 +60,7 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
 
         let style = self
             .layout_engine
-            .compute_style_from_parent(style_name, &parent_style);
+            .compute_style_from_parent(style_name.as_deref(), &parent_style);
 
         let content_width = parent_available_width
             - style.margin.left
@@ -105,7 +108,7 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
                 width: content_width + style.padding.left + style.padding.right,
                 height: total_height,
                 element: LayoutElement::Text(TextElement {
-                    style_name: style_name.map(String::from),
+                    style_name: style_name.as_deref().map(String::from),
                     content: chunk_of_lines.join("\n"),
                 }),
                 style: style.clone(),

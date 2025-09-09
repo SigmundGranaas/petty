@@ -1,4 +1,4 @@
-use crate::stylesheet::{Border, Color, Dimension, FontStyle, FontWeight, Margins, TextAlign};
+use crate::stylesheet::{Border, Color, FontStyle, FontWeight, Margins, TextAlign};
 
 #[derive(Clone, Debug, Default)]
 pub struct ComputedStyle {

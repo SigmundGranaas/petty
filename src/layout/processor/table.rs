@@ -4,20 +4,21 @@ use crate::layout::elements::{LayoutElement, PositionedElement, RectElement, Tex
 use crate::parser::Event;
 use crate::render::DocumentRenderer;
 use crate::stylesheet::{Dimension, TableColumn};
+use std::borrow::Cow;
 
 impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
     pub(super) fn handle_start_table(
         &mut self,
-        style_name: Option<&'a str>,
-        columns: &'a [TableColumn],
+        style_name: Option<Cow<'a, str>>,
+        columns: Cow<'a, [TableColumn]>,
     ) -> Result<(), PipelineError> {
         let parent_context = self.context_stack.last().unwrap();
         let style = self
             .layout_engine
-            .compute_style_from_parent(style_name, &parent_context.style);
+            .compute_style_from_parent(style_name.as_deref(), &parent_context.style);
 
         let table_width = parent_context.available_width - style.margin.left - style.margin.right;
-        let column_widths = self.calculate_column_widths(columns, table_width);
+        let column_widths = self.calculate_column_widths(&columns, table_width);
 
         self.current_table = Some(CurrentTable {
             columns,

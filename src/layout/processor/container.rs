@@ -1,9 +1,13 @@
 use super::{LayoutContext, StreamingLayoutProcessor};
 use crate::error::PipelineError;
 use crate::render::DocumentRenderer;
+use std::borrow::Cow;
 
 impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
-    pub(super) fn handle_start_container(&mut self, style: Option<&'a str>) -> Result<(), PipelineError> {
+    pub(super) fn handle_start_container(
+        &mut self,
+        style: Option<Cow<'a, str>>,
+    ) -> Result<(), PipelineError> {
         let (parent_style, parent_available_width, parent_content_x) = {
             let parent_context = self.context_stack.last().unwrap();
             (
@@ -14,7 +18,7 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
         };
         let new_style = self
             .layout_engine
-            .compute_style_from_parent(style, &parent_style);
+            .compute_style_from_parent(style.as_deref(), &parent_style);
 
         if self.needs_page_break(new_style.margin.top) {
             self.start_new_page()?;

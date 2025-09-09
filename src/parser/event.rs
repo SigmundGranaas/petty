@@ -13,19 +13,19 @@ pub enum Event<'a> {
     },
     EndPageSequenceItem,
     StartContainer {
-        style: Option<&'a str>,
+        style: Option<Cow<'a, str>>,
     },
     EndContainer,
     AddText {
         content: Cow<'a, str>,
-        style: Option<&'a str>,
+        style: Option<Cow<'a, str>>,
     },
     AddRectangle {
-        style: Option<&'a str>,
+        style: Option<Cow<'a, str>>,
     },
     StartTable {
-        style: Option<&'a str>,
-        columns: &'a [TableColumn],
+        style: Option<Cow<'a, str>>,
+        columns: Cow<'a, [TableColumn]>,
     },
     StartHeader,
     EndHeader,

@@ -1,13 +1,16 @@
 use crate::error::PipelineError;
 use crate::layout::StreamingLayoutProcessor;
-use crate::parser::Parser;
+use crate::parser::json_processor::JsonTemplateParser;
+use crate::parser::processor::TemplateProcessor;
+use crate::parser::xslt::XsltTemplateParser;
 use crate::render::pdf::PdfDocumentRenderer;
 use crate::render::DocumentRenderer;
 use crate::stylesheet::Stylesheet;
 use handlebars::{Context, Handlebars, Helper, HelperResult, Output, RenderContext};
 use serde_json::Value;
-use std::fs::File;
+use std::fs;
 use std::io;
+use std::path::Path;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, Default)]
@@ -20,7 +23,6 @@ impl Metrics {
     pub fn new() -> Self {
         Default::default()
     }
-
     pub fn time_scope<F, R>(&mut self, name: &str, func: F) -> R
     where
         F: FnOnce() -> R,
@@ -31,7 +33,6 @@ impl Metrics {
         self.stage_timings.push((name.to_string(), duration));
         result
     }
-
     pub fn report(&mut self) {
         self.total_time = self.stage_timings.iter().map(|(_, d)| *d).sum();
         println!("--- Performance Report ---");
@@ -50,6 +51,13 @@ impl Metrics {
 pub struct DocumentPipeline {
     stylesheet: Stylesheet,
     template_engine: Handlebars<'static>,
+    template_language: TemplateLanguage,
+}
+
+/// An enum holding the configuration for the chosen template language.
+pub enum TemplateLanguage {
+    Json,
+    Xslt { xslt_content: String },
 }
 
 fn format_currency_helper(
@@ -66,7 +74,9 @@ fn format_currency_helper(
 }
 
 impl DocumentPipeline {
-    pub fn new(stylesheet: Stylesheet) -> Self {
+    /// Creates a new pipeline from its constituent parts.
+    /// This is typically called by `PipelineBuilder`.
+    pub fn new(stylesheet: Stylesheet, template_language: TemplateLanguage) -> Self {
         let mut template_engine = Handlebars::new();
         template_engine.set_strict_mode(true);
         template_engine.register_helper("formatCurrency", Box::new(format_currency_helper));
@@ -74,6 +84,7 @@ impl DocumentPipeline {
         DocumentPipeline {
             stylesheet,
             template_engine,
+            template_language,
         }
     }
 
@@ -91,8 +102,22 @@ impl DocumentPipeline {
             || -> Result<PdfDocumentRenderer<'a>, PipelineError> {
                 let mut layout_processor =
                     StreamingLayoutProcessor::new(renderer, &self.stylesheet);
-                let event_parser = Parser::new(&self.stylesheet, &self.template_engine);
-                event_parser.parse(data, &mut layout_processor)?;
+
+                match &self.template_language {
+                    TemplateLanguage::Json => {
+                        let mut processor =
+                            JsonTemplateParser::new(&self.stylesheet, &self.template_engine);
+                        processor.process(data, &mut layout_processor)?;
+                    }
+                    TemplateLanguage::Xslt { xslt_content } => {
+                        let mut processor = XsltTemplateParser::new(
+                            xslt_content,
+                            &self.stylesheet,
+                            self.template_engine.clone(),
+                        );
+                        processor.process(data, &mut layout_processor)?;
+                    }
+                }
                 Ok(layout_processor.into_renderer())
             },
         )?;
@@ -111,38 +136,63 @@ impl DocumentPipeline {
         data: &'a Value,
         path: P,
     ) -> Result<(), PipelineError> {
-        let file = File::create(path)?;
+        let file = fs::File::create(path)?;
         self.generate_to_writer(data, file)
     }
 }
 
 /// A builder for configuring and creating a `DocumentPipeline`.
 /// This is the main entry point for using the library.
+#[derive(Default)]
 pub struct PipelineBuilder {
     stylesheet: Option<Stylesheet>,
+    template_language: Option<TemplateLanguage>,
 }
 
 impl PipelineBuilder {
     pub fn new() -> Self {
-        PipelineBuilder { stylesheet: None }
+        Default::default()
     }
 
+    /// Configures the builder from a stylesheet JSON string. This will use the JSON
+    /// templating engine.
     pub fn with_stylesheet_json(mut self, json: &str) -> Result<Self, PipelineError> {
-        self.stylesheet = Some(Stylesheet::from_json(json)?);
+        let stylesheet = Stylesheet::from_json(json)?;
+        self.stylesheet = Some(stylesheet);
+        self.template_language = Some(TemplateLanguage::Json);
         Ok(self)
     }
 
-    pub fn build(self) -> Result<DocumentPipeline, PipelineError> {
-        let stylesheet = self
-            .stylesheet
-            .ok_or_else(|| PipelineError::StylesheetError("No stylesheet provided".to_string()))?;
-        let generator = DocumentPipeline::new(stylesheet);
-        Ok(generator)
+    /// Configures the builder from a stylesheet JSON file. This will use the JSON
+    /// templating engine.
+    pub fn with_stylesheet_file<P: AsRef<Path>>(self, path: P) -> Result<Self, PipelineError> {
+        let json_str = fs::read_to_string(path)?;
+        self.with_stylesheet_json(&json_str)
     }
-}
 
-impl Default for PipelineBuilder {
-    fn default() -> Self {
-        Self::new()
+    /// Configures the builder from a self-contained XSLT template file.
+    /// This template must contain `<petty:page-layout>` and `<xsl:attribute-set>`
+    /// blocks which are used to configure the document's styles and layout.
+    pub fn with_xslt_template_file<P: AsRef<Path>>(
+        mut self,
+        path: P,
+    ) -> Result<Self, PipelineError> {
+        let xslt_content = fs::read_to_string(path)?;
+        let stylesheet = Stylesheet::from_xslt(&xslt_content)?;
+        self.stylesheet = Some(stylesheet);
+        self.template_language = Some(TemplateLanguage::Xslt { xslt_content });
+        Ok(self)
+    }
+
+    /// Builds the final `DocumentPipeline`.
+    pub fn build(self) -> Result<DocumentPipeline, PipelineError> {
+        let stylesheet = self.stylesheet.ok_or_else(|| {
+            PipelineError::StylesheetError("No stylesheet or template provided".to_string())
+        })?;
+        let language = self.template_language.ok_or_else(|| {
+            PipelineError::StylesheetError("Template language could not be determined".to_string())
+        })?;
+        let generator = DocumentPipeline::new(stylesheet, language);
+        Ok(generator)
     }
 }

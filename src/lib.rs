@@ -5,6 +5,7 @@
 // `parser`:   Responsible for parsing stylesheet templates and data into an intermediate event stream.
 // `layout`:   Processes the event stream to calculate element positions and handle page breaks.
 // `render`:   Takes positioned elements from the layout engine and renders them to a concrete format (e.g., PDF).
+// `xpath`:    A simple data selector for JSON, mimicking XPath.
 
 mod error;
 mod layout;
@@ -12,6 +13,7 @@ mod parser;
 mod pipeline;
 mod render;
 pub mod stylesheet;
+mod xpath;
 
 // --- Public API ---
 // By exposing only these top-level items, we provide a clean and focused

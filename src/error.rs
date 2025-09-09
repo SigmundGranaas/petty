@@ -19,8 +19,20 @@ pub enum PipelineError {
     #[error("JSON parsing error: {0}")]
     JsonParseError(#[from] serde_json::Error),
 
+    #[error("XML parsing error: {0}")]
+    XmlParseError(#[from] quick_xml::Error),
+
+    #[error("XML attribute parsing error: {0}")]
+    XmlAttrError(#[from] quick_xml::events::attributes::AttrError),
+
     #[error("Template parsing error: {0}")]
     TemplateParseError(String),
+
+    #[error("Template rendering error (e.g., Handlebars): {0}")]
+    TemplateRenderError(String),
+
+    #[error("Unknown XML tag found in template: <{0}>")]
+    UnknownXmlTag(String),
 
     #[error("Stylesheet is invalid or missing required parts: {0}")]
     StylesheetError(String),

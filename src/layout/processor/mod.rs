@@ -9,6 +9,7 @@ use crate::layout::style::ComputedStyle;
 use crate::parser::Event;
 use crate::render::DocumentRenderer;
 use crate::stylesheet::{PageLayout, Stylesheet, TableColumn};
+use std::borrow::Cow;
 
 pub(super) struct LayoutContext {
     style: ComputedStyle,
@@ -17,7 +18,7 @@ pub(super) struct LayoutContext {
 }
 
 pub(super) struct CurrentTable<'a> {
-    columns: &'a [TableColumn],
+    columns: Cow<'a, [TableColumn]>,
     column_widths: Vec<f32>,
     style: ComputedStyle,
 }
@@ -88,7 +89,13 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
             Event::EndContainer => self.handle_end_container()?,
             Event::AddText { content, style } => self.handle_add_text(&content, style)?,
             Event::AddRectangle { style } => self.handle_add_rectangle(style)?,
-            Event::ForcePageBreak => self.start_new_page()?,
+            Event::ForcePageBreak => {
+                // If we are already at the very top of a page, a page break does nothing.
+                // This prevents creating a blank page if the first element is a page break.
+                if self.current_y > self.page_layout.margins.top {
+                    self.start_new_page()?;
+                }
+            }
 
             // Table Events
             Event::StartTable { style, columns } => self.handle_start_table(style, columns)?,
