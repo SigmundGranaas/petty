@@ -212,7 +212,7 @@ impl Stylesheet {
         serde_json::from_str(json)
     }
 
-    /// Pre-parses an XSLT file to extract `<petty:page-layout>` and `<xsl:attribute-set>` blocks.
+    /// Pre-parses an XSLT file to extract `<fo:simple-page-master>` and `<xsl:attribute-set>` blocks.
     pub fn from_xslt(xslt_content: &str) -> Result<Self, PipelineError> {
         let mut reader = Reader::from_str(xslt_content);
         reader.config_mut().trim_text(true);
@@ -226,8 +226,8 @@ impl Stylesheet {
             match reader.read_event_into(&mut buf) {
                 Ok(XmlEvent::Start(e)) | Ok(XmlEvent::Empty(e)) => {
                     match e.name().as_ref() {
-                        b"petty:page-layout" => {
-                            page_layout = Some(parse_page_layout(e.attributes())?);
+                        b"fo:simple-page-master" => {
+                            page_layout = Some(parse_simple_page_master(e.attributes())?);
                         }
                         b"xsl:attribute-set" => {
                             let (name, style) =
@@ -247,7 +247,7 @@ impl Stylesheet {
         Ok(Stylesheet {
             page: page_layout.ok_or_else(|| {
                 PipelineError::StylesheetError(
-                    "Missing <petty:page-layout> tag in XSLT.".to_string(),
+                    "Missing <fo:simple-page-master> tag in XSLT.".to_string(),
                 )
             })?,
             styles,
@@ -270,23 +270,47 @@ fn get_attr_val(
     Ok(None)
 }
 
-fn parse_page_layout(attrs: Attributes) -> Result<PageLayout, PipelineError> {
+fn parse_dimension_to_pt(s: &str) -> Result<f32, PipelineError> {
+    if let Some(val_str) = s.strip_suffix("pt") {
+        Ok(val_str.trim().parse::<f32>()?)
+    } else if let Some(val_str) = s.strip_suffix("in") {
+        Ok(val_str.trim().parse::<f32>()? * 72.0)
+    } else if let Some(val_str) = s.strip_suffix("cm") {
+        Ok(val_str.trim().parse::<f32>()? * 28.35)
+    } else {
+        // Assume points if no unit is specified
+        Ok(s.trim().parse::<f32>()?)
+    }
+}
+
+fn parse_simple_page_master(attrs: Attributes) -> Result<PageLayout, PipelineError> {
     let mut layout = PageLayout::default();
+    let mut width: Option<f32> = None;
+    let mut height: Option<f32> = None;
+
     for attr_res in attrs {
         let attr = attr_res?;
         let value = attr.unescape_value()?;
         match attr.key.as_ref() {
-            b"size" => layout.size = PageSize::from_str(&value)?,
-            b"margin" => layout.margins = parse_shorthand_value(&value)?,
-            b"margin-top" => layout.margins.top = parse_pt_value(&value)?,
-            b"margin-right" => layout.margins.right = parse_pt_value(&value)?,
-            b"margin-bottom" => layout.margins.bottom = parse_pt_value(&value)?,
-            b"margin-left" => layout.margins.left = parse_pt_value(&value)?,
+            b"page-width" => width = Some(parse_dimension_to_pt(&value)?),
+            b"page-height" => height = Some(parse_dimension_to_pt(&value)?),
+            b"margin-top" => layout.margins.top = parse_dimension_to_pt(&value)?,
+            b"margin-right" => layout.margins.right = parse_dimension_to_pt(&value)?,
+            b"margin-bottom" => layout.margins.bottom = parse_dimension_to_pt(&value)?,
+            b"margin-left" => layout.margins.left = parse_dimension_to_pt(&value)?,
+            // These are not standard FO, but useful to keep for footers
             b"footer-text" => layout.footer_text = Some(value.into_owned()),
             b"footer-style" => layout.footer_style = Some(value.into_owned()),
             _ => {}
         }
     }
+
+    if let (Some(w), Some(h)) = (width, height) {
+        layout.size = PageSize::Custom { width: w, height: h };
+    } else {
+        layout.size = PageSize::A4; // Default if not specified
+    }
+
     Ok(layout)
 }
 
@@ -395,10 +419,7 @@ fn parse_attribute_set(
 }
 
 fn parse_pt_value(s: &str) -> Result<f32, PipelineError> {
-    s.trim_end_matches("pt")
-        .trim()
-        .parse()
-        .map_err(|_| PipelineError::TemplateParseError(format!("Invalid point value: '{}'", s)))
+    Ok(s.trim_end_matches("pt").trim().parse()?)
 }
 
 /// Parses CSS-style shorthand for margin/padding.

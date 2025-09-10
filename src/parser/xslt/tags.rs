@@ -1,4 +1,5 @@
 // src/parser/xslt/tags.rs
+// src/parser/xslt/tags.rs
 use super::nodes::parse_nodes;
 use super::util::{
     capture_events_until_end, get_attr_owned_optional, get_attr_owned_required,
@@ -6,9 +7,8 @@ use super::util::{
 };
 use super::XsltTemplateParser;
 use crate::error::PipelineError;
-use crate::layout::StreamingLayoutProcessor;
-use crate::parser::Event;
-use crate::render::DocumentRenderer;
+use crate::idf::IDFEvent;
+use crate::parser::processor::LayoutProcessorProxy;
 use crate::xpath;
 use log::debug;
 use quick_xml::events::Event as XmlEvent;
@@ -21,13 +21,13 @@ use std::borrow::Cow;
 // --- Control Flow & Data Tag Handlers ---
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn handle_xsl_for_each<'a, R: DocumentRenderer<'a>>(
+pub(super) async fn handle_xsl_for_each<'a>(
     parser: &mut XsltTemplateParser<'a>,
     attributes: &OwnedAttributes,
     is_empty: bool,
     reader: &mut Reader<&[u8]>,
     context: &'a Value,
-    processor: &mut StreamingLayoutProcessor<'a, R>,
+    proxy: &mut LayoutProcessorProxy<'a>,
 ) -> Result<(), PipelineError> {
     let tag_name = b"xsl:for-each";
     let path = get_attr_owned_required(attributes, b"select", tag_name)?;
@@ -74,19 +74,19 @@ pub(super) fn handle_xsl_for_each<'a, R: DocumentRenderer<'a>>(
     for (i, item_context) in items_to_iterate.iter().enumerate() {
         debug!("  Processing item {} in for-each...", i);
         let mut inner_reader = Reader::from_str(&inner_xml);
-        parse_nodes(parser, &mut inner_reader, item_context, processor)?;
+        parse_nodes(parser, &mut inner_reader, item_context, proxy).await?;
     }
     Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn handle_xsl_if<'a, R: DocumentRenderer<'a>>(
+pub(super) async fn handle_xsl_if<'a>(
     parser: &mut XsltTemplateParser<'a>,
     attributes: &OwnedAttributes,
     is_empty: bool,
     reader: &mut Reader<&[u8]>,
     context: &'a Value,
-    processor: &mut StreamingLayoutProcessor<'a, R>,
+    proxy: &mut LayoutProcessorProxy<'a>,
 ) -> Result<(), PipelineError> {
     let tag_name = b"xsl:if";
     let test = get_attr_owned_required(attributes, b"test", tag_name)?;
@@ -94,7 +94,7 @@ pub(super) fn handle_xsl_if<'a, R: DocumentRenderer<'a>>(
     debug!("  <xsl:if test='{}'> -> {}", test, condition_met);
     if !is_empty {
         if condition_met {
-            parse_nodes(parser, reader, context, processor)?;
+            parse_nodes(parser, reader, context, proxy).await?;
         } else {
             reader.read_to_end_into(QName(tag_name), &mut Vec::new())?;
         }
@@ -105,13 +105,13 @@ pub(super) fn handle_xsl_if<'a, R: DocumentRenderer<'a>>(
 // --- Page Structure Handlers ---
 
 #[allow(clippy::too_many_arguments)]
-pub(super) fn handle_page_sequence<'a, R: DocumentRenderer<'a>>(
+pub(super) async fn handle_page_sequence<'a>(
     parser: &mut XsltTemplateParser<'a>,
     attributes: &OwnedAttributes,
     is_empty: bool,
     reader: &mut Reader<&[u8]>,
     context: &'a Value,
-    processor: &mut StreamingLayoutProcessor<'a, R>,
+    proxy: &mut LayoutProcessorProxy<'a>,
 ) -> Result<(), PipelineError> {
     let tag_name = b"page-sequence";
     let path = get_attr_owned_required(attributes, b"select", tag_name)?;
@@ -159,44 +159,48 @@ pub(super) fn handle_page_sequence<'a, R: DocumentRenderer<'a>>(
 
     for (i, item_context) in items_to_iterate.iter().enumerate() {
         debug!("  Processing item {} in page-sequence...", i);
-        processor.process_event(Event::BeginPageSequenceItem {
-            context: item_context,
-        })?;
+        proxy
+            .process_event(IDFEvent::BeginPageSequence {
+                context: item_context,
+            })
+            .await?;
         let mut inner_reader = Reader::from_str(&inner_xml);
-        parse_nodes(parser, &mut inner_reader, item_context, processor)?;
-        processor.process_event(Event::EndPageSequenceItem)?;
+        parse_nodes(parser, &mut inner_reader, item_context, proxy).await?;
+        proxy.process_event(IDFEvent::EndPageSequence).await?;
     }
     Ok(())
 }
 
 // --- Layout Tag Handlers ---
 #[allow(clippy::too_many_arguments)]
-pub(super) fn handle_container<'a, R: DocumentRenderer<'a>>(
+pub(super) async fn handle_container<'a>(
     parser: &mut XsltTemplateParser<'a>,
     attributes: &OwnedAttributes,
     is_empty: bool,
     reader: &mut Reader<&[u8]>,
     context: &'a Value,
-    processor: &mut StreamingLayoutProcessor<'a, R>,
+    proxy: &mut LayoutProcessorProxy<'a>,
 ) -> Result<(), PipelineError> {
     let style = get_attr_owned_optional(attributes, b"style")?;
-    processor.process_event(Event::StartContainer {
-        style: style.map(Cow::Owned),
-    })?;
+    proxy
+        .process_event(IDFEvent::StartBlock {
+            style: style.map(Cow::Owned),
+        })
+        .await?;
     if !is_empty {
-        parse_nodes(parser, reader, context, processor)?;
+        parse_nodes(parser, reader, context, proxy).await?;
     }
-    processor.process_event(Event::EndContainer)?;
+    proxy.process_event(IDFEvent::EndBlock).await?;
     Ok(())
 }
 
-pub(super) fn handle_text<'a, R: DocumentRenderer<'a>>(
+pub(super) async fn handle_text<'a>(
     parser: &mut XsltTemplateParser<'a>,
     attributes: &OwnedAttributes,
     is_empty: bool,
     reader: &mut Reader<&[u8]>,
     context: &'a Value,
-    processor: &mut StreamingLayoutProcessor<'a, R>,
+    proxy: &mut LayoutProcessorProxy<'a>,
 ) -> Result<(), PipelineError> {
     let tag_name = b"text";
     let style = get_attr_owned_optional(attributes, b"style")?;
@@ -215,29 +219,33 @@ pub(super) fn handle_text<'a, R: DocumentRenderer<'a>>(
         content
     };
 
-    processor.process_event(Event::AddText {
-        content: Cow::Owned(rendered_content),
-        style: style.map(Cow::Owned),
-    })?;
+    proxy
+        .process_event(IDFEvent::AddText {
+            content: Cow::Owned(rendered_content),
+            style: style.map(Cow::Owned),
+        })
+        .await?;
     Ok(())
 }
 
-pub(super) fn handle_rectangle<'a, R: DocumentRenderer<'a>>(
+pub(super) async fn handle_rectangle<'a>(
     attributes: &OwnedAttributes,
-    processor: &mut StreamingLayoutProcessor<'a, R>,
+    proxy: &mut LayoutProcessorProxy<'a>,
 ) -> Result<(), PipelineError> {
     let style = get_attr_owned_optional(attributes, b"style")?;
-    processor.process_event(Event::AddRectangle {
-        style: style.map(Cow::Owned),
-    })?;
+    proxy
+        .process_event(IDFEvent::AddRectangle {
+            style: style.map(Cow::Owned),
+        })
+        .await?;
     Ok(())
 }
 
-pub(super) fn handle_image<'a, R: DocumentRenderer<'a>>(
+pub(super) async fn handle_image<'a>(
     parser: &mut XsltTemplateParser<'a>,
     attributes: &OwnedAttributes,
     context: &'a Value,
-    processor: &mut StreamingLayoutProcessor<'a, R>,
+    proxy: &mut LayoutProcessorProxy<'a>,
 ) -> Result<(), PipelineError> {
     let src = get_attr_owned_required(attributes, b"src", b"image")?;
     let style = get_attr_owned_optional(attributes, b"style")?;
@@ -251,22 +259,25 @@ pub(super) fn handle_image<'a, R: DocumentRenderer<'a>>(
         src
     };
 
-    processor.process_event(Event::AddImage {
-        src: Cow::Owned(rendered_src),
-        style: style.map(Cow::Owned),
-    })?;
+    proxy
+        .process_event(IDFEvent::AddImage {
+            src: Cow::Owned(rendered_src),
+            style: style.map(Cow::Owned),
+            data: None,
+        })
+        .await?;
     Ok(())
 }
 
 // --- Table Tag Handlers ---
 #[allow(clippy::too_many_arguments)]
-pub(super) fn handle_table<'a, R: DocumentRenderer<'a>>(
+pub(super) async fn handle_table<'a>(
     parser: &mut XsltTemplateParser<'a>,
     attributes: &OwnedAttributes,
     is_empty: bool,
     reader: &mut Reader<&[u8]>,
     context: &'a Value,
-    processor: &mut StreamingLayoutProcessor<'a, R>,
+    proxy: &mut LayoutProcessorProxy<'a>,
 ) -> Result<(), PipelineError> {
     if is_empty {
         return Ok(());
@@ -284,22 +295,26 @@ pub(super) fn handle_table<'a, R: DocumentRenderer<'a>>(
                     b"columns" => columns = parse_table_columns(reader, child_name)?,
                     b"header" => {
                         has_header = true;
-                        processor.process_event(Event::StartTable {
-                            style: style.clone().map(Cow::Owned),
-                            columns: Cow::Owned(columns.clone()),
-                        })?;
-                        processor.process_event(Event::StartHeader)?;
-                        parse_nodes(parser, reader, context, processor)?;
-                        processor.process_event(Event::EndHeader)?;
+                        proxy
+                            .process_event(IDFEvent::StartTable {
+                                style: style.clone().map(Cow::Owned),
+                                columns: Cow::Owned(columns.clone()),
+                            })
+                            .await?;
+                        proxy.process_event(IDFEvent::StartHeader).await?;
+                        parse_nodes(parser, reader, context, proxy).await?;
+                        proxy.process_event(IDFEvent::EndHeader).await?;
                     }
                     b"tbody" => {
                         if !has_header {
-                            processor.process_event(Event::StartTable {
-                                style: style.clone().map(Cow::Owned),
-                                columns: Cow::Owned(columns.clone()),
-                            })?;
+                            proxy
+                                .process_event(IDFEvent::StartTable {
+                                    style: style.clone().map(Cow::Owned),
+                                    columns: Cow::Owned(columns.clone()),
+                                })
+                                .await?;
                         }
-                        parse_nodes(parser, reader, context, processor)?;
+                        parse_nodes(parser, reader, context, proxy).await?;
                     }
                     _ => {
                         // Consume unknown tags within a table
@@ -317,37 +332,34 @@ pub(super) fn handle_table<'a, R: DocumentRenderer<'a>>(
         }
         buf.clear();
     }
-    processor.process_event(Event::EndTable)?;
+    proxy.process_event(IDFEvent::EndTable).await?;
     Ok(())
 }
 
-pub(super) fn handle_row<'a, R: DocumentRenderer<'a>>(
+pub(super) async fn handle_row<'a>(
     parser: &mut XsltTemplateParser<'a>,
     is_empty: bool,
     reader: &mut Reader<&[u8]>,
     context: &'a Value,
-    processor: &mut StreamingLayoutProcessor<'a, R>,
+    proxy: &mut LayoutProcessorProxy<'a>,
 ) -> Result<(), PipelineError> {
-    processor.process_event(Event::StartRow {
-        context,
-        row_style_prefix: None,
-    })?;
+    proxy.process_event(IDFEvent::StartRow { context }).await?;
     parser.row_column_index_stack.push(0);
     if !is_empty {
-        parse_nodes(parser, reader, context, processor)?;
+        parse_nodes(parser, reader, context, proxy).await?;
     }
     parser.row_column_index_stack.pop();
-    processor.process_event(Event::EndRow)?;
+    proxy.process_event(IDFEvent::EndRow).await?;
     Ok(())
 }
 
-pub(super) fn handle_cell<'a, R: DocumentRenderer<'a>>(
+pub(super) async fn handle_cell<'a>(
     parser: &mut XsltTemplateParser<'a>,
     attributes: &OwnedAttributes,
     is_empty: bool,
     reader: &mut Reader<&[u8]>,
     context: &'a Value,
-    processor: &mut StreamingLayoutProcessor<'a, R>,
+    proxy: &mut LayoutProcessorProxy<'a>,
 ) -> Result<(), PipelineError> {
     let tag_name = b"cell";
     let style_override = get_attr_owned_optional(attributes, b"style")?;
@@ -371,11 +383,13 @@ pub(super) fn handle_cell<'a, R: DocumentRenderer<'a>>(
     };
 
     debug!("Adding cell at index {}: '{}'", col_index, rendered_content);
-    processor.process_event(Event::AddCell {
-        column_index: col_index,
-        content: Cow::Owned(rendered_content),
-        style_override,
-    })?;
+    proxy
+        .process_event(IDFEvent::AddCell {
+            column_index: col_index,
+            content: Cow::Owned(rendered_content),
+            style_override,
+        })
+        .await?;
     if let Some(idx) = parser.row_column_index_stack.last_mut() {
         *idx += 1;
     }

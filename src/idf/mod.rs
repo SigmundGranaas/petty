@@ -1,32 +1,40 @@
 use crate::stylesheet::TableColumn;
 use serde_json::Value;
 use std::borrow::Cow;
+use std::sync::Arc;
 
-/// Represents a high-level command for the layout engine, forming an event stream.
-/// This enum is the "language" between the parser and the layout processor.
-#[derive(Debug, Clone, PartialEq)]
-pub enum Event<'a> {
+pub type SharedData = Arc<Vec<u8>>;
+
+#[derive(Debug, Clone)]
+pub enum IDFEvent<'a> {
     StartDocument,
     EndDocument,
-    BeginPageSequenceItem {
+
+    BeginPageSequence {
         context: &'a Value,
     },
-    EndPageSequenceItem,
-    StartContainer {
+    EndPageSequence,
+
+    StartBlock {
         style: Option<Cow<'a, str>>,
     },
-    EndContainer,
+    EndBlock,
+
     AddText {
         content: Cow<'a, str>,
         style: Option<Cow<'a, str>>,
     },
+
     AddRectangle {
         style: Option<Cow<'a, str>>,
     },
+
     AddImage {
         src: Cow<'a, str>,
         style: Option<Cow<'a, str>>,
+        data: Option<SharedData>, // Prepared for async fetching
     },
+
     StartTable {
         style: Option<Cow<'a, str>>,
         columns: Cow<'a, [TableColumn]>,
@@ -35,7 +43,6 @@ pub enum Event<'a> {
     EndHeader,
     StartRow {
         context: &'a Value,
-        row_style_prefix: Option<String>,
     },
     AddCell {
         column_index: usize,
@@ -44,5 +51,6 @@ pub enum Event<'a> {
     },
     EndRow,
     EndTable,
+
     ForcePageBreak,
 }

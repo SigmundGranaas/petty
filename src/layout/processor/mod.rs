@@ -1,17 +1,17 @@
+// src/layout/processor/mod.rs
 mod container;
 mod page;
 mod primitives;
 mod table;
 
 use crate::error::PipelineError;
+use crate::idf::IDFEvent;
 use crate::layout::engine::LayoutEngine;
 use crate::layout::style::ComputedStyle;
-use crate::parser::Event;
 use crate::render::DocumentRenderer;
 use crate::stylesheet::{PageLayout, Stylesheet, TableColumn};
+use serde_json::Value;
 use std::borrow::Cow;
-use std::collections::HashMap;
-use std::sync::Arc;
 
 pub(super) struct LayoutContext {
     style: ComputedStyle,
@@ -35,21 +35,16 @@ pub struct StreamingLayoutProcessor<'a, R: DocumentRenderer<'a>> {
 
     // Table specific state
     current_table: Option<CurrentTable<'a>>,
-    current_table_headers: Option<Vec<Event<'a>>>,
+    current_table_headers: Option<Vec<IDFEvent<'a>>>,
     is_in_header: bool,
-    current_row_events: Vec<Event<'a>>,
-    current_row_context: Option<&'a serde_json::Value>,
+    current_row_events: Vec<IDFEvent<'a>>,
+    current_row_context: Option<&'a Value>,
     // Field to track the context for the current logical page (record).
-    current_page_sequence_context: Option<&'a serde_json::Value>,
-    // HTTP agent for fetching images
-    agent: ureq::Agent,
-    // Cache for downloaded images to avoid re-fetching. (URL -> ((w,h), data))
-    image_cache: HashMap<String, Arc<((u32, u32), Vec<u8>)>>,
+    current_page_sequence_context: Option<&'a Value>,
 }
 
 impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
     pub fn new(renderer: R, stylesheet: &'a Stylesheet) -> Self {
-        let agent = ureq::agent();
         StreamingLayoutProcessor {
             renderer,
             page_layout: stylesheet.page.clone(),
@@ -63,8 +58,6 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
             current_row_events: Vec::new(),
             current_row_context: None,
             current_page_sequence_context: None,
-            agent,
-            image_cache: HashMap::new(),
         }
     }
 
@@ -72,9 +65,9 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
         self.renderer
     }
 
-    pub fn process_event(&mut self, event: Event<'a>) -> Result<(), PipelineError> {
+    pub fn process_event(&mut self, event: IDFEvent<'a>) -> Result<(), PipelineError> {
         if self.is_in_header {
-            if let Event::EndHeader = event {
+            if let IDFEvent::EndHeader = event {
                 // Don't store the EndHeader event itself
             } else if let Some(headers) = &mut self.current_table_headers {
                 headers.push(event.clone());
@@ -82,23 +75,23 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
         }
 
         match event {
-            Event::StartDocument => {
+            IDFEvent::StartDocument => {
                 self.renderer.begin_document()?;
             }
-            Event::EndDocument => {
+            IDFEvent::EndDocument => {
                 // Finalization happens in the pipeline
             }
-            Event::BeginPageSequenceItem { context } => {
+            IDFEvent::BeginPageSequence { context } => {
                 self.current_page_sequence_context = Some(context);
                 self.start_new_page()?;
             }
-            Event::EndPageSequenceItem => {}
-            Event::StartContainer { style } => self.handle_start_container(style)?,
-            Event::EndContainer => self.handle_end_container()?,
-            Event::AddText { content, style } => self.handle_add_text(&content, style)?,
-            Event::AddRectangle { style } => self.handle_add_rectangle(style)?,
-            Event::AddImage { src, style } => self.handle_add_image(src, style)?,
-            Event::ForcePageBreak => {
+            IDFEvent::EndPageSequence => {}
+            IDFEvent::StartBlock { style } => self.handle_start_container(style)?,
+            IDFEvent::EndBlock => self.handle_end_container()?,
+            IDFEvent::AddText { content, style } => self.handle_add_text(&content, style)?,
+            IDFEvent::AddRectangle { style } => self.handle_add_rectangle(style)?,
+            IDFEvent::AddImage { src, style, data } => self.handle_add_image(src, style, data)?,
+            IDFEvent::ForcePageBreak => {
                 // If we are already at the very top of a page, a page break does nothing.
                 // This prevents creating a blank page if the first element is a page break.
                 if self.current_y > self.page_layout.margins.top {
@@ -107,20 +100,20 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
             }
 
             // Table Events
-            Event::StartTable { style, columns } => self.handle_start_table(style, columns)?,
-            Event::EndTable => self.handle_end_table()?,
-            Event::StartHeader => {
+            IDFEvent::StartTable { style, columns } => self.handle_start_table(style, columns)?,
+            IDFEvent::EndTable => self.handle_end_table()?,
+            IDFEvent::StartHeader => {
                 self.is_in_header = true;
                 self.current_table_headers = Some(Vec::new());
             }
-            Event::EndHeader => {
+            IDFEvent::EndHeader => {
                 self.is_in_header = false;
             }
-            Event::StartRow { context, .. } => {
+            IDFEvent::StartRow { context, .. } => {
                 self.current_row_context = Some(context);
             }
-            Event::AddCell { .. } => self.current_row_events.push(event),
-            Event::EndRow => self.handle_end_row()?,
+            IDFEvent::AddCell { .. } => self.current_row_events.push(event),
+            IDFEvent::EndRow => self.handle_end_row()?,
         }
         Ok(())
     }

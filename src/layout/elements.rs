@@ -1,4 +1,6 @@
+// src/layout/elements.rs
 use crate::layout::style::ComputedStyle;
+use std::sync::Arc;
 
 #[derive(Clone, Debug)]
 pub struct PositionedElement {
@@ -31,5 +33,5 @@ pub struct RectElement {
 #[derive(Clone, Debug)]
 pub struct ImageElement {
     pub src: String,
-    pub image_data: Vec<u8>,
+    pub image_data: Arc<Vec<u8>>,
 }

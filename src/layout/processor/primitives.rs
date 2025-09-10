@@ -1,12 +1,12 @@
+// src/layout/processor/primitives.rs
 use super::StreamingLayoutProcessor;
 use crate::error::PipelineError;
+use crate::idf::SharedData;
 use crate::layout::elements::{
     ImageElement, LayoutElement, PositionedElement, RectElement, TextElement,
 };
 use crate::render::DocumentRenderer;
 use std::borrow::Cow;
-use std::io::Read;
-use std::sync::Arc;
 
 impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
     pub(super) fn handle_add_rectangle(
@@ -134,45 +134,25 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
         &mut self,
         src: Cow<'a, str>,
         style_name: Option<Cow<'a, str>>,
+        data: Option<SharedData>,
     ) -> Result<(), PipelineError> {
-        let image_data = match self.image_cache.get(src.as_ref()) {
-            Some(cached) => {
-                log::debug!("Using cached image for src: {}", src);
-                cached.clone()
-            }
+        let raw_data = match data {
+            Some(d) => d,
             None => {
-                log::info!("Fetching image from src: {}", src);
-                let response = self.agent.get(src.as_ref()).call().map_err(|e| {
-                    PipelineError::TemplateParseError(format!(
-                        "Failed to fetch image from URL '{}': {}",
-                        src, e
-                    ))
-                })?;
-
-                let mut bytes: Vec<u8> = Vec::new();
-                response
-                    .into_body()
-                    .into_reader()
-                    .read_to_end(&mut bytes)
-                    .map_err(PipelineError::IoError)?;
-
-                let image = image::load_from_memory(&bytes).map_err(|e| {
-                    PipelineError::TemplateParseError(format!(
-                        "Failed to decode image from URL '{}': {}",
-                        src, e
-                    ))
-                })?;
-
-                let dims = (image.width(), image.height());
-                let data = Arc::new((dims, bytes));
-                self.image_cache.insert(src.to_string(), data.clone());
-                data
+                log::warn!("Image from src '{}' has no data, skipping render.", src);
+                return Ok(());
             }
         };
 
-        let ((img_width, img_height), raw_data) = (image_data.0, &image_data.1);
+        let image = image::load_from_memory(&raw_data).map_err(|e| {
+            PipelineError::TemplateParseError(format!(
+                "Failed to decode image from URL '{}': {}",
+                src, e
+            ))
+        })?;
+        let (img_width, img_height) = (image.width(), image.height());
 
-        let (parent_style, parent_available_width, parent_content_x) = {
+        let (parent_style, _parent_available_width, parent_content_x) = {
             let parent_context = self.context_stack.last().unwrap();
             (
                 parent_context.style.clone(),
@@ -211,7 +191,7 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
             height,
             element: LayoutElement::Image(ImageElement {
                 src: src.to_string(),
-                image_data: raw_data.clone(),
+                image_data: raw_data,
             }),
             style,
         };

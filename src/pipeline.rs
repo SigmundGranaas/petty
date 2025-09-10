@@ -1,7 +1,9 @@
+// src/pipeline.rs
 use crate::error::PipelineError;
+use crate::idf::IDFEvent;
 use crate::layout::StreamingLayoutProcessor;
 use crate::parser::json_processor::JsonTemplateParser;
-use crate::parser::processor::TemplateProcessor;
+use crate::parser::processor::{LayoutProcessorProxy, TemplateProcessor};
 use crate::parser::xslt::XsltTemplateParser;
 use crate::render::pdf::PdfDocumentRenderer;
 use crate::render::DocumentRenderer;
@@ -11,41 +13,9 @@ use serde_json::Value;
 use std::fs;
 use std::io;
 use std::path::Path;
-use std::time::{Duration, Instant};
-
-#[derive(Debug, Default)]
-pub struct Metrics {
-    pub total_time: Duration,
-    pub stage_timings: Vec<(String, Duration)>,
-}
-
-impl Metrics {
-    pub fn new() -> Self {
-        Default::default()
-    }
-    pub fn time_scope<F, R>(&mut self, name: &str, func: F) -> R
-    where
-        F: FnOnce() -> R,
-    {
-        let start = Instant::now();
-        let result = func();
-        let duration = start.elapsed();
-        self.stage_timings.push((name.to_string(), duration));
-        result
-    }
-    pub fn report(&mut self) {
-        self.total_time = self.stage_timings.iter().map(|(_, d)| *d).sum();
-        println!("--- Performance Report ---");
-        for (name, duration) in &self.stage_timings {
-            println!("  - {}: {:.2}ms", name, duration.as_secs_f64() * 1000.0);
-        }
-        println!("--------------------------");
-        println!(
-            "Total Time: {:.2}ms",
-            self.total_time.as_secs_f64() * 1000.0
-        );
-    }
-}
+use tokio::join;
+use tokio::runtime::Builder;
+use tokio::sync::mpsc;
 
 /// The main document generation pipeline orchestrator.
 pub struct DocumentPipeline {
@@ -55,6 +25,7 @@ pub struct DocumentPipeline {
 }
 
 /// An enum holding the configuration for the chosen template language.
+#[derive(Clone)]
 pub enum TemplateLanguage {
     Json,
     Xslt { xslt_content: String },
@@ -88,56 +59,75 @@ impl DocumentPipeline {
         }
     }
 
-    /// Generates the document and streams it to the given writer.
-    pub fn generate_to_writer<'a, W: io::Write>(
+    pub async fn generate_to_writer_async<'a, W: io::Write + Send + 'static>(
         &'a self,
         data: &'a Value,
         writer: W,
     ) -> Result<(), PipelineError> {
-        let mut metrics = Metrics::new();
-        let renderer = PdfDocumentRenderer::new(&self.stylesheet)?;
+        let (tx, mut rx) = mpsc::channel::<IDFEvent<'a>>(32);
 
-        let renderer = metrics.time_scope(
-            "Event Parsing & Layout",
-            || -> Result<PdfDocumentRenderer<'a>, PipelineError> {
-                let mut layout_processor =
-                    StreamingLayoutProcessor::new(renderer, &self.stylesheet);
-
-                match &self.template_language {
-                    TemplateLanguage::Json => {
-                        let mut processor =
-                            JsonTemplateParser::new(&self.stylesheet, &self.template_engine);
-                        processor.process(data, &mut layout_processor)?;
-                    }
-                    TemplateLanguage::Xslt { xslt_content } => {
-                        let mut processor = XsltTemplateParser::new(
-                            xslt_content,
-                            &self.stylesheet,
-                            self.template_engine.clone(),
-                        );
-                        processor.process(data, &mut layout_processor)?;
-                    }
+        // Define the producer as a future. It can borrow from `self` and `data`.
+        let producer_fut = async {
+            // `proxy` takes ownership of `tx`. When `proxy` is dropped at the end of this
+            // future, the channel is closed, which will terminate the consumer's loop.
+            let mut proxy = LayoutProcessorProxy::new(tx);
+            match &self.template_language {
+                TemplateLanguage::Json => {
+                    let mut processor =
+                        JsonTemplateParser::new(&self.stylesheet, &self.template_engine);
+                    processor.process(data, &mut proxy).await
                 }
-                Ok(layout_processor.into_renderer())
-            },
-        )?;
+                TemplateLanguage::Xslt { xslt_content } => {
+                    let mut processor = XsltTemplateParser::new(
+                        xslt_content,
+                        &self.stylesheet,
+                        self.template_engine.clone(),
+                    );
+                    processor.process(data, &mut proxy).await
+                }
+            }
+        };
 
-        metrics.time_scope("PDF Finalization", || {
-            renderer.finalize(writer, &self.template_engine)
-        })?;
+        // Define the consumer as a future.
+        let consumer_fut = async {
+            let renderer = PdfDocumentRenderer::new(&self.stylesheet)?;
+            let mut layout_processor = StreamingLayoutProcessor::new(renderer, &self.stylesheet);
 
-        metrics.report();
+            while let Some(event) = rx.recv().await {
+                layout_processor.process_event(event)?;
+            }
+
+            // Return the processor which owns the renderer, so it can be finalized.
+            Ok::<_, PipelineError>(layout_processor)
+        };
+
+        // Run both futures concurrently. `join!` awaits both to complete.
+        let (producer_result, consumer_result) = join!(producer_fut, consumer_fut);
+
+        // Check for errors from both futures.
+        producer_result?;
+        let layout_processor = consumer_result?;
+
+        // --- Finalization ---
+        let renderer = layout_processor.into_renderer();
+        renderer.finalize(writer, &self.template_engine)?;
+
         Ok(())
     }
 
     /// Generates the document and saves it to the specified file path.
+    /// This is a convenience wrapper that sets up a Tokio runtime.
     pub fn generate_to_file<'a, P: AsRef<std::path::Path>>(
         &'a self,
         data: &'a Value,
         path: P,
     ) -> Result<(), PipelineError> {
-        let file = fs::File::create(path)?;
-        self.generate_to_writer(data, file)
+        let file = std::fs::File::create(path)?;
+        let rt = Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create Tokio runtime");
+        rt.block_on(self.generate_to_writer_async(data, file))
     }
 }
 

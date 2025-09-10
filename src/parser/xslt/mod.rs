@@ -1,13 +1,13 @@
+// src/parser/xslt/mod.rs
 mod nodes;
 mod tags;
 mod util;
 
-use super::processor::TemplateProcessor;
+use super::processor::{LayoutProcessorProxy, TemplateProcessor};
 use crate::error::PipelineError;
-use crate::layout::StreamingLayoutProcessor;
-use crate::parser::Event;
-use crate::render::DocumentRenderer;
+use crate::idf::IDFEvent;
 use crate::stylesheet::Stylesheet;
+use async_trait::async_trait;
 use handlebars::Handlebars;
 use log;
 use quick_xml::events::Event as XmlEvent;
@@ -38,17 +38,18 @@ impl<'a> XsltTemplateParser<'a> {
     }
 }
 
+#[async_trait(?Send)]
 impl<'a> TemplateProcessor<'a> for XsltTemplateParser<'a> {
-    fn process<R: DocumentRenderer<'a>>(
+    async fn process(
         &mut self,
         data: &'a Value,
-        processor: &mut StreamingLayoutProcessor<'a, R>,
+        proxy: &mut LayoutProcessorProxy<'a>,
     ) -> Result<(), PipelineError> {
         log::info!("Starting XSLT template processing...");
         let mut reader = Reader::from_str(self.xslt_content);
         reader.config_mut().trim_text(true);
 
-        processor.process_event(Event::StartDocument)?;
+        proxy.process_event(IDFEvent::StartDocument).await?;
 
         let mut buf = Vec::new();
         let mut found_root_template = false;
@@ -70,7 +71,7 @@ impl<'a> TemplateProcessor<'a> for XsltTemplateParser<'a> {
                     if is_root {
                         log::debug!("Found root template <xsl:template match=\"/\">. Processing content...");
                         // This is our entry point. Start parsing the children of this node.
-                        nodes::parse_nodes(self, &mut reader, data, processor)?;
+                        nodes::parse_nodes(self, &mut reader, data, proxy).await?;
                         found_root_template = true;
                         break; // Document content is generated, we can stop.
                     }
@@ -87,7 +88,7 @@ impl<'a> TemplateProcessor<'a> for XsltTemplateParser<'a> {
             ));
         }
 
-        processor.process_event(Event::EndDocument)?;
+        proxy.process_event(IDFEvent::EndDocument).await?;
 
         log::info!("XSLT template processing finished.");
         Ok(())

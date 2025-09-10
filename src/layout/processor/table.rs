@@ -1,7 +1,8 @@
+// src/layout/processor/table.rs
 use super::{CurrentTable, StreamingLayoutProcessor};
 use crate::error::PipelineError;
+use crate::idf::IDFEvent;
 use crate::layout::elements::{LayoutElement, PositionedElement, RectElement, TextElement};
-use crate::parser::Event;
 use crate::render::DocumentRenderer;
 use crate::stylesheet::{Dimension, TableColumn};
 use std::borrow::Cow;
@@ -102,13 +103,13 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
 
     fn calculate_row_height_from_events(
         &self,
-        row_events: &[Event<'a>],
+        row_events: &[IDFEvent<'a>],
     ) -> Result<f32, PipelineError> {
         let table = self.current_table.as_ref().unwrap();
         let mut max_height = 0.0f32;
 
         for event in row_events {
-            if let Event::AddCell {
+            if let IDFEvent::AddCell {
                 column_index,
                 content,
                 style_override,
@@ -132,13 +133,17 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
         Ok(max_height)
     }
 
-    fn render_row(&mut self, row_events: &[Event<'a>], row_height: f32) -> Result<(), PipelineError> {
+    fn render_row(
+        &mut self,
+        row_events: &[IDFEvent<'a>],
+        row_height: f32,
+    ) -> Result<(), PipelineError> {
         let table = self.current_table.as_ref().unwrap();
         let parent_context = self.context_stack.last().unwrap();
         let table_start_x = parent_context.content_x;
 
         for event in row_events {
-            if let Event::AddCell {
+            if let IDFEvent::AddCell {
                 column_index,
                 content,
                 style_override,

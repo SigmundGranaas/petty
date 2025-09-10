@@ -14,7 +14,7 @@ mod pipeline;
 mod render;
 pub mod stylesheet;
 mod xpath;
-
+mod idf;
 // --- Public API ---
 // By exposing only these top-level items, we provide a clean and focused
 // public interface for users of the library. The internal workings of the

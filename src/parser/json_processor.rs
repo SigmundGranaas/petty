@@ -1,9 +1,9 @@
-use super::processor::TemplateProcessor;
-use super::Event;
+// src/parser/json_processor.rs
+use super::processor::{LayoutProcessorProxy, TemplateProcessor};
 use crate::error::PipelineError;
-use crate::layout::StreamingLayoutProcessor;
-use crate::render::DocumentRenderer;
+use crate::idf::IDFEvent;
 use crate::stylesheet::{Stylesheet, TableColumn, Template, TemplateElement};
+use async_trait::async_trait;
 use handlebars::Handlebars;
 use serde_json::Value;
 use std::borrow::Cow;
@@ -24,11 +24,11 @@ impl<'a> JsonTemplateParser<'a> {
 
     /// Recursively parses a list of template elements within a given data context,
     /// emitting events to the layout processor.
-    fn parse_children<R: DocumentRenderer<'a>>(
+    async fn parse_children(
         &mut self,
         children: &'a [TemplateElement],
         context: &'a Value,
-        processor: &mut StreamingLayoutProcessor<'a, R>,
+        proxy: &mut LayoutProcessorProxy<'a>,
     ) -> Result<(), PipelineError> {
         for element in children {
             match element {
@@ -39,15 +39,15 @@ impl<'a> JsonTemplateParser<'a> {
                     } else {
                         Cow::Borrowed(content)
                     };
-                    processor.process_event(Event::AddText {
+                    proxy.process_event(IDFEvent::AddText {
                         content: rendered_content,
                         style: style.as_deref().map(Cow::Borrowed),
-                    })?;
+                    }).await?;
                 }
                 TemplateElement::Rectangle { style } => {
-                    processor.process_event(Event::AddRectangle {
+                    proxy.process_event(IDFEvent::AddRectangle {
                         style: style.as_deref().map(Cow::Borrowed),
-                    })?;
+                    }).await?;
                 }
                 TemplateElement::Container {
                     children,
@@ -65,11 +65,11 @@ impl<'a> JsonTemplateParser<'a> {
                     };
 
                     for item_context in data_items {
-                        processor.process_event(Event::StartContainer {
+                        proxy.process_event(IDFEvent::StartBlock {
                             style: style.as_deref().map(Cow::Borrowed),
-                        })?;
-                        self.parse_children(children, item_context, processor)?;
-                        processor.process_event(Event::EndContainer)?;
+                        }).await?;
+                        Box::pin(self.parse_children(children, item_context, proxy)).await?;
+                        proxy.process_event(IDFEvent::EndBlock).await?;
                     }
                 }
                 TemplateElement::Table {
@@ -84,8 +84,9 @@ impl<'a> JsonTemplateParser<'a> {
                         style,
                         row_style_prefix_field,
                         context,
-                        processor,
-                    )?;
+                        proxy,
+                    )
+                        .await?;
                 }
                 TemplateElement::Image { src, style } => {
                     let rendered_src: Cow<'a, str> = if src.contains("{{") {
@@ -94,13 +95,14 @@ impl<'a> JsonTemplateParser<'a> {
                     } else {
                         Cow::Borrowed(src)
                     };
-                    processor.process_event(Event::AddImage {
+                    proxy.process_event(IDFEvent::AddImage {
                         src: rendered_src,
                         style: style.as_deref().map(Cow::Borrowed),
-                    })?;
+                        data: None,
+                    }).await?;
                 }
                 TemplateElement::PageBreak => {
-                    processor.process_event(Event::ForcePageBreak)?;
+                    proxy.process_event(IDFEvent::ForcePageBreak).await?;
                 }
             }
         }
@@ -108,34 +110,33 @@ impl<'a> JsonTemplateParser<'a> {
     }
 
     /// Handles the parsing of a `Table` template element.
-    fn parse_table<R: DocumentRenderer<'a>>(
+    async fn parse_table(
         &mut self,
         data_source: &'a str,
         columns: &'a [TableColumn],
         style: &'a Option<String>,
         row_style_prefix_field: &'a Option<String>,
         context: &'a Value,
-        processor: &mut StreamingLayoutProcessor<'a, R>,
+        proxy: &mut LayoutProcessorProxy<'a>,
     ) -> Result<(), PipelineError> {
-        processor.process_event(Event::StartTable {
+        proxy.process_event(IDFEvent::StartTable {
             style: style.as_deref().map(Cow::Borrowed),
             columns: Cow::Borrowed(columns),
-        })?;
+        }).await?;
 
-        processor.process_event(Event::StartHeader)?;
-        processor.process_event(Event::StartRow {
+        proxy.process_event(IDFEvent::StartHeader).await?;
+        proxy.process_event(IDFEvent::StartRow {
             context: &Value::Null,
-            row_style_prefix: None,
-        })?;
+        }).await?;
         for (i, col) in columns.iter().enumerate() {
-            processor.process_event(Event::AddCell {
+            proxy.process_event(IDFEvent::AddCell {
                 column_index: i,
                 content: Cow::Borrowed(&col.header),
                 style_override: col.header_style.clone(),
-            })?;
+            }).await?;
         }
-        processor.process_event(Event::EndRow)?;
-        processor.process_event(Event::EndHeader)?;
+        proxy.process_event(IDFEvent::EndRow).await?;
+        proxy.process_event(IDFEvent::EndHeader).await?;
 
         let rows_data = context
             .pointer(data_source)
@@ -152,10 +153,7 @@ impl<'a> JsonTemplateParser<'a> {
                 .as_ref()
                 .and_then(|field| row_item.pointer(field).and_then(|v| v.as_str()));
 
-            processor.process_event(Event::StartRow {
-                context: row_item,
-                row_style_prefix: prefix_str.map(String::from),
-            })?;
+            proxy.process_event(IDFEvent::StartRow { context: row_item }).await?;
 
             for (i, col) in columns.iter().enumerate() {
                 let cell_value = row_item.pointer(&col.data_field).unwrap_or(&Value::Null);
@@ -180,27 +178,28 @@ impl<'a> JsonTemplateParser<'a> {
                         col.style.clone()
                     };
 
-                processor.process_event(Event::AddCell {
+                proxy.process_event(IDFEvent::AddCell {
                     column_index: i,
                     content: cell_text,
                     style_override: final_style,
-                })?;
+                }).await?;
             }
-            processor.process_event(Event::EndRow)?;
+            proxy.process_event(IDFEvent::EndRow).await?;
         }
 
-        processor.process_event(Event::EndTable)?;
+        proxy.process_event(IDFEvent::EndTable).await?;
         Ok(())
     }
 }
 
+#[async_trait(?Send)]
 impl<'a> TemplateProcessor<'a> for JsonTemplateParser<'a> {
-    fn process<R: DocumentRenderer<'a>>(
+    async fn process(
         &mut self,
         data: &'a Value,
-        processor: &mut StreamingLayoutProcessor<'a, R>,
+        proxy: &mut LayoutProcessorProxy<'a>,
     ) -> Result<(), PipelineError> {
-        processor.process_event(Event::StartDocument)?;
+        proxy.process_event(IDFEvent::StartDocument).await?;
 
         if self.stylesheet.page_sequences.is_empty() {
             return Err(PipelineError::StylesheetError(
@@ -235,13 +234,16 @@ impl<'a> TemplateProcessor<'a> for JsonTemplateParser<'a> {
             };
 
             for item_data in data_items {
-                processor.process_event(Event::BeginPageSequenceItem { context: item_data })?;
-                self.parse_children(&template.children, item_data, processor)?;
-                processor.process_event(Event::EndPageSequenceItem)?;
+                proxy
+                    .process_event(IDFEvent::BeginPageSequence { context: item_data })
+                    .await?;
+                self.parse_children(&template.children, item_data, proxy)
+                    .await?;
+                proxy.process_event(IDFEvent::EndPageSequence).await?;
             }
         }
 
-        processor.process_event(Event::EndDocument)?;
+        proxy.process_event(IDFEvent::EndDocument).await?;
         Ok(())
     }
 }
