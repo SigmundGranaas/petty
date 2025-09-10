@@ -32,7 +32,7 @@ fn main() -> Result<(), PipelineError> {
 
     println!("Building PDF generation pipeline...");
     let pipeline = PipelineBuilder::new()
-        .with_template_file(template_path)?
+        .with_stylesheet_file(template_path)?
         .build()?;
 
     println!("Generating PDF to {}...", output_path);

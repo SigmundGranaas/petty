@@ -1,3 +1,4 @@
+// src/parser/xslt/nodes.rs
 use super::tags;
 use super::util::OwnedAttributes;
 use super::XsltTemplateParser;
@@ -10,7 +11,6 @@ use quick_xml::events::Event as XmlEvent;
 use quick_xml::name::QName;
 use quick_xml::Reader;
 use serde_json::Value;
-use std::borrow::Cow;
 
 /// Recursively parses XML nodes within a given data context, emitting layout events.
 pub(super) fn parse_nodes<'a, R: DocumentRenderer<'a>>(
@@ -54,15 +54,6 @@ pub(super) fn parse_nodes<'a, R: DocumentRenderer<'a>>(
                     processor,
                 )?;
             }
-            XmlEvent::Text(e) => {
-                let content = e.unescape()?.to_string();
-                if !content.trim().is_empty() {
-                    processor.process_event(Event::AddText {
-                        content: Cow::Owned(content),
-                        style: None,
-                    })?;
-                }
-            }
             XmlEvent::End(_) => return Ok(()),
             XmlEvent::Eof => return Ok(()),
             _ => (),
@@ -93,7 +84,6 @@ fn handle_tag<'a, R: DocumentRenderer<'a>>(
         b"xsl:if" => {
             tags::handle_xsl_if(parser, attributes, is_empty, reader, context, processor)?
         }
-        b"xsl:value-of" => tags::handle_xsl_value_of(attributes, context, processor)?,
 
         // --- Page Structure Tags ---
         b"page-sequence" => {
@@ -107,6 +97,7 @@ fn handle_tag<'a, R: DocumentRenderer<'a>>(
         }
         b"text" => tags::handle_text(parser, attributes, is_empty, reader, context, processor)?,
         b"rectangle" => tags::handle_rectangle(attributes, processor)?,
+        b"image" => tags::handle_image(parser, attributes, context, processor)?,
 
         // --- Table Tags ---
         b"table" => tags::handle_table(parser, attributes, is_empty, reader, context, processor)?,

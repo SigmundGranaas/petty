@@ -10,6 +10,8 @@ use crate::parser::Event;
 use crate::render::DocumentRenderer;
 use crate::stylesheet::{PageLayout, Stylesheet, TableColumn};
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 pub(super) struct LayoutContext {
     style: ComputedStyle,
@@ -39,15 +41,19 @@ pub struct StreamingLayoutProcessor<'a, R: DocumentRenderer<'a>> {
     current_row_context: Option<&'a serde_json::Value>,
     // Field to track the context for the current logical page (record).
     current_page_sequence_context: Option<&'a serde_json::Value>,
+    // HTTP agent for fetching images
+    agent: ureq::Agent,
+    // Cache for downloaded images to avoid re-fetching. (URL -> ((w,h), data))
+    image_cache: HashMap<String, Arc<((u32, u32), Vec<u8>)>>,
 }
 
 impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
     pub fn new(renderer: R, stylesheet: &'a Stylesheet) -> Self {
-        let layout_engine = LayoutEngine::new(stylesheet);
+        let agent = ureq::agent();
         StreamingLayoutProcessor {
             renderer,
             page_layout: stylesheet.page.clone(),
-            layout_engine,
+            layout_engine: LayoutEngine::new(stylesheet),
             current_y: 0.0,
             page_height: 0.0,
             context_stack: Vec::new(),
@@ -57,6 +63,8 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
             current_row_events: Vec::new(),
             current_row_context: None,
             current_page_sequence_context: None,
+            agent,
+            image_cache: HashMap::new(),
         }
     }
 
@@ -89,6 +97,7 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
             Event::EndContainer => self.handle_end_container()?,
             Event::AddText { content, style } => self.handle_add_text(&content, style)?,
             Event::AddRectangle { style } => self.handle_add_rectangle(style)?,
+            Event::AddImage { src, style } => self.handle_add_image(src, style)?,
             Event::ForcePageBreak => {
                 // If we are already at the very top of a page, a page break does nothing.
                 // This prevents creating a blank page if the first element is a page break.

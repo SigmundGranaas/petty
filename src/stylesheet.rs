@@ -9,7 +9,6 @@ use std::str::FromStr;
 // Main struct representing all style and layout information.
 // Can be constructed either from a JSON file or by pre-parsing an XSLT file.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
 pub struct Stylesheet {
     pub page: PageLayout,
     pub styles: HashMap<String, ElementStyle>,
@@ -27,7 +26,6 @@ pub struct PageSequence {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
 pub struct PageLayout {
     #[serde(default)]
     pub title: Option<String>,
@@ -66,7 +64,6 @@ pub struct Margins {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase")]
 pub struct ElementStyle {
     pub font_family: Option<String>,
     pub font_size: Option<f32>,
@@ -110,11 +107,14 @@ pub enum TemplateElement {
     Rectangle {
         style: Option<String>,
     },
+    Image {
+        src: String,
+        style: Option<String>,
+    },
     PageBreak,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "camelCase")]
 pub struct TableColumn {
     pub header: String,
     pub data_field: String,
@@ -134,7 +134,6 @@ pub enum Dimension {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
 pub enum FontWeight {
     Thin,
     Light,
@@ -153,7 +152,6 @@ impl Default for FontWeight {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
 pub enum FontStyle {
     Normal,
     Italic,
@@ -167,7 +165,6 @@ impl Default for FontStyle {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
 pub enum TextAlign {
     Left,
     Right,
@@ -202,7 +199,6 @@ pub struct Border {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
 pub enum BorderStyle {
     Solid,
     Dashed,
@@ -317,11 +313,12 @@ fn parse_attribute_set(
                     })?;
                     // Reading the text content of the xsl:attribute
                     let mut content_buf = Vec::new();
-                    let value = if let Ok(XmlEvent::Text(text)) = reader.read_event_into(&mut content_buf) {
-                        text.unescape()?.to_string()
-                    } else {
-                        String::new() // Handle self-closing tags
-                    };
+                    let value =
+                        if let Ok(XmlEvent::Text(text)) = reader.read_event_into(&mut content_buf) {
+                            text.unescape()?.to_string()
+                        } else {
+                            String::new() // Handle self-closing tags
+                        };
 
                     match attr_name.as_str() {
                         "font-size" => style.font_size = Some(parse_pt_value(&value)?),
@@ -336,18 +333,44 @@ fn parse_attribute_set(
                             has_margin = true;
                             margin = parse_shorthand_value(&value)?;
                         }
-                        "margin-top" => { has_margin = true; margin.top = parse_pt_value(&value)? },
-                        "margin-right" => { has_margin = true; margin.right = parse_pt_value(&value)? },
-                        "margin-bottom" => { has_margin = true; margin.bottom = parse_pt_value(&value)? },
-                        "margin-left" => { has_margin = true; margin.left = parse_pt_value(&value)? },
+                        "margin-top" => {
+                            has_margin = true;
+                            margin.top = parse_pt_value(&value)?
+                        }
+                        "margin-right" => {
+                            has_margin = true;
+                            margin.right = parse_pt_value(&value)?
+                        }
+                        "margin-bottom" => {
+                            has_margin = true;
+                            margin.bottom = parse_pt_value(&value)?
+                        }
+                        "margin-left" => {
+                            has_margin = true;
+                            margin.left = parse_pt_value(&value)?
+                        }
                         "padding" => {
                             has_padding = true;
                             padding = parse_shorthand_value(&value)?;
                         }
-                        "padding-top" => { has_padding = true; padding.top = parse_pt_value(&value)? },
-                        "padding-right" => { has_padding = true; padding.right = parse_pt_value(&value)? },
-                        "padding-bottom" => { has_padding = true; padding.bottom = parse_pt_value(&value)? },
-                        "padding-left" => { has_padding = true; padding.left = parse_pt_value(&value)? },
+                        "padding-top" => {
+                            has_padding = true;
+                            padding.top = parse_pt_value(&value)?
+                        }
+                        "padding-right" => {
+                            has_padding = true;
+                            padding.right = parse_pt_value(&value)?
+                        }
+                        "padding-bottom" => {
+                            has_padding = true;
+                            padding.bottom = parse_pt_value(&value)?
+                        }
+                        "padding-left" => {
+                            has_padding = true;
+                            padding.left = parse_pt_value(&value)?
+                        }
+                        "width" => style.width = Some(Dimension::Pt(parse_pt_value(&value)?)),
+                        "height" => style.height = Some(Dimension::Pt(parse_pt_value(&value)?)),
                         _ => {}
                     }
                 }
@@ -463,7 +486,6 @@ impl FromStr for FontStyle {
         })
     }
 }
-
 
 impl FromStr for TextAlign {
     type Err = PipelineError;

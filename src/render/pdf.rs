@@ -1,17 +1,18 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/render/pdf.rs
-// src/render/pdf.rs
-
 use crate::error::RenderError;
-use crate::layout::{LayoutElement, LayoutEngine, PositionedElement, RectElement, TextElement};
+use crate::layout::{
+    ImageElement, LayoutElement, LayoutEngine, PositionedElement, RectElement, TextElement,
+};
 use crate::render::DocumentRenderer;
 use crate::stylesheet::{Color, PageLayout, PageSize, Stylesheet, TextAlign};
 use handlebars::Handlebars;
 use printpdf::font::ParsedFont;
 use printpdf::graphics::{LinePoint, PaintMode, Point, Polygon, PolygonRing, WindingOrder};
+use printpdf::matrix::TextMatrix;
+use printpdf::ops::Op;
 use printpdf::text::TextItem;
+use printpdf::xobject::{XObject, XObjectTransform};
 use printpdf::{
-    FontId, Layer, Mm, Op, PdfConformance, PdfDocument, PdfPage, PdfSaveOptions, Pt, Rgb,
-    TextMatrix,
+    FontId, Layer, Mm, PdfConformance, PdfDocument, PdfPage, PdfSaveOptions, Pt, Rgb, XObjectId,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -30,6 +31,7 @@ pub struct PdfDocumentRenderer<'a> {
     current_font_id: Option<FontId>,
     current_font_size: Option<f32>,
     current_fill_color: Option<printpdf::color::Color>,
+    image_xobjects: HashMap<String, (XObjectId, (u32, u32))>,
 }
 
 impl<'a> PdfDocumentRenderer<'a> {
@@ -61,6 +63,7 @@ impl<'a> PdfDocumentRenderer<'a> {
             current_font_id: None,
             current_font_size: None,
             current_fill_color: None,
+            image_xobjects: HashMap::new(),
         })
     }
 
@@ -142,6 +145,9 @@ impl<'a> DocumentRenderer<'a> for PdfDocumentRenderer<'a> {
             LayoutElement::Rectangle(rect) => {
                 self.render_rectangle(rect, element)?;
             }
+            LayoutElement::Image(image) => {
+                self.render_image(image, element)?;
+            }
         }
         Ok(())
     }
@@ -185,7 +191,6 @@ impl<'a> DocumentRenderer<'a> for PdfDocumentRenderer<'a> {
                 let final_text = rendered_text
                     .replace("%p", &(i + 1).to_string())
                     .replace("%t", &total_pages.to_string());
-
 
                 let (page_width_pt, _) = Self::get_page_dimensions_pt(page_layout);
                 let font_id = self.get_font(&style.font_family);
@@ -244,7 +249,7 @@ impl<'a> DocumentRenderer<'a> for PdfDocumentRenderer<'a> {
         Ok(())
     }
 }
-    
+
 impl<'a> PdfDocumentRenderer<'a> {
     fn to_pdf_color(c: &Color) -> printpdf::color::Color {
         printpdf::color::Color::Rgb(Rgb::new(
@@ -253,6 +258,69 @@ impl<'a> PdfDocumentRenderer<'a> {
             c.b as f32 / 255.0,
             None,
         ))
+    }
+
+    fn render_image(
+        &mut self,
+        image_el: &ImageElement,
+        positioned: &PositionedElement,
+    ) -> Result<(), RenderError> {
+        self.close_text_section_if_open();
+
+        let (xobj_id, (img_w, img_h)) =
+            if let Some((id, dims)) = self.image_xobjects.get(&image_el.src) {
+                (id.clone(), *dims)
+            } else {
+                let mut warnings = Vec::new();
+                let raw_image = printpdf::image::RawImage::decode_from_bytes(
+                    &image_el.image_data,
+                    &mut warnings,
+                )
+                    .map_err(|e| {
+                        RenderError::InternalPdfError(format!(
+                            "Failed to decode image data for {}: {}",
+                            image_el.src, e
+                        ))
+                    })?;
+
+                let dims = (raw_image.width as u32, raw_image.height as u32);
+                let xobj_id = XObjectId::new();
+                self.document
+                    .resources
+                    .xobjects
+                    .map
+                    .insert(xobj_id.clone(), XObject::Image(raw_image));
+
+                self.image_xobjects
+                    .insert(image_el.src.clone(), (xobj_id.clone(), dims));
+                (xobj_id, dims)
+            };
+
+        let page_layout = self.current_page_layout.as_ref().unwrap();
+        let (_width_pt, page_height_pt) = Self::get_page_dimensions_pt(page_layout);
+
+        // The position needs to be the bottom-left corner of the image
+        let x = positioned.x;
+        let y = page_height_pt - (positioned.y + positioned.height);
+
+        // The `UseXobject` operation ignores the CTM and uses its own transform.
+        // We set a DPI of 72, which makes one pixel equal to one point. Then,
+        // we can use the scale_x/scale_y factors to scale the image from its
+        // intrinsic pixel dimensions to the target point dimensions on the page.
+        let transform = XObjectTransform {
+            translate_x: Some(Pt(x)),
+            translate_y: Some(Pt(y)),
+            scale_x: Some(positioned.width / (img_w as f32)),
+            scale_y: Some(positioned.height / (img_h as f32)),
+            rotate: None,
+            dpi: Some(72.0),
+        };
+
+        self.current_page_ops.push(Op::UseXobject {
+            id: xobj_id,
+            transform,
+        });
+        Ok(())
     }
 
     fn render_rectangle(
@@ -336,7 +404,10 @@ impl<'a> PdfDocumentRenderer<'a> {
             let width = positioned.width;
             let height = positioned.height;
             let polygon = Polygon { rings: vec![PolygonRing { points: vec![ LinePoint { p: Point { x: Pt(x), y: Pt(y) }, bezier: false }, LinePoint { p: Point { x: Pt(x + width), y: Pt(y) }, bezier: false }, LinePoint { p: Point { x: Pt(x + width), y: Pt(y + height) }, bezier: false }, LinePoint { p: Point { x: Pt(x), y: Pt(y + height) }, bezier: false }, ], }], mode: PaintMode::Fill, winding_order: WindingOrder::EvenOdd, };
-            self.current_page_ops.push(Op::SetFillColor { col: Self::to_pdf_color(bg_color) });
+            self.current_page_ops
+                .push(Op::SetFillColor {
+                    col: Self::to_pdf_color(bg_color),
+                });
             self.current_page_ops.push(Op::DrawPolygon { polygon });
         }
 
@@ -350,7 +421,9 @@ impl<'a> PdfDocumentRenderer<'a> {
 
         if self.current_fill_color.as_ref() != Some(&fill_color) {
             self.current_page_ops
-                .push(Op::SetFillColor { col: fill_color.clone() });
+                .push(Op::SetFillColor {
+                    col: fill_color.clone(),
+                });
             self.current_fill_color = Some(fill_color);
         }
 

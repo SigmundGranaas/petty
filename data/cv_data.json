@@ -1,0 +1,76 @@
+{
+  "name": "Alex Doe",
+  "title": "Senior Software Engineer",
+  "contact": {
+    "email": "alex.doe@example.com",
+    "phone": "+1 (555) 123-4567",
+    "linkedin": "linkedin.com/in/alexdoe",
+    "github": "github.com/alexdoe",
+    "location": "San Francisco, CA"
+  },
+  "summary": "Results-driven Senior Software Engineer with over 8 years of experience in designing, developing, and deploying high-performance, scalable backend systems. Proficient in Rust, Go, and Python with a strong background in cloud-native technologies, distributed systems, and DevOps practices. Passionate about writing clean, efficient, and maintainable code.",
+  "experience": [
+    {
+      "company": "Innovatech Solutions Inc.",
+      "location": "San Francisco, CA",
+      "title": "Senior Software Engineer",
+      "dates": "Jan 2019 - Present",
+      "responsibilities": [
+        "Led the design and implementation of a new microservices-based architecture in Rust, improving system performance by 40% and reducing latency by 60ms.",
+        "Developed and maintained critical APIs for data processing pipelines, handling over 1 million requests per minute.",
+        "Mentored junior engineers, conducted code reviews, and established best practices for Rust development within the team.",
+        "Automated deployment processes using Kubernetes and CI/CD pipelines (GitHub Actions), reducing deployment time from hours to minutes."
+      ]
+    },
+    {
+      "company": "Data Systems Corp.",
+      "location": "Palo Alto, CA",
+      "title": "Software Engineer",
+      "dates": "Jun 2015 - Dec 2018",
+      "responsibilities": [
+        "Developed backend services using Go and Python for a large-scale data analytics platform.",
+        "Contributed to the core data ingestion service, improving its throughput by 25% through performance optimizations.",
+        "Collaborated with front-end teams to define and implement RESTful APIs.",
+        "Participated in an on-call rotation to ensure the reliability and uptime of production systems."
+      ]
+    }
+  ],
+  "education": [
+    {
+      "institution": "University of California, Berkeley",
+      "degree": "M.S. in Computer Science",
+      "dates": "2013 - 2015"
+    },
+    {
+      "institution": "University of California, Los Angeles",
+      "degree": "B.S. in Computer Science",
+      "dates": "2009 - 2013"
+    }
+  ],
+  "skills": [
+    {
+      "category": "Programming Languages",
+      "list": "Rust, Go, Python, TypeScript, SQL"
+    },
+    {
+      "category": "Databases & Caching",
+      "list": "PostgreSQL, Redis, ScyllaDB, Elasticsearch"
+    },
+    {
+      "category": "Frameworks & Libraries",
+      "list": "Tokio, Axum, Actix-Web, Gin, Django, React"
+    },
+    {
+      "category": "Tools & Platforms",
+      "list": "Docker, Kubernetes, AWS, GCP, Terraform, Git, GitHub Actions, Prometheus, Grafana"
+    }
+  ],
+  "projects": [
+    {
+      "name": "Petty PDF Generator (Personal Project)",
+      "url": "github.com/alexdoe/petty",
+      "description": "A Rust-based document generation engine inspired by Apache FOP. It transforms structured JSON data into PDFs using a stylesheet that defines page layout, styling, and data-driven templates. Features both JSON-native and XSLT-based templating.",
+      "technologies": "Rust, Tokio, Serde, Handlebars, PrintPDF, Quick-XML"
+    }
+  ]
+}

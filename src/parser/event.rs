@@ -23,6 +23,10 @@ pub enum Event<'a> {
     AddRectangle {
         style: Option<Cow<'a, str>>,
     },
+    AddImage {
+        src: Cow<'a, str>,
+        style: Option<Cow<'a, str>>,
+    },
     StartTable {
         style: Option<Cow<'a, str>>,
         columns: Cow<'a, [TableColumn]>,

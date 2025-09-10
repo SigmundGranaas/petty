@@ -87,6 +87,18 @@ impl<'a> JsonTemplateParser<'a> {
                         processor,
                     )?;
                 }
+                TemplateElement::Image { src, style } => {
+                    let rendered_src: Cow<'a, str> = if src.contains("{{") {
+                        Cow::Owned(self.template_engine.render_template(src, context)
+                            .map_err(|e| PipelineError::TemplateParseError(format!("Failed to render image src '{}': {}", src, e)))?)
+                    } else {
+                        Cow::Borrowed(src)
+                    };
+                    processor.process_event(Event::AddImage {
+                        src: rendered_src,
+                        style: style.as_deref().map(Cow::Borrowed),
+                    })?;
+                }
                 TemplateElement::PageBreak => {
                     processor.process_event(Event::ForcePageBreak)?;
                 }

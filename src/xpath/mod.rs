@@ -154,7 +154,7 @@ mod tests {
         let data = get_test_data();
         let customer_obj = &data["customers"][0];
         let result = select(customer_obj, ".");
-        assert_eq!(result, vec![&customer_obj]);
+        assert_eq!(result, vec![customer_obj]);
     }
 
     #[test]

@@ -11,7 +11,7 @@
     "headerBox": {
       "padding": {"top": 15, "bottom": 15, "left": 15, "right": 15},
       "background_color": {"r": 240, "g": 245, "b": 250},
-      "border": {"width": 1, "style": "solid", "color": {"r": 210, "g": 220, "b": 230}},
+      "border": {"width": 1, "style": "Solid", "color": {"r": 210, "g": 220, "b": 230}},
       "margin": {"bottom": 25}
     },
     "userName": { "font_size": 14, "font_weight": "Bold" },
@@ -23,8 +23,8 @@
       "background_color": {"r": 70, "g": 85, "b": 105},
       "padding": {"top": 8, "bottom": 8, "left": 6, "right": 6}
     },
-    "td": { "padding": {"top": 6, "bottom": 6, "left": 6, "right": 6}, "font_size": 10, "border": {"width": 0.5, "style": "solid", "color": {"r": 220, "g": 220, "b": 220}}},
-    "td-currency": { "padding": {"top": 6, "bottom": 6, "left": 6, "right": 6}, "font_size": 10, "text_align": "Right", "border": {"width": 0.5, "style": "solid", "color": {"r": 220, "g": 220, "b": 220}}},
+    "td": { "padding": {"top": 6, "bottom": 6, "left": 6, "right": 6}, "font_size": 10, "border": {"width": 0.5, "style": "Solid", "color": {"r": 220, "g": 220, "b": 220}}},
+    "td-currency": { "padding": {"top": 6, "bottom": 6, "left": 6, "right": 6}, "font_size": 10, "text_align": "Right", "border": {"width": 0.5, "style": "Solid", "color": {"r": 220, "g": 220, "b": 220}}},
     "summaryContainer": { "margin": {"top": 20} },
     "summaryLabel": { "font_size": 11, "text_align": "Right", "margin": {"bottom": 4} },
     "summaryValue": { "font_size": 12, "font_weight": "Bold", "text_align": "Right", "margin": {"bottom": 4} },

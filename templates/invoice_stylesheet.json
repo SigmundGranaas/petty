@@ -6,6 +6,10 @@
     "column_gap": 0
   },
   "styles": {
+    "logo": {
+      "width": 100,
+      "margin": { "bottom": 20 }
+    },
     "h1": {
       "font_size": 28,
       "font_weight": "Bold",
@@ -70,6 +74,11 @@
     "invoicePage": {
       "name": "invoicePage",
       "children": [
+        {
+          "type": "Image",
+          "src": "https://www.rust-lang.org/static/images/ferris-error.png",
+          "style": "logo"
+        },
         { "type": "Text", "content": "INVOICE", "style": "h1" },
         { "type": "Rectangle", "style": "hr"},
         {

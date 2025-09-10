@@ -14,6 +14,7 @@ pub struct PositionedElement {
 pub enum LayoutElement {
     Text(TextElement),
     Rectangle(RectElement),
+    Image(ImageElement),
 }
 
 #[derive(Clone, Debug)]
@@ -25,4 +26,10 @@ pub struct TextElement {
 #[derive(Clone, Debug)]
 pub struct RectElement {
     pub style_name: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct ImageElement {
+    pub src: String,
+    pub image_data: Vec<u8>,
 }

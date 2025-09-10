@@ -1,3 +1,4 @@
+// src/parser/xslt/tags.rs
 use super::nodes::parse_nodes;
 use super::util::{
     capture_events_until_end, get_attr_owned_optional, get_attr_owned_required,
@@ -30,7 +31,7 @@ pub(super) fn handle_xsl_for_each<'a, R: DocumentRenderer<'a>>(
 ) -> Result<(), PipelineError> {
     let tag_name = b"xsl:for-each";
     let path = get_attr_owned_required(attributes, b"select", tag_name)?;
-    let items = xpath::select(context, &path);
+    let selected_values = xpath::select(context, &path);
 
     let inner_events = if !is_empty {
         capture_events_until_end(reader, QName(tag_name))?
@@ -47,11 +48,22 @@ pub(super) fn handle_xsl_for_each<'a, R: DocumentRenderer<'a>>(
     let inner_xml = String::from_utf8(writer_buf)
         .map_err(|e| PipelineError::TemplateParseError(e.to_string()))?;
 
-    let items_to_iterate = items
-        .get(0)
-        .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().collect::<Vec<_>>())
-        .unwrap_or_default();
+    // CORRECTED: This logic now correctly handles selections that result in a single
+    // object/value as well as selections that result in an array of items.
+    let items_to_iterate: Vec<&'a Value> = if let Some(first_val) = selected_values.get(0) {
+        if let Some(arr) = first_val.as_array() {
+            // The selection pointed to an array, so we iterate its members.
+            arr.iter().collect()
+        } else {
+            // The selection pointed to a single item (or something else).
+            // We "iterate" over the entire result set (which may be just one item).
+            selected_values
+        }
+    } else {
+        // The selection found nothing.
+        Vec::new()
+    };
+
     debug!(
         "  <{:?}> select='{}' found {} items.",
         String::from_utf8_lossy(tag_name),
@@ -90,21 +102,6 @@ pub(super) fn handle_xsl_if<'a, R: DocumentRenderer<'a>>(
     Ok(())
 }
 
-pub(super) fn handle_xsl_value_of<'a, R: DocumentRenderer<'a>>(
-    attributes: &OwnedAttributes,
-    context: &'a Value,
-    processor: &mut StreamingLayoutProcessor<'a, R>,
-) -> Result<(), PipelineError> {
-    let path = get_attr_owned_required(attributes, b"select", b"xsl:value-of")?;
-    let style = get_attr_owned_optional(attributes, b"style")?;
-    let content = xpath::select_as_string(context, &path);
-    processor.process_event(Event::AddText {
-        content: Cow::Owned(content),
-        style: style.map(Cow::Owned),
-    })?;
-    Ok(())
-}
-
 // --- Page Structure Handlers ---
 
 #[allow(clippy::too_many_arguments)]
@@ -118,7 +115,7 @@ pub(super) fn handle_page_sequence<'a, R: DocumentRenderer<'a>>(
 ) -> Result<(), PipelineError> {
     let tag_name = b"page-sequence";
     let path = get_attr_owned_required(attributes, b"select", tag_name)?;
-    let items = xpath::select(context, &path);
+    let selected_values = xpath::select(context, &path);
 
     let inner_events = if !is_empty {
         capture_events_until_end(reader, QName(tag_name))?
@@ -135,14 +132,22 @@ pub(super) fn handle_page_sequence<'a, R: DocumentRenderer<'a>>(
     let inner_xml = String::from_utf8(writer_buf)
         .map_err(|e| PipelineError::TemplateParseError(e.to_string()))?;
 
-    let items_to_iterate = if path == "/" {
+    // CORRECTED: This logic now correctly handles selections that result in a single
+    // object/value (like `select="."`) as well as selections that result in an array.
+    let items_to_iterate: Vec<&'a Value> = if path == "/" {
         vec![context]
+    } else if let Some(first_val) = selected_values.get(0) {
+        if let Some(arr) = first_val.as_array() {
+            // The selection pointed to an array, so we iterate its members.
+            arr.iter().collect()
+        } else {
+            // The selection pointed to a single item (or something else).
+            // We iterate over the entire result set (which may be just one item).
+            selected_values
+        }
     } else {
-        items
-            .get(0)
-            .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().collect::<Vec<_>>())
-            .unwrap_or_default()
+        // The selection found nothing.
+        Vec::new()
     };
 
     debug!(
@@ -223,6 +228,31 @@ pub(super) fn handle_rectangle<'a, R: DocumentRenderer<'a>>(
 ) -> Result<(), PipelineError> {
     let style = get_attr_owned_optional(attributes, b"style")?;
     processor.process_event(Event::AddRectangle {
+        style: style.map(Cow::Owned),
+    })?;
+    Ok(())
+}
+
+pub(super) fn handle_image<'a, R: DocumentRenderer<'a>>(
+    parser: &mut XsltTemplateParser<'a>,
+    attributes: &OwnedAttributes,
+    context: &'a Value,
+    processor: &mut StreamingLayoutProcessor<'a, R>,
+) -> Result<(), PipelineError> {
+    let src = get_attr_owned_required(attributes, b"src", b"image")?;
+    let style = get_attr_owned_optional(attributes, b"style")?;
+
+    let rendered_src = if src.contains("{{") {
+        parser
+            .template_engine
+            .render_template(&src, context)
+            .map_err(|e| PipelineError::TemplateParseError(e.to_string()))?
+    } else {
+        src
+    };
+
+    processor.process_event(Event::AddImage {
+        src: Cow::Owned(rendered_src),
         style: style.map(Cow::Owned),
     })?;
     Ok(())

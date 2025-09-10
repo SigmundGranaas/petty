@@ -8,14 +8,19 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
         &mut self,
         style: Option<Cow<'a, str>>,
     ) -> Result<(), PipelineError> {
-        let (parent_style, parent_available_width, parent_content_x) = {
-            let parent_context = self.context_stack.last().unwrap();
-            (
-                parent_context.style.clone(),
-                parent_context.available_width,
-                parent_context.content_x,
-            )
-        };
+        let (parent_style, parent_available_width, parent_content_x) =
+            if let Some(parent_context) = self.context_stack.last() {
+                (
+                    parent_context.style.clone(),
+                    parent_context.available_width,
+                    parent_context.content_x,
+                )
+            } else {
+                return Err(PipelineError::TemplateParseError(
+                    "Attempted to start a container outside of a page sequence.".to_string(),
+                ));
+            };
+
         let new_style = self
             .layout_engine
             .compute_style_from_parent(style.as_deref(), &parent_style);

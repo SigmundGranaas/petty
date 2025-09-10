@@ -10,6 +10,7 @@ use crate::render::DocumentRenderer;
 use crate::stylesheet::Stylesheet;
 use handlebars::Handlebars;
 use log;
+use quick_xml::events::Event as XmlEvent;
 use quick_xml::Reader;
 use serde_json::Value;
 
@@ -49,9 +50,42 @@ impl<'a> TemplateProcessor<'a> for XsltTemplateParser<'a> {
 
         processor.process_event(Event::StartDocument)?;
 
-        // The XSLT template itself is now responsible for creating page sequences.
-        // The parser just processes nodes from the root of the template.
-        nodes::parse_nodes(self, &mut reader, data, processor)?;
+        let mut buf = Vec::new();
+        let mut found_root_template = false;
+
+        // Walk the XML event stream to find the root template.
+        // We don't need to manually manage hierarchy, just look for the specific start event.
+        loop {
+            match reader.read_event_into(&mut buf)? {
+                XmlEvent::Start(e) if e.name().as_ref() == b"xsl:template" => {
+                    let is_root = e.attributes().flatten().any(|attr| {
+                        if attr.key.as_ref() == b"match" {
+                            // Correctly handle the Result before comparing the value.
+                            matches!(attr.unescape_value(), Ok(value) if value == "/")
+                        } else {
+                            false
+                        }
+                    });
+
+                    if is_root {
+                        log::debug!("Found root template <xsl:template match=\"/\">. Processing content...");
+                        // This is our entry point. Start parsing the children of this node.
+                        nodes::parse_nodes(self, &mut reader, data, processor)?;
+                        found_root_template = true;
+                        break; // Document content is generated, we can stop.
+                    }
+                }
+                XmlEvent::Eof => break, // Reached end of file without finding the root template.
+                _ => (),             // Ignore all other events (other tags, text, comments etc.)
+            }
+            buf.clear();
+        }
+
+        if !found_root_template {
+            return Err(PipelineError::TemplateParseError(
+                "Could not find a root <xsl:template match=\"/\"> in the XSLT file.".to_string(),
+            ));
+        }
 
         processor.process_event(Event::EndDocument)?;
 
