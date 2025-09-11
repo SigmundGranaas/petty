@@ -1,14 +1,12 @@
 {
   "name": "Alex Doe",
   "title": "Senior Software Engineer",
-  "contact": {
-    "email": "alex.doe@example.com",
-    "phone": "+1 (555) 123-4567",
-    "linkedin": "linkedin.com/in/alexdoe",
-    "github": "github.com/alexdoe",
-    "location": "San Francisco, CA"
-  },
-  "summary": "Results-driven Senior Software Engineer with over 8 years of experience in designing, developing, and deploying high-performance, scalable backend systems. Proficient in Rust, Go, and Python with a strong background in cloud-native technologies, distributed systems, and DevOps practices. Passionate about writing clean, efficient, and maintainable code.",
+  "email": "alex.doe@example.com",
+  "phone": "+1 (555) 123-4567",
+  "linkedin": "linkedin.com/in/alexdoe",
+  "github": "github.com/alexdoe",
+  "location": "San Francisco, CA",
+  "summary": "Senior Software Engineer with 8+ years of experience designing and deploying high-performance, scalable backend systems in Rust, Go, and Python. Expertise in cloud-native architecture, distributed systems, and DevOps. Committed to writing clean, efficient, and maintainable code.",
   "experience": [
     {
       "company": "Innovatech Solutions Inc.",
@@ -16,10 +14,10 @@
       "title": "Senior Software Engineer",
       "dates": "Jan 2019 - Present",
       "responsibilities": [
-        "Led the design and implementation of a new microservices-based architecture in Rust, improving system performance by 40% and reducing latency by 60ms.",
-        "Developed and maintained critical APIs for data processing pipelines, handling over 1 million requests per minute.",
-        "Mentored junior engineers, conducted code reviews, and established best practices for Rust development within the team.",
-        "Automated deployment processes using Kubernetes and CI/CD pipelines (GitHub Actions), reducing deployment time from hours to minutes."
+        "Led the design of a microservices architecture in Rust, improving system performance by 40% and reducing latency by 60ms.",
+        "Developed and maintained critical data processing APIs handling over 1 million requests per minute.",
+        "Mentored junior engineers, conducted code reviews, and established team-wide best practices for Rust development.",
+        "Automated deployments with Kubernetes and GitHub Actions, reducing deployment time from hours to minutes."
       ]
     },
     {
@@ -28,10 +26,10 @@
       "title": "Software Engineer",
       "dates": "Jun 2015 - Dec 2018",
       "responsibilities": [
-        "Developed backend services using Go and Python for a large-scale data analytics platform.",
-        "Contributed to the core data ingestion service, improving its throughput by 25% through performance optimizations.",
-        "Collaborated with front-end teams to define and implement RESTful APIs.",
-        "Participated in an on-call rotation to ensure the reliability and uptime of production systems."
+        "Developed backend services in Go and Python for a large-scale data analytics platform.",
+        "Improved data ingestion service throughput by 25% through targeted performance optimizations.",
+        "Collaborated with front-end teams to define and implement RESTful APIs for new product features.",
+        "Participated in on-call rotation to ensure the reliability and uptime of production systems."
       ]
     }
   ],
@@ -49,15 +47,15 @@
   ],
   "skills": [
     {
-      "category": "Programming Languages",
+      "category": "Languages",
       "list": "Rust, Go, Python, TypeScript, SQL"
     },
     {
-      "category": "Databases & Caching",
+      "category": "Databases",
       "list": "PostgreSQL, Redis, ScyllaDB, Elasticsearch"
     },
     {
-      "category": "Frameworks & Libraries",
+      "category": "Frameworks",
       "list": "Tokio, Axum, Actix-Web, Gin, Django, React"
     },
     {
@@ -67,10 +65,10 @@
   ],
   "projects": [
     {
-      "name": "Petty PDF Generator (Personal Project)",
+      "name": "Petty PDF Generator",
       "url": "github.com/alexdoe/petty",
-      "description": "A Rust-based document generation engine inspired by Apache FOP. It transforms structured JSON data into PDFs using a stylesheet that defines page layout, styling, and data-driven templates. Features both JSON-native and XSLT-based templating.",
-      "technologies": "Rust, Tokio, Serde, Handlebars, PrintPDF, Quick-XML"
+      "description": "A Rust-based document engine transforming JSON data into PDFs via XSLT or JSON stylesheets.",
+      "technologies": "Rust, Tokio, Serde, PrintPDF, Quick-XML"
     }
   ]
 }

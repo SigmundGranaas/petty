@@ -1,3 +1,4 @@
+// src/render/pdf.rs
 use crate::error::RenderError;
 use crate::layout::{
     ImageElement, LayoutElement, LayoutEngine, PositionedElement, RectElement, TextElement,
@@ -32,6 +33,8 @@ pub struct PdfDocumentRenderer<'a> {
     current_font_size: Option<f32>,
     current_fill_color: Option<printpdf::color::Color>,
     image_xobjects: HashMap<String, (XObjectId, (u32, u32))>,
+    // --- NEW: Hyperlink State ---
+    active_link_href: Option<String>,
 }
 
 impl<'a> PdfDocumentRenderer<'a> {
@@ -64,6 +67,7 @@ impl<'a> PdfDocumentRenderer<'a> {
             current_font_size: None,
             current_fill_color: None,
             image_xobjects: HashMap::new(),
+            active_link_href: None,
         })
     }
 
@@ -138,6 +142,16 @@ impl<'a> DocumentRenderer<'a> for PdfDocumentRenderer<'a> {
         if self.has_errored {
             return Ok(());
         }
+
+        if self.active_link_href.is_some() {
+            // TODO: Hyperlink Annotation Rendering is currently disabled.
+            // The version of the `printpdf` library that the build environment
+            // appears to be using does not have a public API for adding annotations
+            // to a page (e.g., the `PdfPage::annotations` field is missing).
+            // This feature cannot be fully implemented until the project's PDF
+            // library dependency is updated or corrected to a version that supports this.
+        }
+
         match &element.element {
             LayoutElement::Text(text) => {
                 self.render_text(text, element, layout_engine)?;
@@ -150,6 +164,14 @@ impl<'a> DocumentRenderer<'a> for PdfDocumentRenderer<'a> {
             }
         }
         Ok(())
+    }
+
+    fn start_hyperlink(&mut self, href: &str) {
+        self.active_link_href = Some(href.to_string());
+    }
+
+    fn end_hyperlink(&mut self) {
+        self.active_link_href = None;
     }
 
     fn finalize<W: io::Write>(
@@ -213,8 +235,7 @@ impl<'a> DocumentRenderer<'a> for PdfDocumentRenderer<'a> {
                 let y = page_layout.margins.bottom - style.font_size;
                 let mut x = page_layout.margins.left;
                 if style.text_align != TextAlign::Left {
-                    let char_width_approx = style.font_size * 0.6;
-                    let line_width = final_text.len() as f32 * char_width_approx;
+                    let line_width = layout_engine.measure_text_width(&final_text, &style);
                     let content_width =
                         page_width_pt - page_layout.margins.left - page_layout.margins.right;
                     match style.text_align {
@@ -448,8 +469,7 @@ impl<'a> PdfDocumentRenderer<'a> {
             let line_top_y = positioned.y + style.padding.top + (i as f32 * style.line_height);
 
             if style.text_align != TextAlign::Left {
-                let char_width_approx = style.font_size * 0.6;
-                let line_width = line.len() as f32 * char_width_approx;
+                let line_width = layout_engine.measure_text_width(line, style);
 
                 match style.text_align {
                     TextAlign::Right => {

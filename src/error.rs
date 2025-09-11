@@ -1,4 +1,5 @@
 use std::num::ParseFloatError;
+use std::string::FromUtf8Error;
 use thiserror::Error;
 
 /// Errors that can occur during the rendering phase (e.g., PDF generation).
@@ -25,6 +26,9 @@ pub enum PipelineError {
 
     #[error("XML attribute parsing error: {0}")]
     XmlAttrError(#[from] quick_xml::events::attributes::AttrError),
+
+    #[error("UTF-8 conversion error: {0}")]
+    Utf8Error(#[from] FromUtf8Error),
 
     #[error("Failed to parse number in template: {0}")]
     FloatParseError(#[from] ParseFloatError),

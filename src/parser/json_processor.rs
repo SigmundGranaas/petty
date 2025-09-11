@@ -129,11 +129,16 @@ impl<'a> JsonTemplateParser<'a> {
             context: &Value::Null,
         }).await?;
         for (i, col) in columns.iter().enumerate() {
-            proxy.process_event(IDFEvent::AddCell {
+            proxy.process_event(IDFEvent::StartCell {
                 column_index: i,
-                content: Cow::Borrowed(&col.header),
                 style_override: col.header_style.clone(),
             }).await?;
+            // Content of the header cell
+            proxy.process_event(IDFEvent::AddText {
+                content: Cow::Borrowed(&col.header),
+                style: col.header_style.as_deref().map(Cow::Borrowed),
+            }).await?;
+            proxy.process_event(IDFEvent::EndCell).await?;
         }
         proxy.process_event(IDFEvent::EndRow).await?;
         proxy.process_event(IDFEvent::EndHeader).await?;
@@ -178,11 +183,15 @@ impl<'a> JsonTemplateParser<'a> {
                         col.style.clone()
                     };
 
-                proxy.process_event(IDFEvent::AddCell {
+                proxy.process_event(IDFEvent::StartCell {
                     column_index: i,
-                    content: cell_text,
-                    style_override: final_style,
+                    style_override: final_style.clone(), // This is the container style for the cell
                 }).await?;
+                proxy.process_event(IDFEvent::AddText {
+                    content: cell_text,
+                    style: final_style.map(Cow::Owned), // This is the text style for the cell content
+                }).await?;
+                proxy.process_event(IDFEvent::EndCell).await?;
             }
             proxy.process_event(IDFEvent::EndRow).await?;
         }

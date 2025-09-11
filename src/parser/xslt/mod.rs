@@ -47,21 +47,20 @@ impl<'a> TemplateProcessor<'a> for XsltTemplateParser<'a> {
     ) -> Result<(), PipelineError> {
         log::info!("Starting XSLT template processing...");
         let mut reader = Reader::from_str(self.xslt_content);
-        reader.config_mut().trim_text(true);
+        reader.config_mut().trim_text(false);
 
         proxy.process_event(IDFEvent::StartDocument).await?;
 
         let mut buf = Vec::new();
         let mut found_root_template = false;
 
-        // Walk the XML event stream to find the root template.
-        // We don't need to manually manage hierarchy, just look for the specific start event.
+        // Find the root template, but instead of parsing from within the loop,
+        // we let the loop complete. This is safer.
         loop {
             match reader.read_event_into(&mut buf)? {
                 XmlEvent::Start(e) if e.name().as_ref() == b"xsl:template" => {
                     let is_root = e.attributes().flatten().any(|attr| {
                         if attr.key.as_ref() == b"match" {
-                            // Correctly handle the Result before comparing the value.
                             matches!(attr.unescape_value(), Ok(value) if value == "/")
                         } else {
                             false
@@ -73,11 +72,11 @@ impl<'a> TemplateProcessor<'a> for XsltTemplateParser<'a> {
                         // This is our entry point. Start parsing the children of this node.
                         nodes::parse_nodes(self, &mut reader, data, proxy).await?;
                         found_root_template = true;
-                        break; // Document content is generated, we can stop.
+                        // Continue scanning in case of other templates, even though we only use one.
                     }
                 }
-                XmlEvent::Eof => break, // Reached end of file without finding the root template.
-                _ => (),             // Ignore all other events (other tags, text, comments etc.)
+                XmlEvent::Eof => break, // Reached end of file.
+                _ => (),             // Ignore all other events at this top level.
             }
             buf.clear();
         }
@@ -89,7 +88,6 @@ impl<'a> TemplateProcessor<'a> for XsltTemplateParser<'a> {
         }
 
         proxy.process_event(IDFEvent::EndDocument).await?;
-
         log::info!("XSLT template processing finished.");
         Ok(())
     }

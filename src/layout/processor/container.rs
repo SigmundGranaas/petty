@@ -1,4 +1,5 @@
-use super::{LayoutContext, StreamingLayoutProcessor};
+// src/layout/processor/container.rs
+use super::{LayoutContext, LayoutType, StreamingLayoutProcessor};
 use crate::error::PipelineError;
 use crate::render::DocumentRenderer;
 use std::borrow::Cow;
@@ -40,11 +41,15 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
 
         self.current_y += new_style.padding.top;
 
-        self.context_stack.push(LayoutContext {
+        let new_context = LayoutContext {
+            layout_type: LayoutType::Block,
             style: new_style,
             available_width: new_available_width,
             content_x: new_content_x,
-        });
+            current_flex_x: new_content_x,
+            current_flex_line_height: 0.0,
+        };
+        self.context_stack.push(new_context);
         Ok(())
     }
 

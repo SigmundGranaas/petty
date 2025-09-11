@@ -1,9 +1,17 @@
+// src/idf/mod.rs
 use crate::stylesheet::TableColumn;
 use serde_json::Value;
 use std::borrow::Cow;
 use std::sync::Arc;
 
 pub type SharedData = Arc<Vec<u8>>;
+
+// Add this new enum for flexbox
+#[derive(Debug, Clone)]
+pub enum FlexDirection {
+    Row,
+    Column,
+}
 
 #[derive(Debug, Clone)]
 pub enum IDFEvent<'a> {
@@ -44,13 +52,47 @@ pub enum IDFEvent<'a> {
     StartRow {
         context: &'a Value,
     },
-    AddCell {
+    StartCell {
         column_index: usize,
-        content: Cow<'a, str>,
         style_override: Option<String>,
     },
+    EndCell, // NEW: End of a cell
     EndRow,
     EndTable,
 
     ForcePageBreak,
+
+    // --- NEW: Inline-Level Content ---
+    StartInline {
+        style: Option<Cow<'a, str>>,
+    },
+    EndInline,
+    AddLineBreak,
+
+    // --- NEW: Interactive Elements ---
+    AddHyperlink {
+        href: Cow<'a, str>,
+        style: Option<Cow<'a, str>>,
+    },
+    EndHyperlink,
+
+    // --- NEW: Advanced Layout ---
+    StartFlexContainer {
+        style: Option<Cow<'a, str>>,
+        direction: FlexDirection,
+    },
+    EndFlexContainer,
+
+    // --- NEW: Structural Elements (Lists) ---
+    StartList {
+        style: Option<Cow<'a, str>>,
+    },
+    EndList,
+    StartListItem,
+    EndListItem,
+    // ListItem is broken into two parts for layout flexibility
+    AddListItemLabel {
+        content: Cow<'a, str>,
+    },
+    AddListItemBody, // Signals start of body content
 }

@@ -1,7 +1,7 @@
 // src/layout/processor/primitives.rs
-use super::StreamingLayoutProcessor;
+use super::{LayoutType, StreamingLayoutProcessor};
 use crate::error::PipelineError;
-use crate::idf::SharedData;
+use crate::idf::{FlexDirection, SharedData};
 use crate::layout::elements::{
     ImageElement, LayoutElement, PositionedElement, RectElement, TextElement,
 };
@@ -53,79 +53,123 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
         content: &Cow<'a, str>,
         style_name: Option<Cow<'a, str>>,
     ) -> Result<(), PipelineError> {
-        let (parent_style, parent_available_width, parent_content_x) =
-            if let Some(parent_context) = self.context_stack.last() {
-                (
-                    parent_context.style.clone(),
-                    parent_context.available_width,
-                    parent_context.content_x,
-                )
-            } else {
-                return Err(PipelineError::TemplateParseError(
-                    "Attempted to add text outside of a page sequence. Ensure content is inside a <page-sequence> tag.".to_string(),
-                ));
-            };
+        let (parent_style, layout_type) = if let Some(parent_context) = self.context_stack.last() {
+            (
+                parent_context.style.clone(),
+                parent_context.layout_type.clone(),
+            )
+        } else {
+            return Err(PipelineError::TemplateParseError(
+                "Attempted to add text outside of a page sequence.".to_string(),
+            ));
+        };
 
+        // Compute the style, applying any inline overrides
+        let base_style =
+            self.layout_engine
+                .compute_style_from_parent(style_name.as_deref(), &parent_style);
         let style = self
-            .layout_engine
-            .compute_style_from_parent(style_name.as_deref(), &parent_style);
+            .inline_style_stack
+            .last()
+            .cloned()
+            .unwrap_or(base_style);
 
-        let content_width = parent_available_width
-            - style.margin.left
-            - style.margin.right
-            - style.padding.left
-            - style.padding.right;
+        match layout_type {
+            LayoutType::Block | LayoutType::Flex(FlexDirection::Column) | LayoutType::ListItemBody => {
+                let (content_x, available_width) = {
+                    let ctx = self.context_stack.last().unwrap();
+                    (ctx.content_x, ctx.available_width)
+                };
 
-        let lines = self
-            .layout_engine
-            .wrap_text(content.as_ref(), &style, content_width);
-        let mut line_cursor = 0;
+                // --- VERTICAL FLOW LOGIC ---
+                let content_width = available_width
+                    - style.margin.left
+                    - style.margin.right
+                    - style.padding.left
+                    - style.padding.right;
+                let lines = self
+                    .layout_engine
+                    .wrap_text(content.as_ref(), &style, content_width);
+                let mut line_cursor = 0;
 
-        while line_cursor < lines.len() {
-            let required_space_for_first_line = style.margin.top
-                + style.padding.top
-                + style.line_height
-                + style.padding.bottom
-                + style.margin.bottom;
-            if self.needs_page_break(required_space_for_first_line) {
-                self.start_new_page()?;
+                while line_cursor < lines.len() {
+                    let required_space_for_first_line = style.margin.top
+                        + style.padding.top
+                        + style.line_height
+                        + style.padding.bottom
+                        + style.margin.bottom;
+                    if self.needs_page_break(required_space_for_first_line) {
+                        self.start_new_page()?;
+                    }
+                    let y_after_margin = self.current_y + style.margin.top;
+                    let available_space = self.page_height
+                        - y_after_margin
+                        - self.page_layout.margins.bottom
+                        - self.page_layout.footer_height;
+                    let space_for_lines = available_space - style.padding.top - style.padding.bottom;
+                    let lines_that_fit = (space_for_lines / style.line_height).floor() as usize;
+                    let num_lines_to_draw =
+                        std::cmp::min(lines.len() - line_cursor, lines_that_fit.max(1));
+                    if num_lines_to_draw == 0 && line_cursor < lines.len() {
+                        self.start_new_page()?;
+                        continue;
+                    }
+
+                    let chunk_of_lines = &lines[line_cursor..line_cursor + num_lines_to_draw];
+                    let text_block_height = chunk_of_lines.len() as f32 * style.line_height;
+                    let total_height = text_block_height + style.padding.top + style.padding.bottom;
+                    let positioned = PositionedElement {
+                        x: content_x + style.margin.left,
+                        y: y_after_margin,
+                        width: content_width + style.padding.left + style.padding.right,
+                        height: total_height,
+                        element: LayoutElement::Text(TextElement {
+                            style_name: style_name.as_deref().map(String::from),
+                            content: chunk_of_lines.join("\n"),
+                        }),
+                        style: style.clone(),
+                    };
+                    self.renderer.render_element(&positioned, &self.layout_engine)?;
+                    self.current_y = y_after_margin + total_height + style.margin.bottom;
+                    line_cursor += num_lines_to_draw;
+                }
             }
+            LayoutType::Flex(FlexDirection::Row) => {
+                // --- HORIZONTAL FLOW LOGIC (SIMPLIFIED) ---
+                let text_width = self.layout_engine.measure_text_width(content.as_ref(), &style);
+                let total_width = style.margin.left
+                    + style.padding.left
+                    + text_width
+                    + style.padding.right
+                    + style.margin.right;
+                let y = self.current_y + style.margin.top;
+                let text_height = style.line_height; // Assume single line for simplicity
+                let total_height = style.margin.top
+                    + style.padding.top
+                    + text_height
+                    + style.padding.bottom
+                    + style.margin.bottom;
 
-            let y_after_margin = self.current_y + style.margin.top;
-            let available_space = self.page_height
-                - y_after_margin
-                - self.page_layout.margins.bottom
-                - self.page_layout.footer_height;
+                let flex_x = self.context_stack.last().unwrap().current_flex_x;
 
-            let space_for_lines = available_space - style.padding.top - style.padding.bottom;
-            let lines_that_fit = (space_for_lines / style.line_height).floor() as usize;
-            let num_lines_to_draw = std::cmp::min(lines.len() - line_cursor, lines_that_fit.max(1));
+                let positioned = PositionedElement {
+                    x: flex_x + style.margin.left,
+                    y,
+                    width: total_width - style.margin.left - style.margin.right,
+                    height: total_height - style.margin.top - style.margin.bottom,
+                    element: LayoutElement::Text(TextElement {
+                        style_name: style_name.as_deref().map(String::from),
+                        content: content.to_string(),
+                    }),
+                    style: style.clone(),
+                };
+                self.renderer.render_element(&positioned, &self.layout_engine)?;
 
-            if num_lines_to_draw == 0 && line_cursor < lines.len() {
-                self.start_new_page()?;
-                continue;
+                let parent_context = self.context_stack.last_mut().unwrap();
+                parent_context.current_flex_x += total_width;
+                parent_context.current_flex_line_height =
+                    parent_context.current_flex_line_height.max(total_height);
             }
-
-            let chunk_of_lines = &lines[line_cursor..line_cursor + num_lines_to_draw];
-            let text_block_height = chunk_of_lines.len() as f32 * style.line_height;
-            let total_height = text_block_height + style.padding.top + style.padding.bottom;
-
-            let positioned = PositionedElement {
-                x: parent_content_x + style.margin.left,
-                y: y_after_margin,
-                width: content_width + style.padding.left + style.padding.right,
-                height: total_height,
-                element: LayoutElement::Text(TextElement {
-                    style_name: style_name.as_deref().map(String::from),
-                    content: chunk_of_lines.join("\n"),
-                }),
-                style: style.clone(),
-            };
-
-            self.renderer
-                .render_element(&positioned, &self.layout_engine)?;
-            self.current_y = y_after_margin + total_height + style.margin.bottom;
-            line_cursor += num_lines_to_draw;
         }
         Ok(())
     }

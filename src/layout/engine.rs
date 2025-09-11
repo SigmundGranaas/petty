@@ -1,3 +1,4 @@
+// src/layout/engine.rs
 use crate::layout::style::ComputedStyle;
 use crate::stylesheet::{
     Color, Dimension, ElementStyle, FontStyle, FontWeight, Margins, PageLayout, PageSize,
@@ -28,6 +29,13 @@ impl LayoutEngine {
         }
     }
 
+    /// Approximates the width of a string of text.
+    /// A real implementation would use a font library to measure text width accurately.
+    pub fn measure_text_width(&self, text: &str, style: &ComputedStyle) -> f32 {
+        let char_width = style.font_size * 0.6; // Approximation
+        text.len() as f32 * char_width
+    }
+
     pub fn wrap_text(&self, text: &str, style: &ComputedStyle, max_width: f32) -> Vec<String> {
         if max_width <= 0.0 {
             return text.lines().map(|s| s.to_string()).collect();
@@ -40,9 +48,6 @@ impl LayoutEngine {
             }
             let words = paragraph.split_whitespace();
             let mut current_line = String::new();
-            // This is a rough approximation. A real implementation would use a font library
-            // to measure text width accurately.
-            let char_width = style.font_size * 0.6;
 
             for word in words {
                 let test_line = if current_line.is_empty() {
@@ -51,7 +56,7 @@ impl LayoutEngine {
                     format!("{} {}", current_line, word)
                 };
 
-                let line_width = test_line.len() as f32 * char_width;
+                let line_width = self.measure_text_width(&test_line, style);
 
                 if line_width > max_width && !current_line.is_empty() {
                     lines.push(current_line);

@@ -1,30 +1,67 @@
 // src/parser/xslt/tags.rs
-// src/parser/xslt/tags.rs
 use super::nodes::parse_nodes;
 use super::util::{
-    capture_events_until_end, get_attr_owned_optional, get_attr_owned_required,
-    parse_table_columns, parse_text_content, OwnedAttributes,
+    get_attr_owned_optional, get_attr_owned_required, parse_table_columns, parse_text_content,
+    OwnedAttributes,
 };
 use super::XsltTemplateParser;
 use crate::error::PipelineError;
 use crate::idf::IDFEvent;
 use crate::parser::processor::LayoutProcessorProxy;
 use crate::xpath;
-use log::debug;
 use quick_xml::events::Event as XmlEvent;
 use quick_xml::name::QName;
 use quick_xml::Reader;
-use quick_xml::Writer;
 use serde_json::Value;
 use std::borrow::Cow;
+use std::io::BufRead;
 
-// --- Control Flow & Data Tag Handlers ---
+/// A utility to capture the inner raw XML of a node.
+/// Assumes the reader is positioned after the Start tag.
+fn capture_inner_xml<B: BufRead>(
+    reader: &mut Reader<B>,
+    tag_name: QName,
+) -> Result<String, PipelineError> {
+    let mut buf = Vec::new();
+    let mut writer_buf = Vec::new();
+    let mut writer = quick_xml::Writer::new(&mut writer_buf);
+    let mut depth = 0;
 
-#[allow(clippy::too_many_arguments)]
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            XmlEvent::Start(e) => {
+                if e.name() == tag_name {
+                    depth += 1;
+                }
+                writer.write_event(XmlEvent::Start(e))?;
+            }
+            XmlEvent::End(e) => {
+                if e.name() == tag_name {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth -= 1;
+                }
+                writer.write_event(XmlEvent::End(e))?;
+            }
+            XmlEvent::Eof => {
+                return Err(PipelineError::TemplateParseError(
+                    "Unclosed tag while capturing inner XML".into(),
+                ))
+            }
+            event => {
+                writer.write_event(event)?;
+            }
+        }
+        buf.clear();
+    }
+    drop(writer);
+    Ok(String::from_utf8(writer_buf)?)
+}
+
 pub(super) async fn handle_xsl_for_each<'a>(
     parser: &mut XsltTemplateParser<'a>,
     attributes: &OwnedAttributes,
-    is_empty: bool,
     reader: &mut Reader<&[u8]>,
     context: &'a Value,
     proxy: &mut LayoutProcessorProxy<'a>,
@@ -33,161 +70,98 @@ pub(super) async fn handle_xsl_for_each<'a>(
     let path = get_attr_owned_required(attributes, b"select", tag_name)?;
     let selected_values = xpath::select(context, &path);
 
-    let inner_events = if !is_empty {
-        capture_events_until_end(reader, QName(tag_name))?
-    } else {
-        Vec::new()
-    };
+    let inner_xml = capture_inner_xml(reader, QName(tag_name))?;
 
-    let mut writer_buf = Vec::new();
-    let mut writer = Writer::new(&mut writer_buf);
-    for event in &inner_events {
-        writer.write_event(event.clone())?;
-    }
-    drop(writer);
-    let inner_xml = String::from_utf8(writer_buf)
-        .map_err(|e| PipelineError::TemplateParseError(e.to_string()))?;
-
-    // CORRECTED: This logic now correctly handles selections that result in a single
-    // object/value as well as selections that result in an array of items.
     let items_to_iterate: Vec<&'a Value> = if let Some(first_val) = selected_values.get(0) {
-        if let Some(arr) = first_val.as_array() {
-            // The selection pointed to an array, so we iterate its members.
-            arr.iter().collect()
-        } else {
-            // The selection pointed to a single item (or something else).
-            // We "iterate" over the entire result set (which may be just one item).
-            selected_values
+        if let Some(arr) = first_val.as_array() { arr.iter().collect() } else { selected_values }
+    } else { Vec::new() };
+
+    if !inner_xml.is_empty() {
+        for item_context in items_to_iterate {
+            // Wrap fragment in a dummy root to ensure the parser terminates correctly.
+            let wrapped_xml = format!("<petty-wrapper>{}</petty-wrapper>", inner_xml);
+            let mut inner_reader = Reader::from_str(&wrapped_xml);
+            inner_reader.config_mut().trim_text(false);
+            let mut buf = Vec::new();
+
+            // Consume the wrapper start tag before parsing its children.
+            inner_reader.read_event_into(&mut buf)?;
+
+            parse_nodes(parser, &mut inner_reader, item_context, proxy).await?;
         }
-    } else {
-        // The selection found nothing.
-        Vec::new()
-    };
-
-    debug!(
-        "  <{:?}> select='{}' found {} items.",
-        String::from_utf8_lossy(tag_name),
-        path,
-        items_to_iterate.len()
-    );
-
-    for (i, item_context) in items_to_iterate.iter().enumerate() {
-        debug!("  Processing item {} in for-each...", i);
-        let mut inner_reader = Reader::from_str(&inner_xml);
-        parse_nodes(parser, &mut inner_reader, item_context, proxy).await?;
     }
     Ok(())
 }
 
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_xsl_if<'a>(
     parser: &mut XsltTemplateParser<'a>,
     attributes: &OwnedAttributes,
-    is_empty: bool,
     reader: &mut Reader<&[u8]>,
     context: &'a Value,
     proxy: &mut LayoutProcessorProxy<'a>,
 ) -> Result<(), PipelineError> {
     let tag_name = b"xsl:if";
     let test = get_attr_owned_required(attributes, b"test", tag_name)?;
-    let condition_met = !xpath::select(context, &test).is_empty();
-    debug!("  <xsl:if test='{}'> -> {}", test, condition_met);
-    if !is_empty {
-        if condition_met {
-            parse_nodes(parser, reader, context, proxy).await?;
-        } else {
-            reader.read_to_end_into(QName(tag_name), &mut Vec::new())?;
-        }
+    let results = xpath::select(context, &test);
+    let condition_met = !results.is_empty() && results.iter().all(|v| !v.is_null());
+
+    if condition_met {
+        parse_nodes(parser, reader, context, proxy).await?;
+    } else {
+        // If condition is not met, we must consume the tag and its children to skip them.
+        reader.read_to_end_into(QName(tag_name), &mut Vec::new())?;
     }
     Ok(())
 }
 
-// --- Page Structure Handlers ---
-
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_page_sequence<'a>(
     parser: &mut XsltTemplateParser<'a>,
     attributes: &OwnedAttributes,
-    is_empty: bool,
     reader: &mut Reader<&[u8]>,
     context: &'a Value,
     proxy: &mut LayoutProcessorProxy<'a>,
 ) -> Result<(), PipelineError> {
-    let tag_name = b"page-sequence";
-    let path = get_attr_owned_required(attributes, b"select", tag_name)?;
+    let path = get_attr_owned_required(attributes, b"select", b"page-sequence")?;
     let selected_values = xpath::select(context, &path);
+    let inner_xml = capture_inner_xml(reader, QName(b"page-sequence"))?;
 
-    let inner_events = if !is_empty {
-        capture_events_until_end(reader, QName(tag_name))?
-    } else {
-        Vec::new()
-    };
-
-    let mut writer_buf = Vec::new();
-    let mut writer = Writer::new(&mut writer_buf);
-    for event in &inner_events {
-        writer.write_event(event.clone())?;
-    }
-    drop(writer);
-    let inner_xml = String::from_utf8(writer_buf)
-        .map_err(|e| PipelineError::TemplateParseError(e.to_string()))?;
-
-    // CORRECTED: This logic now correctly handles selections that result in a single
-    // object/value (like `select="."`) as well as selections that result in an array.
-    let items_to_iterate: Vec<&'a Value> = if path == "/" {
+    let items_to_iterate: Vec<&'a Value> = if path == "." || path == "/" {
         vec![context]
     } else if let Some(first_val) = selected_values.get(0) {
-        if let Some(arr) = first_val.as_array() {
-            // The selection pointed to an array, so we iterate its members.
-            arr.iter().collect()
-        } else {
-            // The selection pointed to a single item (or something else).
-            // We iterate over the entire result set (which may be just one item).
-            selected_values
+        if let Some(arr) = first_val.as_array() { arr.iter().collect() } else { selected_values }
+    } else { Vec::new() };
+
+    if !inner_xml.is_empty() {
+        for item_context in items_to_iterate {
+            proxy.process_event(IDFEvent::BeginPageSequence { context: item_context }).await?;
+
+            // Wrap fragment in a dummy root to ensure the parser terminates correctly.
+            let wrapped_xml = format!("<petty-wrapper>{}</petty-wrapper>", inner_xml);
+            let mut inner_reader = Reader::from_str(&wrapped_xml);
+            inner_reader.config_mut().trim_text(false);
+            let mut buf = Vec::new();
+
+            // Consume the wrapper start tag before parsing its children.
+            inner_reader.read_event_into(&mut buf)?;
+
+            parse_nodes(parser, &mut inner_reader, item_context, proxy).await?;
+            proxy.process_event(IDFEvent::EndPageSequence).await?;
         }
-    } else {
-        // The selection found nothing.
-        Vec::new()
-    };
-
-    debug!(
-        "  <{:?}> select='{}' found {} items.",
-        String::from_utf8_lossy(tag_name),
-        path,
-        items_to_iterate.len()
-    );
-
-    for (i, item_context) in items_to_iterate.iter().enumerate() {
-        debug!("  Processing item {} in page-sequence...", i);
-        proxy
-            .process_event(IDFEvent::BeginPageSequence {
-                context: item_context,
-            })
-            .await?;
-        let mut inner_reader = Reader::from_str(&inner_xml);
-        parse_nodes(parser, &mut inner_reader, item_context, proxy).await?;
-        proxy.process_event(IDFEvent::EndPageSequence).await?;
     }
     Ok(())
 }
 
-// --- Layout Tag Handlers ---
-#[allow(clippy::too_many_arguments)]
 pub(super) async fn handle_container<'a>(
     parser: &mut XsltTemplateParser<'a>,
     attributes: &OwnedAttributes,
-    is_empty: bool,
+    has_children: bool,
     reader: &mut Reader<&[u8]>,
     context: &'a Value,
     proxy: &mut LayoutProcessorProxy<'a>,
 ) -> Result<(), PipelineError> {
     let style = get_attr_owned_optional(attributes, b"style")?;
-    proxy
-        .process_event(IDFEvent::StartBlock {
-            style: style.map(Cow::Owned),
-        })
-        .await?;
-    if !is_empty {
+    proxy.process_event(IDFEvent::StartBlock { style: style.map(Cow::Owned) }).await?;
+    if has_children {
         parse_nodes(parser, reader, context, proxy).await?;
     }
     proxy.process_event(IDFEvent::EndBlock).await?;
@@ -197,201 +171,128 @@ pub(super) async fn handle_container<'a>(
 pub(super) async fn handle_text<'a>(
     parser: &mut XsltTemplateParser<'a>,
     attributes: &OwnedAttributes,
-    is_empty: bool,
+    has_children: bool,
     reader: &mut Reader<&[u8]>,
     context: &'a Value,
     proxy: &mut LayoutProcessorProxy<'a>,
 ) -> Result<(), PipelineError> {
-    let tag_name = b"text";
     let style = get_attr_owned_optional(attributes, b"style")?;
-    let content = if !is_empty {
-        parse_text_content(reader, QName(tag_name), context)?
-    } else {
-        String::new()
-    };
+    let content = if has_children {
+        parse_text_content(reader, QName(b"text"), context)?
+    } else { String::new() };
 
-    let rendered_content = if content.contains("{{") {
-        parser
-            .template_engine
-            .render_template(&content, context)
-            .map_err(|e| PipelineError::TemplateParseError(e.to_string()))?
-    } else {
-        content
-    };
-
-    proxy
-        .process_event(IDFEvent::AddText {
-            content: Cow::Owned(rendered_content),
-            style: style.map(Cow::Owned),
-        })
-        .await?;
+    // The content from `parse_text_content` is final. Do not re-process with Handlebars.
+    proxy.process_event(IDFEvent::AddText { content: Cow::Owned(content), style: style.map(Cow::Owned) }).await?;
     Ok(())
 }
 
-pub(super) async fn handle_rectangle<'a>(
-    attributes: &OwnedAttributes,
-    proxy: &mut LayoutProcessorProxy<'a>,
-) -> Result<(), PipelineError> {
+pub(super) async fn handle_rectangle(attributes: &OwnedAttributes, proxy: &mut LayoutProcessorProxy<'_>) -> Result<(), PipelineError> {
     let style = get_attr_owned_optional(attributes, b"style")?;
-    proxy
-        .process_event(IDFEvent::AddRectangle {
-            style: style.map(Cow::Owned),
-        })
-        .await?;
-    Ok(())
+    proxy.process_event(IDFEvent::AddRectangle { style: style.map(Cow::Owned) }).await
 }
 
-pub(super) async fn handle_image<'a>(
-    parser: &mut XsltTemplateParser<'a>,
-    attributes: &OwnedAttributes,
-    context: &'a Value,
-    proxy: &mut LayoutProcessorProxy<'a>,
-) -> Result<(), PipelineError> {
+pub(super) async fn handle_image<'a>(parser: &mut XsltTemplateParser<'a>, attributes: &OwnedAttributes, context: &'a Value, proxy: &mut LayoutProcessorProxy<'a>) -> Result<(), PipelineError> {
     let src = get_attr_owned_required(attributes, b"src", b"image")?;
     let style = get_attr_owned_optional(attributes, b"style")?;
-
     let rendered_src = if src.contains("{{") {
-        parser
-            .template_engine
-            .render_template(&src, context)
-            .map_err(|e| PipelineError::TemplateParseError(e.to_string()))?
-    } else {
-        src
-    };
+        parser.template_engine.render_template(&src, context).map_err(|e| PipelineError::TemplateParseError(e.to_string()))?
+    } else { src };
+    proxy.process_event(IDFEvent::AddImage { src: Cow::Owned(rendered_src), style: style.map(Cow::Owned), data: None }).await
+}
 
-    proxy
-        .process_event(IDFEvent::AddImage {
-            src: Cow::Owned(rendered_src),
-            style: style.map(Cow::Owned),
-            data: None,
-        })
-        .await?;
+pub(super) async fn handle_link<'a>(parser: &mut XsltTemplateParser<'a>, attributes: &OwnedAttributes, has_children: bool, reader: &mut Reader<&[u8]>, context: &'a Value, proxy: &mut LayoutProcessorProxy<'a>) -> Result<(), PipelineError> {
+    let href = get_attr_owned_required(attributes, b"href", b"link")?;
+    let style = get_attr_owned_optional(attributes, b"style")?;
+    let rendered_href = if href.contains("{{") {
+        parser.template_engine.render_template(&href, context).map_err(|e| PipelineError::TemplateParseError(e.to_string()))?
+    } else { href };
+
+    proxy.process_event(IDFEvent::AddHyperlink { href: Cow::Owned(rendered_href), style: style.map(Cow::Owned) }).await?;
+    if has_children { parse_nodes(parser, reader, context, proxy).await?; }
+    proxy.process_event(IDFEvent::EndHyperlink).await?;
     Ok(())
 }
 
-// --- Table Tag Handlers ---
-#[allow(clippy::too_many_arguments)]
-pub(super) async fn handle_table<'a>(
-    parser: &mut XsltTemplateParser<'a>,
-    attributes: &OwnedAttributes,
-    is_empty: bool,
-    reader: &mut Reader<&[u8]>,
-    context: &'a Value,
-    proxy: &mut LayoutProcessorProxy<'a>,
-) -> Result<(), PipelineError> {
-    if is_empty {
-        return Ok(());
-    }
+pub(super) async fn handle_inline<'a>(parser: &mut XsltTemplateParser<'a>, style_name: &'static str, has_children: bool, reader: &mut Reader<&[u8]>, context: &'a Value, proxy: &mut LayoutProcessorProxy<'a>) -> Result<(), PipelineError> {
+    proxy.process_event(IDFEvent::StartInline { style: Some(Cow::Borrowed(style_name)) }).await?;
+    if has_children { parse_nodes(parser, reader, context, proxy).await?; }
+    proxy.process_event(IDFEvent::EndInline).await?;
+    Ok(())
+}
+
+pub(super) async fn handle_table<'a>(parser: &mut XsltTemplateParser<'a>, attributes: &OwnedAttributes, reader: &mut Reader<&[u8]>, context: &'a Value, proxy: &mut LayoutProcessorProxy<'a>) -> Result<(), PipelineError> {
     let style = get_attr_owned_optional(attributes, b"style")?;
+    let inner_xml = capture_inner_xml(reader, QName(b"table"))?;
+
     let mut columns = Vec::new();
-    let mut has_header = false;
+    let mut columns_reader = Reader::from_str(&inner_xml);
+    columns_reader.config_mut().trim_text(false);
     let mut buf = Vec::new();
 
+    // Pre-scan the inner XML just to find the <columns> definition.
     loop {
-        match reader.read_event_into(&mut buf)? {
-            XmlEvent::Start(child_e) => {
-                let child_name = child_e.name();
-                match child_name.as_ref() {
-                    b"columns" => columns = parse_table_columns(reader, child_name)?,
-                    b"header" => {
-                        has_header = true;
-                        proxy
-                            .process_event(IDFEvent::StartTable {
-                                style: style.clone().map(Cow::Owned),
-                                columns: Cow::Owned(columns.clone()),
-                            })
-                            .await?;
-                        proxy.process_event(IDFEvent::StartHeader).await?;
-                        parse_nodes(parser, reader, context, proxy).await?;
-                        proxy.process_event(IDFEvent::EndHeader).await?;
-                    }
-                    b"tbody" => {
-                        if !has_header {
-                            proxy
-                                .process_event(IDFEvent::StartTable {
-                                    style: style.clone().map(Cow::Owned),
-                                    columns: Cow::Owned(columns.clone()),
-                                })
-                                .await?;
-                        }
-                        parse_nodes(parser, reader, context, proxy).await?;
-                    }
-                    _ => {
-                        // Consume unknown tags within a table
-                        reader.read_to_end_into(child_name, &mut Vec::new())?;
-                    }
-                }
+        match columns_reader.read_event_into(&mut buf) {
+            Ok(XmlEvent::Start(e)) if e.name().as_ref() == b"columns" => {
+                columns = parse_table_columns(&mut columns_reader, e.name())?;
+                break; // Found it, we're done.
             }
-            XmlEvent::End(_) => break, // End of <table>
-            XmlEvent::Eof => {
-                return Err(PipelineError::TemplateParseError(
-                    "Unexpected EOF in table".into(),
-                ))
-            }
-            _ => (),
+            Ok(XmlEvent::Eof) => break, // Reached end without finding <columns>.
+            Err(e) => return Err(e.into()),
+            _ => (), // Ignore other tags during this scan.
         }
         buf.clear();
     }
+
+    proxy.process_event(IDFEvent::StartTable { style: style.map(Cow::Owned), columns: Cow::Owned(columns) }).await?;
+
+    // Now, parse the actual content of the table. We must wrap it for parse_nodes to work correctly.
+    let wrapped_content = format!("<petty-wrapper>{}</petty-wrapper>", inner_xml);
+    let mut content_reader = Reader::from_str(&wrapped_content);
+    content_reader.config_mut().trim_text(false);
+    let mut content_buf = Vec::new();
+
+    // Consume the wrapper's start tag before passing the reader to parse_nodes
+    content_reader.read_event_into(&mut content_buf)?;
+    parse_nodes(parser, &mut content_reader, context, proxy).await?;
+
     proxy.process_event(IDFEvent::EndTable).await?;
     Ok(())
 }
 
-pub(super) async fn handle_row<'a>(
-    parser: &mut XsltTemplateParser<'a>,
-    is_empty: bool,
-    reader: &mut Reader<&[u8]>,
-    context: &'a Value,
-    proxy: &mut LayoutProcessorProxy<'a>,
-) -> Result<(), PipelineError> {
+pub(super) async fn handle_row<'a>(parser: &mut XsltTemplateParser<'a>, has_children: bool, reader: &mut Reader<&[u8]>, context: &'a Value, proxy: &mut LayoutProcessorProxy<'a>) -> Result<(), PipelineError> {
     proxy.process_event(IDFEvent::StartRow { context }).await?;
     parser.row_column_index_stack.push(0);
-    if !is_empty {
-        parse_nodes(parser, reader, context, proxy).await?;
-    }
+    if has_children { parse_nodes(parser, reader, context, proxy).await?; }
     parser.row_column_index_stack.pop();
     proxy.process_event(IDFEvent::EndRow).await?;
     Ok(())
 }
 
 pub(super) async fn handle_cell<'a>(
-    parser: &mut XsltTemplateParser<'a>,
+    _parser: &mut XsltTemplateParser<'a>, // Renamed to _parser to avoid unused variable warning
     attributes: &OwnedAttributes,
-    is_empty: bool,
+    has_children: bool,
     reader: &mut Reader<&[u8]>,
     context: &'a Value,
     proxy: &mut LayoutProcessorProxy<'a>,
 ) -> Result<(), PipelineError> {
-    let tag_name = b"cell";
     let style_override = get_attr_owned_optional(attributes, b"style")?;
-    let col_index = *parser
-        .row_column_index_stack
-        .last()
-        .ok_or_else(|| PipelineError::TemplateParseError("<cell> outside <row>".into()))?;
-    let content = if !is_empty {
-        parse_text_content(reader, QName(tag_name), context)?
-    } else {
-        String::new()
-    };
+    let col_index = *_parser.row_column_index_stack.last().ok_or_else(|| PipelineError::TemplateParseError("<cell> outside <row>".into()))?;
 
-    let rendered_content = if content.contains("{{") {
-        parser
-            .template_engine
-            .render_template(&content, context)
-            .map_err(|e| PipelineError::TemplateParseError(e.to_string()))?
-    } else {
-        content
-    };
+    proxy.process_event(IDFEvent::StartCell {
+        column_index: col_index,
+        style_override,
+    }).await?;
 
-    debug!("Adding cell at index {}: '{}'", col_index, rendered_content);
-    proxy
-        .process_event(IDFEvent::AddCell {
-            column_index: col_index,
-            content: Cow::Owned(rendered_content),
-            style_override,
-        })
-        .await?;
-    if let Some(idx) = parser.row_column_index_stack.last_mut() {
-        *idx += 1;
+    // Recursively parse the complex content inside the cell instead of treating it as plain text.
+    // This allows tags like <container>, <text>, etc. to function correctly.
+    if has_children {
+        parse_nodes(_parser, reader, context, proxy).await?; // Use _parser here
     }
+
+    proxy.process_event(IDFEvent::EndCell).await?;
+
+    // Increment the column index for the next cell in the row.
+    if let Some(idx) = _parser.row_column_index_stack.last_mut() { *idx += 1; }
     Ok(())
 }

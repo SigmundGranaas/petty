@@ -1,3 +1,4 @@
+// src/render/mod.rs
 use crate::error::RenderError;
 use crate::layout::LayoutEngine;
 use crate::layout::PositionedElement;
@@ -21,6 +22,11 @@ pub trait DocumentRenderer<'a> {
         element: &PositionedElement,
         layout_engine: &LayoutEngine,
     ) -> Result<(), RenderError>;
+
+    // --- NEW: Hyperlink Handling ---
+    fn start_hyperlink(&mut self, href: &str);
+    fn end_hyperlink(&mut self);
+
     fn finalize<W: io::Write>(
         self,
         writer: W,

@@ -1,8 +1,17 @@
+// examples/cv.rs
 use petty::{PipelineBuilder, PipelineError};
 use serde_json::from_str;
+use std::env;
 use std::fs;
 
 fn main() -> Result<(), PipelineError> {
+    // Initialize logging to see the parser's trace.
+    // Run with `RUST_LOG=debug` for more detail.
+    if env::var("RUST_LOG").is_err() {
+        env::set_var("RUST_LOG", "petty=info");
+    }
+    env_logger::init();
+
     println!("Running CV/Resume Example (XSLT)...");
 
     // 1. Define the path to the self-contained XSLT template.

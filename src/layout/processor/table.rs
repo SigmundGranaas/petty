@@ -1,11 +1,12 @@
 // src/layout/processor/table.rs
-use super::{CurrentTable, StreamingLayoutProcessor};
+use super::{CurrentTable, LayoutContext, LayoutType, StreamingLayoutProcessor};
 use crate::error::PipelineError;
 use crate::idf::IDFEvent;
 use crate::layout::elements::{LayoutElement, PositionedElement, RectElement, TextElement};
 use crate::render::DocumentRenderer;
 use crate::stylesheet::{Dimension, TableColumn};
 use std::borrow::Cow;
+use crate::layout::ImageElement;
 
 impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
     pub(super) fn handle_start_table(
@@ -106,31 +107,67 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
         row_events: &[IDFEvent<'a>],
     ) -> Result<f32, PipelineError> {
         let table = self.current_table.as_ref().unwrap();
-        let mut max_height = 0.0f32;
+        let mut max_cell_height_in_row = 0.0f32;
 
-        for event in row_events {
-            if let IDFEvent::AddCell {
-                column_index,
-                content,
-                style_override,
-            } = event
-            {
-                let style = self.layout_engine.compute_style_from_parent(
-                    style_override.as_deref(),
-                    &table.style,
-                );
-                let col_width = table.column_widths[*column_index];
-                let content_width = col_width - style.padding.left - style.padding.right;
-                let lines = self
-                    .layout_engine
-                    .wrap_text(content.as_ref(), &style, content_width);
-                let cell_height = (lines.len() as f32 * style.line_height)
-                    + style.padding.top
-                    + style.padding.bottom;
-                max_height = max_height.max(cell_height);
+        let mut current_cell_column_index: usize = 0;
+        let mut current_cell_style_override: Option<String> = None;
+        let mut cell_content_events_start_index = 0;
+
+        for (i, event) in row_events.iter().enumerate() {
+            match event {
+                IDFEvent::StartCell {
+                    column_index,
+                    style_override,
+                } => {
+                    current_cell_column_index = *column_index;
+                    current_cell_style_override = style_override.clone();
+                    cell_content_events_start_index = i + 1;
+                }
+                IDFEvent::EndCell => {
+                    let cell_content_events = &row_events[cell_content_events_start_index..i];
+                    let mut current_cell_content_height = 0.0f32;
+
+                    let col_width = table.column_widths[current_cell_column_index];
+                    let cell_style = self.layout_engine.compute_style_from_parent(
+                        current_cell_style_override.as_deref(),
+                        &table.style,
+                    );
+                    let cell_content_width = col_width
+                        - cell_style.padding.left
+                        - cell_style.padding.right;
+
+                    let mut current_y_in_cell = cell_style.padding.top; // Relative Y within the cell
+
+                    for content_event in cell_content_events {
+                        if let IDFEvent::AddText {
+                            content,
+                            style: text_style_name,
+                        } = content_event
+                        {
+                            let text_style = self.layout_engine.compute_style_from_parent(
+                                text_style_name.as_deref(),
+                                &cell_style, // Parent style for text is the cell's container style
+                            );
+                            let lines = self.layout_engine.wrap_text(
+                                content.as_ref(),
+                                &text_style,
+                                cell_content_width,
+                            );
+                            let text_block_height =
+                                (lines.len() as f32 * text_style.line_height); // Don't add padding/margin here, it's handled by cell style
+                            current_y_in_cell += text_block_height; // Advance Y for this text block
+                            current_y_in_cell += text_style.margin.bottom; // Text element's bottom margin
+                        }
+                        // Handle other elements (e.g., images) that might contribute to cell height
+                    }
+                    current_cell_content_height = current_y_in_cell + cell_style.padding.bottom;
+                    max_cell_height_in_row =
+                        max_cell_height_in_row.max(current_cell_content_height);
+                }
+                _ => {}
             }
         }
-        Ok(max_height)
+        Ok(max_cell_height_in_row)
     }
 
     fn render_row(
@@ -142,49 +179,144 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
         let parent_context = self.context_stack.last().unwrap();
         let table_start_x = parent_context.content_x;
 
-        for event in row_events {
-            if let IDFEvent::AddCell {
-                column_index,
-                content,
-                style_override,
-            } = event
-            {
-                // Calculate position for this cell explicitly instead of accumulating.
-                // This is more robust.
-                let col_offset: f32 = table.column_widths.iter().take(*column_index).sum();
-                let cell_x = table_start_x + col_offset;
-                let col_width = table.column_widths[*column_index];
+        let mut current_cell_x_offset: f32 = 0.0;
+        let mut current_cell_column_index: usize = 0;
+        let mut current_cell_style_override: Option<String> = None;
+        let mut cell_content_events_start_index = 0;
 
-                let style = self.layout_engine.compute_style_from_parent(
-                    style_override.as_deref(),
-                    &table.style,
-                );
+        for (i, event) in row_events.iter().enumerate() {
+            match event {
+                IDFEvent::StartCell {
+                    column_index,
+                    style_override,
+                } => {
+                    current_cell_column_index = *column_index;
+                    current_cell_style_override = style_override.clone();
+                    cell_content_events_start_index = i + 1; // Content starts after this event
 
-                let cell_bg = PositionedElement {
-                    x: cell_x,
-                    y: self.current_y,
-                    width: col_width,
-                    height: row_height,
-                    element: LayoutElement::Rectangle(RectElement {
-                        style_name: style_override.clone(),
-                    }),
-                    style: style.clone(),
-                };
-                self.renderer.render_element(&cell_bg, &self.layout_engine)?;
+                    // Calculate X for the current cell
+                    current_cell_x_offset = table
+                        .column_widths
+                        .iter()
+                        .take(current_cell_column_index)
+                        .sum();
+                    let cell_x = table_start_x + current_cell_x_offset;
+                    let col_width = table.column_widths[current_cell_column_index];
 
-                let cell_text = PositionedElement {
-                    x: cell_x,
-                    y: self.current_y,
-                    width: col_width,
-                    height: row_height,
-                    element: LayoutElement::Text(TextElement {
-                        style_name: style_override.clone(),
-                        content: content.to_string(),
-                    }),
-                    style,
-                };
-                self.renderer
-                    .render_element(&cell_text, &self.layout_engine)?;
+                    // Compute style for the cell itself (container style)
+                    let cell_style = self.layout_engine.compute_style_from_parent(
+                        current_cell_style_override.as_deref(),
+                        &table.style,
+                    );
+
+                    // Render cell background and border
+                    let cell_bg_element = PositionedElement {
+                        x: cell_x,
+                        y: self.current_y,
+                        width: col_width,
+                        height: row_height,
+                        element: LayoutElement::Rectangle(RectElement {
+                            style_name: current_cell_style_override.clone(),
+                        }),
+                        style: cell_style.clone(),
+                    };
+                    self.renderer
+                        .render_element(&cell_bg_element, &self.layout_engine)?;
+                }
+                IDFEvent::EndCell => {
+                    let cell_content_events = &row_events[cell_content_events_start_index..i];
+                    let cell_x = table_start_x + current_cell_x_offset;
+                    let col_width = table.column_widths[current_cell_column_index];
+
+                    let cell_style = self.layout_engine.compute_style_from_parent(
+                        current_cell_style_override.as_deref(),
+                        &table.style,
+                    );
+                    let cell_content_width = col_width
+                        - cell_style.padding.left
+                        - cell_style.padding.right;
+
+                    let mut current_y_in_cell = self.current_y + cell_style.padding.top;
+                    let current_x_in_cell = cell_x + cell_style.padding.left;
+
+                    // Render content events within the current cell
+                    // Temporarily push a context for the cell content rendering
+                    self.context_stack.push(LayoutContext {
+                        layout_type: LayoutType::Block, // Cells are block containers for their content
+                        style: cell_style.clone(), // Use cell's style as parent
+                        available_width: cell_content_width,
+                        content_x: current_x_in_cell,
+                        current_flex_x: current_x_in_cell,
+                        current_flex_line_height: 0.0,
+                    });
+
+                    // Iterate through the content events within the cell and render them
+                    for content_event in cell_content_events {
+                        match content_event {
+                            IDFEvent::AddText { content, style: text_style_name } => {
+                                let text_style = self.layout_engine.compute_style_from_parent(
+                                    text_style_name.as_deref(),
+                                    self.context_stack.last().map(|c| &c.style).unwrap_or(&self.layout_engine.compute_style_from_default(None)),
+                                );
+
+                                // Text wrapping and height calculation for rendering
+                                let lines = self.layout_engine.wrap_text(content.as_ref(), &text_style, cell_content_width);
+                                let text_block_height = (lines.len() as f32 * text_style.line_height);
+
+                                let positioned_text = PositionedElement {
+                                    x: current_x_in_cell + text_style.margin.left,
+                                    y: current_y_in_cell + text_style.margin.top,
+                                    width: cell_content_width,
+                                    height: text_block_height, // This will be adjusted by render_text if necessary
+                                    element: LayoutElement::Text(TextElement {
+                                        style_name: text_style_name.as_deref().map(String::from),
+                                        content: content.to_string(),
+                                    }),
+                                    style: text_style,
+                                };
+                                self.renderer.render_element(&positioned_text, &self.layout_engine)?;
+                                current_y_in_cell += text_block_height + positioned_text.style.margin.bottom;
+                            }
+                            IDFEvent::AddImage { src, style, data } => {
+                                // For simplicity, image rendering within a cell will not respect current_y_in_cell
+                                // for its own height adjustments unless carefully managed.
+                                // We'll delegate to the image handler and then manually adjust current_y_in_cell.
+                                // This is a simplified implementation. A full implementation would involve
+                                // pushing a new LayoutContext and using self.handle_add_image, then pop.
+                                let compute_style = &self.layout_engine.compute_style_from_default(None);
+                                let temp_parent_style = self.context_stack.last().map(|c| &c.style).unwrap_or(compute_style);
+                                let img_style = self.layout_engine.compute_style_from_parent(style.as_deref(), temp_parent_style);
+
+                                if let Some(raw_data) = data {
+                                    if let Ok(image) = image::load_from_memory(raw_data) {
+                                        let (img_w, img_h) = (image.width(), image.height());
+                                        let (width, height) = match (img_style.width, img_style.height) {
+                                            (Some(w), Some(h)) => (w, h),
+                                            (Some(w), None) => { let aspect_ratio = img_h as f32 / img_w as f32; (w, w * aspect_ratio) },
+                                            (None, Some(h)) => { let aspect_ratio = img_w as f32 / img_h as f32; (h * aspect_ratio, h) },
+                                            (None, None) => (img_w as f32, img_h as f32), // use intrinsic size
+                                        };
+
+                                        let positioned_image = PositionedElement {
+                                            x: current_x_in_cell + img_style.margin.left,
+                                            y: current_y_in_cell + img_style.margin.top,
+                                            width,
+                                            height,
+                                            element: LayoutElement::Image(ImageElement { src: src.to_string(), image_data: raw_data.clone() }),
+                                            style: img_style.clone(),
+                                        };
+                                        self.renderer.render_element(&positioned_image, &self.layout_engine)?;
+                                        current_y_in_cell += height + img_style.margin.bottom + img_style.margin.top;
+                                    }
+                                }
+                            }
+                            // Add other content types here
+                            _ => {}
+                        }
+                    }
+                    self.context_stack.pop(); // Pop the temporary cell content context
+                }
+                _ => {}
             }
         }
         self.current_y += row_height;

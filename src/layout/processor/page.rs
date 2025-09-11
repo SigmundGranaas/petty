@@ -1,4 +1,5 @@
-use super::{LayoutContext, StreamingLayoutProcessor};
+// src/layout/processor/page.rs
+use super::{LayoutContext, LayoutType, StreamingLayoutProcessor};
 use crate::error::PipelineError;
 use crate::render::DocumentRenderer;
 use serde_json::Value;
@@ -18,11 +19,15 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
             page_dims.0 - self.page_layout.margins.left - self.page_layout.margins.right;
         self.current_y = self.page_layout.margins.top;
         self.context_stack.clear();
-        self.context_stack.push(LayoutContext {
+        let root_context = LayoutContext {
+            layout_type: LayoutType::Block,
             style: self.layout_engine.compute_style_from_default(None),
             available_width,
             content_x: self.page_layout.margins.left,
-        });
+            current_flex_x: self.page_layout.margins.left,
+            current_flex_line_height: 0.0,
+        };
+        self.context_stack.push(root_context);
         Ok(())
     }
 
