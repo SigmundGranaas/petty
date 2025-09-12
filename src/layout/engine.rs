@@ -87,17 +87,18 @@ impl LayoutEngine {
                 b: 0,
                 a: 1.0,
             },
+            // REMOVED: Excessive default margins and padding that caused extra whitespace.
             margin: Margins {
                 top: 0.0,
                 right: 0.0,
-                bottom: 10.0,
+                bottom: 0.0,
                 left: 0.0,
             },
             padding: Margins {
-                top: 2.0,
-                right: 2.0,
-                bottom: 2.0,
-                left: 2.0,
+                top: 0.0,
+                right: 0.0,
+                bottom: 0.0,
+                left: 0.0,
             },
             width: None,
             height: None,

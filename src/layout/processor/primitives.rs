@@ -6,6 +6,7 @@ use crate::layout::elements::{
     ImageElement, LayoutElement, PositionedElement, RectElement, TextElement,
 };
 use crate::render::DocumentRenderer;
+use crate::stylesheet::TextAlign;
 use std::borrow::Cow;
 
 impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
@@ -13,14 +14,17 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
         &mut self,
         style_name: Option<Cow<'a, str>>,
     ) -> Result<(), PipelineError> {
-        let (parent_style, parent_available_width, parent_content_x) = {
-            let parent_context = self.context_stack.last().unwrap();
-            (
-                parent_context.style.clone(),
-                parent_context.available_width,
-                parent_context.content_x,
-            )
-        };
+        let parent_context = self
+            .context_stack
+            .last()
+            .expect("Page context should be guaranteed by process_event");
+
+        let (parent_style, parent_available_width, parent_content_x) = (
+            parent_context.style.clone(),
+            parent_context.available_width,
+            parent_context.content_x,
+        );
+
         let style = self
             .layout_engine
             .compute_style_from_parent(style_name.as_deref(), &parent_style);
@@ -53,16 +57,15 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
         content: &Cow<'a, str>,
         style_name: Option<Cow<'a, str>>,
     ) -> Result<(), PipelineError> {
-        let (parent_style, layout_type) = if let Some(parent_context) = self.context_stack.last() {
-            (
-                parent_context.style.clone(),
-                parent_context.layout_type.clone(),
-            )
-        } else {
-            return Err(PipelineError::TemplateParseError(
-                "Attempted to add text outside of a page sequence.".to_string(),
-            ));
-        };
+        let parent_context = self
+            .context_stack
+            .last()
+            .expect("Page context should be guaranteed by process_event");
+
+        let (parent_style, layout_type) = (
+            parent_context.style.clone(),
+            parent_context.layout_type.clone(),
+        );
 
         // Compute the style, applying any inline overrides
         let base_style =
@@ -135,40 +138,42 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
                 }
             }
             LayoutType::Flex(FlexDirection::Row) => {
-                // --- HORIZONTAL FLOW LOGIC (SIMPLIFIED) ---
-                let text_width = self.layout_engine.measure_text_width(content.as_ref(), &style);
-                let total_width = style.margin.left
-                    + style.padding.left
-                    + text_width
-                    + style.padding.right
-                    + style.margin.right;
-                let y = self.current_y + style.margin.top;
-                let text_height = style.line_height; // Assume single line for simplicity
-                let total_height = style.margin.top
-                    + style.padding.top
-                    + text_height
-                    + style.padding.bottom
-                    + style.margin.bottom;
+                // --- HORIZONTAL FLOW LOGIC (WITH ALIGNMENT) ---
+                let parent_context = self.context_stack.last_mut().unwrap();
+                let effective_flex_x = parent_context.current_flex_x;
 
-                let flex_x = self.context_stack.last().unwrap().current_flex_x;
+                let available_width_for_item = parent_context.available_width - (effective_flex_x - parent_context.content_x);
+                let content_width = available_width_for_item - style.margin.left - style.margin.right - style.padding.left - style.padding.right;
+
+                let lines = self.layout_engine.wrap_text(content.as_ref(), &style, content_width.max(0.0));
+                let text_block_width = lines.iter().map(|l| self.layout_engine.measure_text_width(l, &style)).fold(0.0, f32::max);
+                let text_block_height = lines.len() as f32 * style.line_height;
+
+                let total_width = style.margin.left + style.padding.left + text_block_width + style.padding.right + style.margin.right;
+                let total_height = style.margin.top + style.padding.top + text_block_height + style.padding.bottom + style.margin.bottom;
+
+                let mut x = effective_flex_x + style.margin.left;
+                if style.text_align == TextAlign::Right {
+                    x = (parent_context.content_x + parent_context.available_width) - (total_width - style.margin.left);
+                }
 
                 let positioned = PositionedElement {
-                    x: flex_x + style.margin.left,
-                    y,
+                    x,
+                    y: self.current_y + style.margin.top,
                     width: total_width - style.margin.left - style.margin.right,
                     height: total_height - style.margin.top - style.margin.bottom,
                     element: LayoutElement::Text(TextElement {
                         style_name: style_name.as_deref().map(String::from),
-                        content: content.to_string(),
+                        content: lines.join("\n"),
                     }),
                     style: style.clone(),
                 };
                 self.renderer.render_element(&positioned, &self.layout_engine)?;
 
-                let parent_context = self.context_stack.last_mut().unwrap();
-                parent_context.current_flex_x += total_width;
-                parent_context.current_flex_line_height =
-                    parent_context.current_flex_line_height.max(total_height);
+                if style.text_align != TextAlign::Right {
+                    parent_context.current_flex_x += total_width;
+                }
+                parent_context.current_flex_line_height = parent_context.current_flex_line_height.max(total_height);
             }
         }
         Ok(())
@@ -196,14 +201,16 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
         })?;
         let (img_width, img_height) = (image.width(), image.height());
 
-        let (parent_style, _parent_available_width, parent_content_x) = {
-            let parent_context = self.context_stack.last().unwrap();
-            (
-                parent_context.style.clone(),
-                parent_context.available_width,
-                parent_context.content_x,
-            )
-        };
+        let parent_context = self
+            .context_stack
+            .last()
+            .expect("Page context should be guaranteed by process_event");
+
+        let (parent_style, parent_content_x) = (
+            parent_context.style.clone(),
+            parent_context.content_x,
+        );
+
 
         let style = self
             .layout_engine

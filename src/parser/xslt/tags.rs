@@ -1,12 +1,11 @@
 // src/parser/xslt/tags.rs
 use super::nodes::parse_nodes;
 use super::util::{
-    get_attr_owned_optional, get_attr_owned_required, parse_table_columns, parse_text_content,
-    OwnedAttributes,
+    get_attr_owned_optional, get_attr_owned_required, parse_table_columns, OwnedAttributes,
 };
 use super::XsltTemplateParser;
 use crate::error::PipelineError;
-use crate::idf::IDFEvent;
+use crate::idf::{FlexDirection, IDFEvent};
 use crate::parser::processor::LayoutProcessorProxy;
 use crate::xpath;
 use quick_xml::events::Event as XmlEvent;
@@ -114,6 +113,24 @@ pub(super) async fn handle_xsl_if<'a>(
     Ok(())
 }
 
+pub(super) async fn handle_xsl_value_of<'a>(
+    attributes: &OwnedAttributes,
+    context: &'a Value,
+    proxy: &mut LayoutProcessorProxy<'a>,
+) -> Result<(), PipelineError> {
+    let path = get_attr_owned_required(attributes, b"select", b"xsl:value-of")?;
+    let content = xpath::select_as_string(context, &path);
+    if !content.is_empty() {
+        proxy
+            .process_event(IDFEvent::AddText {
+                content: Cow::Owned(content),
+                style: None, // Inherit from parent
+            })
+            .await?;
+    }
+    Ok(())
+}
+
 pub(super) async fn handle_page_sequence<'a>(
     parser: &mut XsltTemplateParser<'a>,
     attributes: &OwnedAttributes,
@@ -168,6 +185,35 @@ pub(super) async fn handle_container<'a>(
     Ok(())
 }
 
+pub(super) async fn handle_flex_container<'a>(
+    parser: &mut XsltTemplateParser<'a>,
+    attributes: &OwnedAttributes,
+    has_children: bool,
+    reader: &mut Reader<&[u8]>,
+    context: &'a Value,
+    proxy: &mut LayoutProcessorProxy<'a>,
+) -> Result<(), PipelineError> {
+    let style = get_attr_owned_optional(attributes, b"style")?;
+    let direction_str = get_attr_owned_required(attributes, b"direction", b"flex-container")?;
+    let direction = match direction_str.as_str() {
+        "row" => crate::idf::FlexDirection::Row,
+        "column" => crate::idf::FlexDirection::Column,
+        _ => return Err(PipelineError::TemplateParseError(format!("Invalid direction for flex-container: {}", direction_str))),
+    };
+
+    proxy.process_event(IDFEvent::StartFlexContainer {
+        style: style.map(Cow::Owned),
+        direction,
+    }).await?;
+
+    if has_children {
+        parse_nodes(parser, reader, context, proxy).await?;
+    }
+
+    proxy.process_event(IDFEvent::EndFlexContainer).await?;
+    Ok(())
+}
+
 pub(super) async fn handle_text<'a>(
     parser: &mut XsltTemplateParser<'a>,
     attributes: &OwnedAttributes,
@@ -177,12 +223,17 @@ pub(super) async fn handle_text<'a>(
     proxy: &mut LayoutProcessorProxy<'a>,
 ) -> Result<(), PipelineError> {
     let style = get_attr_owned_optional(attributes, b"style")?;
-    let content = if has_children {
-        parse_text_content(reader, QName(b"text"), context)?
-    } else { String::new() };
-
-    // The content from `parse_text_content` is final. Do not re-process with Handlebars.
-    proxy.process_event(IDFEvent::AddText { content: Cow::Owned(content), style: style.map(Cow::Owned) }).await?;
+    // A <text> tag now creates a horizontal flexbox context for its mixed content.
+    proxy
+        .process_event(IDFEvent::StartFlexContainer {
+            style: style.map(Cow::Owned),
+            direction: FlexDirection::Row,
+        })
+        .await?;
+    if has_children {
+        parse_nodes(parser, reader, context, proxy).await?;
+    }
+    proxy.process_event(IDFEvent::EndFlexContainer).await?;
     Ok(())
 }
 
@@ -269,7 +320,7 @@ pub(super) async fn handle_row<'a>(parser: &mut XsltTemplateParser<'a>, has_chil
 }
 
 pub(super) async fn handle_cell<'a>(
-    _parser: &mut XsltTemplateParser<'a>, // Renamed to _parser to avoid unused variable warning
+    parser: &mut XsltTemplateParser<'a>,
     attributes: &OwnedAttributes,
     has_children: bool,
     reader: &mut Reader<&[u8]>,
@@ -277,7 +328,7 @@ pub(super) async fn handle_cell<'a>(
     proxy: &mut LayoutProcessorProxy<'a>,
 ) -> Result<(), PipelineError> {
     let style_override = get_attr_owned_optional(attributes, b"style")?;
-    let col_index = *_parser.row_column_index_stack.last().ok_or_else(|| PipelineError::TemplateParseError("<cell> outside <row>".into()))?;
+    let col_index = *parser.row_column_index_stack.last().ok_or_else(|| PipelineError::TemplateParseError("<cell> outside <row>".into()))?;
 
     proxy.process_event(IDFEvent::StartCell {
         column_index: col_index,
@@ -287,12 +338,61 @@ pub(super) async fn handle_cell<'a>(
     // Recursively parse the complex content inside the cell instead of treating it as plain text.
     // This allows tags like <container>, <text>, etc. to function correctly.
     if has_children {
-        parse_nodes(_parser, reader, context, proxy).await?; // Use _parser here
+        parse_nodes(parser, reader, context, proxy).await?;
     }
 
     proxy.process_event(IDFEvent::EndCell).await?;
 
     // Increment the column index for the next cell in the row.
-    if let Some(idx) = _parser.row_column_index_stack.last_mut() { *idx += 1; }
+    if let Some(idx) = parser.row_column_index_stack.last_mut() { *idx += 1; }
+    Ok(())
+}
+
+pub(super) async fn handle_list<'a>(
+    parser: &mut XsltTemplateParser<'a>,
+    attributes: &OwnedAttributes,
+    has_children: bool,
+    reader: &mut Reader<&[u8]>,
+    context: &'a Value,
+    proxy: &mut LayoutProcessorProxy<'a>,
+) -> Result<(), PipelineError> {
+    let style = get_attr_owned_optional(attributes, b"style")?;
+    proxy.process_event(IDFEvent::StartList { style: style.map(Cow::Owned) }).await?;
+    if has_children {
+        parse_nodes(parser, reader, context, proxy).await?;
+    }
+    proxy.process_event(IDFEvent::EndList).await?;
+    Ok(())
+}
+
+pub(super) async fn handle_list_item<'a>(
+    parser: &mut XsltTemplateParser<'a>,
+    attributes: &OwnedAttributes,
+    has_children: bool,
+    reader: &mut Reader<&[u8]>,
+    context: &'a Value,
+    proxy: &mut LayoutProcessorProxy<'a>,
+) -> Result<(), PipelineError> {
+    let style = get_attr_owned_optional(attributes, b"style")?;
+
+    // A list item is a flex container with a bullet and the main content.
+    proxy.process_event(IDFEvent::StartFlexContainer {
+        style: style.map(Cow::Owned),
+        direction: crate::idf::FlexDirection::Row,
+    }).await?;
+
+    // Add the bullet point as a simple text element. The trailing space/tab helps with alignment.
+    proxy.process_event(IDFEvent::AddText {
+        content: Cow::Borrowed("•\t"),
+        style: Some(Cow::Borrowed("list-item-bullet")),
+    }).await?;
+
+    // The body of the list item is parsed directly into the flex container.
+    // If it contains a <text> tag, it will be treated as the second flex item.
+    if has_children {
+        parse_nodes(parser, reader, context, proxy).await?;
+    }
+
+    proxy.process_event(IDFEvent::EndFlexContainer).await?; // End list item row
     Ok(())
 }

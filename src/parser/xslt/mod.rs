@@ -72,7 +72,9 @@ impl<'a> TemplateProcessor<'a> for XsltTemplateParser<'a> {
                         // This is our entry point. Start parsing the children of this node.
                         nodes::parse_nodes(self, &mut reader, data, proxy).await?;
                         found_root_template = true;
-                        // Continue scanning in case of other templates, even though we only use one.
+                        // We have found and processed the single root template.
+                        // There is no need to continue scanning the file.
+                        break;
                     }
                 }
                 XmlEvent::Eof => break, // Reached end of file.

@@ -84,6 +84,17 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
         self.renderer
     }
 
+    /// Ensures that a page context exists, creating one if necessary.
+    /// This makes the layout processor more robust against templates that
+    /// place drawable content outside of a <page-sequence>.
+    pub(super) fn ensure_page_context(&mut self) -> Result<(), PipelineError> {
+        if self.context_stack.is_empty() {
+            log::warn!("Content found outside of a page-sequence. Implicitly starting a new page.");
+            self.start_new_page()?;
+        }
+        Ok(())
+    }
+
     pub fn process_event(&mut self, event: IDFEvent<'a>) -> Result<(), PipelineError> {
         // Handle header collection first
         if self.is_in_header {
@@ -120,6 +131,27 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
             return Ok(()); // Event was collected for later row processing
         }
 
+        // Centralized check to ensure a page context exists for any drawable event.
+        match &event {
+            // List of events that require an active page context to be drawn onto.
+            IDFEvent::StartBlock { .. }
+            | IDFEvent::AddText { .. }
+            | IDFEvent::AddRectangle { .. }
+            | IDFEvent::AddImage { .. }
+            | IDFEvent::ForcePageBreak
+            | IDFEvent::StartTable { .. }
+            | IDFEvent::StartInline { .. }
+            | IDFEvent::AddLineBreak
+            | IDFEvent::AddHyperlink { .. }
+            | IDFEvent::StartFlexContainer { .. }
+            | IDFEvent::StartList { .. } => {
+                self.ensure_page_context()?;
+            }
+            // Events that do not require a page context (e.g., they manage pages or state).
+            _ => {}
+        }
+
+
         // Process events normally if not in a table header or row
         match event {
             IDFEvent::StartDocument => {
@@ -132,7 +164,11 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
                 self.current_page_sequence_context = Some(context);
                 self.start_new_page()?;
             }
-            IDFEvent::EndPageSequence => {}
+            IDFEvent::EndPageSequence => {
+                if !self.context_stack.is_empty() {
+                    self.context_stack.truncate(1);
+                }
+            }
             IDFEvent::StartBlock { style } => self.handle_start_container(style)?,
             IDFEvent::EndBlock => self.handle_end_container()?,
             IDFEvent::AddText { content, style } => self.handle_add_text(&content, style)?,
@@ -160,10 +196,7 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
                 self.current_row_events.clear(); // Clear for a new row
                 self.is_in_row = true; // Set the flag to start collecting row events
             }
-            // IDFEvent::AddCell { .. } => self.current_row_events.push(event), // REMOVED (no longer exists)
             IDFEvent::EndRow => {
-                // This branch should ideally not be hit if `is_in_row` logic is correct,
-                // as `EndRow` would be handled there.
                 unreachable!("EndRow should be handled by `is_in_row` block.");
             }
 
@@ -177,13 +210,12 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
                 self.handle_start_flex_container(style, direction)?
             }
             IDFEvent::EndFlexContainer => self.handle_end_flex_container()?,
-            // List events are placeholders for now
+
+            // --- LIST EVENTS (NOW SIMPLIFIED) ---
+            // A List is just a styled block container.
             IDFEvent::StartList { style } => self.handle_start_container(style)?,
             IDFEvent::EndList => self.handle_end_container()?,
-            IDFEvent::StartListItem => { /* Complex logic TBD */ }
-            IDFEvent::EndListItem => { /* Complex logic TBD */ }
-            IDFEvent::AddListItemLabel { .. } => { /* Complex logic TBD */ }
-            IDFEvent::AddListItemBody => { /* Complex logic TBD */ }
+
             // These events should only be present if `is_in_row` is true, otherwise it's an error in parsing or logic.
             // If they are not handled by the `is_in_row` block, it means they appeared out of context.
             IDFEvent::StartCell { .. } | IDFEvent::EndCell => {
@@ -248,18 +280,16 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
         style: Option<Cow<'a, str>>,
         direction: FlexDirection,
     ) -> Result<(), PipelineError> {
-        let (parent_style, parent_available_width, parent_content_x) =
-            if let Some(parent_context) = self.context_stack.last() {
-                (
-                    parent_context.style.clone(),
-                    parent_context.available_width,
-                    parent_context.content_x,
-                )
-            } else {
-                return Err(PipelineError::TemplateParseError(
-                    "Flex container outside page sequence".to_string(),
-                ));
-            };
+        let parent_context = self
+            .context_stack
+            .last()
+            .expect("Page context should be guaranteed by process_event");
+
+        let (parent_style, parent_available_width, parent_content_x) = (
+            parent_context.style.clone(),
+            parent_context.available_width,
+            parent_context.content_x,
+        );
 
         let new_style = self
             .layout_engine

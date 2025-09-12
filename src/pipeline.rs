@@ -64,7 +64,7 @@ impl DocumentPipeline {
         data: &'a Value,
         writer: W,
     ) -> Result<(), PipelineError> {
-        let (tx, mut rx) = mpsc::channel::<IDFEvent<'a>>(32);
+        let (tx, mut rx) = mpsc::channel::<IDFEvent<'a>>(1024);
 
         // Define the producer as a future. It can borrow from `self` and `data`.
         let producer_fut = async {

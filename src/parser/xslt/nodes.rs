@@ -3,12 +3,14 @@ use super::tags;
 use super::util::OwnedAttributes;
 use super::XsltTemplateParser;
 use crate::error::PipelineError;
+use crate::idf::IDFEvent;
 use crate::parser::processor::LayoutProcessorProxy;
 use log::debug;
 use quick_xml::events::Event as XmlEvent;
 use quick_xml::name::QName;
 use quick_xml::Reader;
 use serde_json::Value;
+use std::borrow::Cow;
 
 /// Recursively parses the children of the current XML node.
 /// This function is called *after* a Start tag has been read, and it will
@@ -57,6 +59,22 @@ pub(super) async fn parse_nodes<'a>(
                 ))
                     .await?;
             }
+            XmlEvent::Text(e) => {
+                let unescaped_text = e.unescape()?;
+                // Only process non-empty text to avoid adding empty layout elements for whitespace.
+                if !unescaped_text.trim().is_empty() {
+                    let rendered_text = parser
+                        .template_engine
+                        .render_template(&unescaped_text, context)
+                        .map_err(|e| PipelineError::TemplateParseError(e.to_string()))?;
+                    proxy
+                        .process_event(IDFEvent::AddText {
+                            content: Cow::Owned(rendered_text),
+                            style: None, // Inherit style from parent
+                        })
+                        .await?;
+                }
+            }
             XmlEvent::End(_) => {
                 if depth == 0 {
                     // We found the matching End tag for the node that this
@@ -100,6 +118,7 @@ async fn handle_tag<'a>(
         // --- Control Flow & Data Tags ---
         b"xsl:for-each" => tags::handle_xsl_for_each(parser, attributes, reader, context, proxy).await?,
         b"xsl:if" => tags::handle_xsl_if(parser, attributes, reader, context, proxy).await?,
+        b"xsl:value-of" => tags::handle_xsl_value_of(attributes, context, proxy).await?,
 
         // --- Page Structure Tags ---
         b"page-sequence" => tags::handle_page_sequence(parser, attributes, reader, context, proxy).await?,
@@ -108,6 +127,7 @@ async fn handle_tag<'a>(
 
         // --- Layout Tags ---
         b"container" => tags::handle_container(parser, attributes, !is_empty, reader, context, proxy).await?,
+        b"flex-container" => tags::handle_flex_container(parser, attributes, !is_empty, reader, context, proxy).await?,
         b"text" => tags::handle_text(parser, attributes, !is_empty, reader, context, proxy).await?,
         b"rectangle" => tags::handle_rectangle(attributes, proxy).await?,
         b"image" => tags::handle_image(parser, attributes, context, proxy).await?,
@@ -123,6 +143,10 @@ async fn handle_tag<'a>(
         b"row" => tags::handle_row(parser, !is_empty, reader, context, proxy).await?,
         b"cell" => tags::handle_cell(parser, attributes, !is_empty, reader, context, proxy).await?,
 
+        // --- List Tags ---
+        b"list" => tags::handle_list(parser, attributes, !is_empty, reader, context, proxy).await?,
+        b"list-item" => tags::handle_list_item(parser, attributes, !is_empty, reader, context, proxy).await?,
+
         // --- Structural & Ignored Tags ---
         b"xsl:stylesheet" | b"xsl:template" | b"document" => { if !is_empty { parse_nodes(parser, reader, context, proxy).await? } }
         b"xsl:attribute-set" | b"fo:layout-master-set" | b"columns" | b"column" => { if !is_empty { reader.read_to_end_into(QName(tag_name), &mut Vec::new())?; } }
@@ -134,7 +158,7 @@ async fn handle_tag<'a>(
     // Tags that are always empty (like <br> or <rectangle>) don't have an end tag
     // to consume, so for them, we return false.
     let consumed_end_tag = match tag_name {
-        b"rectangle" | b"image" | b"page-break" | b"br" => false,
+        b"rectangle" | b"image" | b"page-break" | b"br" | b"xsl:value-of" => false,
         _ => !is_empty,
     };
 

@@ -1,80 +1,10 @@
 use crate::error::PipelineError;
 use crate::stylesheet::{Dimension, TableColumn};
-use crate::xpath;
 use quick_xml::events::{BytesStart, Event as XmlEvent};
 use quick_xml::name::QName;
 use quick_xml::Reader;
-use serde_json::Value;
 
 pub(super) type OwnedAttributes = Vec<(Vec<u8>, Vec<u8>)>;
-
-/// Consumes and stores all XML events until a matching end tag is found.
-pub(super) fn capture_events_until_end<'b>(
-    reader: &mut Reader<&[u8]>,
-    end_tag: QName<'b>,
-) -> Result<Vec<XmlEvent<'b>>, PipelineError> {
-    let mut buffer = Vec::new();
-    let mut depth = 0;
-    let mut buf = Vec::new();
-    loop {
-        let event = reader.read_event_into(&mut buf)?;
-        match &event {
-            XmlEvent::Start(e) if e.name() == end_tag => depth += 1,
-            XmlEvent::End(e) if e.name() == end_tag => {
-                if depth == 0 {
-                    break;
-                }
-                depth -= 1;
-            }
-            XmlEvent::Eof => return Err(PipelineError::TemplateParseError("Unclosed tag".into())),
-            _ => {}
-        }
-        buffer.push(event.into_owned());
-        buf.clear();
-    }
-    Ok(buffer)
-}
-
-/// Parses the text content of a node, including processing any inner `xsl:value-of` tags.
-pub(super) fn parse_text_content(
-    reader: &mut Reader<&[u8]>,
-    end_tag_name: QName<'_>,
-    context: &Value,
-) -> Result<String, PipelineError> {
-    let mut content = String::new();
-    let mut buf = Vec::new();
-    loop {
-        match reader.read_event_into(&mut buf)? {
-            XmlEvent::Text(e) => content.push_str(&e.unescape()?),
-            XmlEvent::Start(e) => {
-                if e.name().as_ref() == b"xsl:value-of" {
-                    content.push_str(&xpath::select_as_string(
-                        context,
-                        &get_attr_required(&e, b"select")?,
-                    ));
-                }
-                reader.read_to_end_into(e.name(), &mut Vec::new())?;
-            }
-            XmlEvent::Empty(e) => {
-                if e.name().as_ref() == b"xsl:value-of" {
-                    content.push_str(&xpath::select_as_string(
-                        context,
-                        &get_attr_required(&e, b"select")?,
-                    ));
-                }
-            }
-            XmlEvent::End(e) if e.name() == end_tag_name => break,
-            XmlEvent::Eof => {
-                return Err(PipelineError::TemplateParseError(
-                    "Unexpected EOF while parsing text".to_string(),
-                ))
-            }
-            _ => (),
-        }
-        buf.clear();
-    }
-    Ok(content)
-}
 
 /// Parses a string like "50%" or "120pt" into a Dimension enum.
 pub(super) fn parse_dimension(s: &str) -> Option<Dimension> {

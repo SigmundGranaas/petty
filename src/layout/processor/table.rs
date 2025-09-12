@@ -14,7 +14,11 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
         style_name: Option<Cow<'a, str>>,
         columns: Cow<'a, [TableColumn]>,
     ) -> Result<(), PipelineError> {
-        let parent_context = self.context_stack.last().unwrap();
+        let parent_context = self
+            .context_stack
+            .last()
+            .expect("Page context should be guaranteed by process_event");
+
         let style = self
             .layout_engine
             .compute_style_from_parent(style_name.as_deref(), &parent_context.style);
@@ -125,7 +129,6 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
                 }
                 IDFEvent::EndCell => {
                     let cell_content_events = &row_events[cell_content_events_start_index..i];
-                    let mut current_cell_content_height = 0.0f32;
 
                     let col_width = table.column_widths[current_cell_column_index];
                     let cell_style = self.layout_engine.compute_style_from_parent(
@@ -153,14 +156,17 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
                                 &text_style,
                                 cell_content_width,
                             );
-                            let text_block_height =
-                                (lines.len() as f32 * text_style.line_height); // Don't add padding/margin here, it's handled by cell style
-                            current_y_in_cell += text_block_height; // Advance Y for this text block
-                            current_y_in_cell += text_style.margin.bottom; // Text element's bottom margin
+                            let text_content_height = lines.len() as f32 * text_style.line_height;
+                            let text_element_height = text_content_height
+                                + text_style.padding.top
+                                + text_style.padding.bottom;
+                            current_y_in_cell += text_style.margin.top
+                                + text_element_height
+                                + text_style.margin.bottom;
                         }
                         // Handle other elements (e.g., images) that might contribute to cell height
                     }
-                    current_cell_content_height = current_y_in_cell + cell_style.padding.bottom;
+                    let current_cell_content_height = current_y_in_cell + cell_style.padding.bottom;
                     max_cell_height_in_row =
                         max_cell_height_in_row.max(current_cell_content_height);
                 }
@@ -261,21 +267,26 @@ impl<'a, R: DocumentRenderer<'a>> StreamingLayoutProcessor<'a, R> {
 
                                 // Text wrapping and height calculation for rendering
                                 let lines = self.layout_engine.wrap_text(content.as_ref(), &text_style, cell_content_width);
-                                let text_block_height = (lines.len() as f32 * text_style.line_height);
+                                let text_content_height = lines.len() as f32 * text_style.line_height;
+                                let text_element_height = text_content_height
+                                    + text_style.padding.top
+                                    + text_style.padding.bottom;
 
                                 let positioned_text = PositionedElement {
                                     x: current_x_in_cell + text_style.margin.left,
                                     y: current_y_in_cell + text_style.margin.top,
                                     width: cell_content_width,
-                                    height: text_block_height, // This will be adjusted by render_text if necessary
+                                    height: text_element_height,
                                     element: LayoutElement::Text(TextElement {
                                         style_name: text_style_name.as_deref().map(String::from),
                                         content: content.to_string(),
                                     }),
-                                    style: text_style,
+                                    style: text_style.clone(),
                                 };
                                 self.renderer.render_element(&positioned_text, &self.layout_engine)?;
-                                current_y_in_cell += text_block_height + positioned_text.style.margin.bottom;
+                                current_y_in_cell += text_style.margin.top
+                                    + text_element_height
+                                    + text_style.margin.bottom;
                             }
                             IDFEvent::AddImage { src, style, data } => {
                                 // For simplicity, image rendering within a cell will not respect current_y_in_cell

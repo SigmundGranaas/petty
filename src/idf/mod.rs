@@ -88,11 +88,5 @@ pub enum IDFEvent<'a> {
         style: Option<Cow<'a, str>>,
     },
     EndList,
-    StartListItem,
-    EndListItem,
-    // ListItem is broken into two parts for layout flexibility
-    AddListItemLabel {
-        content: Cow<'a, str>,
-    },
-    AddListItemBody, // Signals start of body content
+    // ListItem is now handled by the parser, which emits generic container events.
 }
