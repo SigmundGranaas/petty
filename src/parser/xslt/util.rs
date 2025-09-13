@@ -35,19 +35,11 @@ pub(super) fn parse_table_columns(
             XmlEvent::Empty(e) if e.name().as_ref() == b"column" => {
                 let mut col = TableColumn::default();
                 for attr in e.attributes().flatten() {
+                    let value = attr.decode_and_unescape_value(reader.decoder())?;
                     match attr.key.as_ref() {
-                        b"width" => {
-                            col.width =
-                                parse_dimension(&attr.decode_and_unescape_value(reader.decoder())?)
-                        }
-                        b"header-style" => {
-                            col.header_style =
-                                Some(attr.decode_and_unescape_value(reader.decoder())?.into_owned())
-                        }
-                        b"style" => {
-                            col.style =
-                                Some(attr.decode_and_unescape_value(reader.decoder())?.into_owned())
-                        }
+                        b"width" => col.width = parse_dimension(&value),
+                        b"header-style" => col.header_style = Some(value.into_owned()),
+                        b"style" => col.style = Some(value.into_owned()),
                         _ => {}
                     }
                 }

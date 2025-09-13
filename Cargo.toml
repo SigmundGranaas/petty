@@ -10,20 +10,18 @@ printpdf = { version = "0.8.2", features = ["png"] }
 # Data processing
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-ureq = "3.0.11"
 image = { version = "0.25.1", features = ["png", "jpeg", "gif"] }
 
 # Template engines
 handlebars = "6.3.2"
 quick-xml = { version = "0.37.5", features = ["serialize"] }
 
-# Utilities
+# Utilities & Async
 thiserror = "2.0.12"
 rand = "0.9.1"
 log = "0.4"
 env_logger = "0.11"
-tokio = { version = "1.44.2", features = ["macros"] }
-reqwest = { version = "0.12", features = ["json"] }
+tokio = { version = "1.44.2", features = ["macros", "rt", "sync", "rt-multi-thread"] }
 async-trait = "0.1"
 
 [dev-dependencies]
@@ -32,17 +30,6 @@ dhat = { version = "0.3"}
 [features]
 dhat-heap = []
 
-[[example]]
-name = "simple_report"
-path = "examples/simple_report.rs"
-
-[[example]]
-name = "invoice_per_customer"
-path = "examples/invoice_per_customer.rs"
-
-[[example]]
-name = "financial_report"
-path = "examples/financial_report.rs"
 
 [[example]]
 name = "performance_test"

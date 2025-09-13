@@ -1,53 +1,64 @@
 // src/parser/json_processor.rs
-use super::processor::{LayoutProcessorProxy, TemplateProcessor};
+use super::processor::TemplateProcessor;
 use crate::error::PipelineError;
-use crate::idf::IDFEvent;
+use crate::idf::{
+    IRNode, InlineNode, LayoutUnit, TableBody, TableCell, TableColumnDefinition, TableHeader,
+    TableRow,
+};
 use crate::stylesheet::{Stylesheet, TableColumn, Template, TemplateElement};
-use async_trait::async_trait;
 use handlebars::Handlebars;
 use serde_json::Value;
 use std::borrow::Cow;
+use std::vec;
 
-/// Processes templates defined in the main JSON stylesheet.
-pub struct JsonTemplateParser<'a> {
-    stylesheet: &'a Stylesheet,
-    template_engine: &'a Handlebars<'static>,
+/// Processes templates defined in the main JSON stylesheet into `IRNode` trees.
+pub struct JsonTemplateParser {
+    stylesheet: Stylesheet,
+    template_engine: Handlebars<'static>,
 }
 
-impl<'a> JsonTemplateParser<'a> {
-    pub fn new(stylesheet: &'a Stylesheet, template_engine: &'a Handlebars<'static>) -> Self {
+impl JsonTemplateParser {
+    pub fn new(stylesheet: Stylesheet, template_engine: Handlebars<'static>) -> Self {
         JsonTemplateParser {
             stylesheet,
             template_engine,
         }
     }
 
-    /// Recursively parses a list of template elements within a given data context,
-    /// emitting events to the layout processor.
-    async fn parse_children(
-        &mut self,
-        children: &'a [TemplateElement],
-        context: &'a Value,
-        proxy: &mut LayoutProcessorProxy<'a>,
-    ) -> Result<(), PipelineError> {
+    /// Recursively builds a vector of `IRNode`s from a list of template elements
+    /// within a given data context.
+    fn build_children(
+        &self,
+        children: &[TemplateElement],
+        context: &Value,
+    ) -> Result<Vec<IRNode>, PipelineError> {
+        let mut nodes = Vec::new();
         for element in children {
             match element {
                 TemplateElement::Text { content, style } => {
-                    let rendered_content: Cow<'a, str> = if content.contains("{{") {
-                        Cow::Owned(self.template_engine.render_template(content, context)
-                            .map_err(|e| PipelineError::TemplateParseError(format!("Failed to render template '{}': {}", content, e)))?)
+                    let rendered_content = if content.contains("{{") {
+                        self.template_engine
+                            .render_template(content, context)
+                            .map_err(|e| {
+                                PipelineError::TemplateParseError(format!(
+                                    "Failed to render template '{}': {}",
+                                    content, e
+                                ))
+                            })?
                     } else {
-                        Cow::Borrowed(content)
+                        content.clone()
                     };
-                    proxy.process_event(IDFEvent::AddText {
-                        content: rendered_content,
-                        style: style.as_deref().map(Cow::Borrowed),
-                    }).await?;
+                    nodes.push(IRNode::Paragraph {
+                        style_name: style.clone(),
+                        children: vec![InlineNode::Text(rendered_content)],
+                    });
                 }
                 TemplateElement::Rectangle { style } => {
-                    proxy.process_event(IDFEvent::AddRectangle {
-                        style: style.as_deref().map(Cow::Borrowed),
-                    }).await?;
+                    // Rectangles are typically style-only, represented as a styled Block.
+                    nodes.push(IRNode::Block {
+                        style_name: style.clone(),
+                        children: vec![],
+                    });
                 }
                 TemplateElement::Container {
                     children,
@@ -65,11 +76,10 @@ impl<'a> JsonTemplateParser<'a> {
                     };
 
                     for item_context in data_items {
-                        proxy.process_event(IDFEvent::StartBlock {
-                            style: style.as_deref().map(Cow::Borrowed),
-                        }).await?;
-                        Box::pin(self.parse_children(children, item_context, proxy)).await?;
-                        proxy.process_event(IDFEvent::EndBlock).await?;
+                        nodes.push(IRNode::Block {
+                            style_name: style.clone(),
+                            children: self.build_children(children, item_context)?,
+                        });
                     }
                 }
                 TemplateElement::Table {
@@ -78,71 +88,69 @@ impl<'a> JsonTemplateParser<'a> {
                     style,
                     row_style_prefix_field,
                 } => {
-                    self.parse_table(
+                    nodes.push(self.build_table(
                         data_source,
                         columns,
                         style,
                         row_style_prefix_field,
                         context,
-                        proxy,
-                    )
-                        .await?;
+                    )?);
                 }
                 TemplateElement::Image { src, style } => {
-                    let rendered_src: Cow<'a, str> = if src.contains("{{") {
-                        Cow::Owned(self.template_engine.render_template(src, context)
-                            .map_err(|e| PipelineError::TemplateParseError(format!("Failed to render image src '{}': {}", src, e)))?)
+                    let rendered_src = if src.contains("{{") {
+                        self.template_engine.render_template(src, context).map_err(
+                            |e| {
+                                PipelineError::TemplateParseError(format!(
+                                    "Failed to render image src '{}': {}",
+                                    src, e
+                                ))
+                            },
+                        )?
                     } else {
-                        Cow::Borrowed(src)
+                        src.clone()
                     };
-                    proxy.process_event(IDFEvent::AddImage {
+                    nodes.push(IRNode::Image {
                         src: rendered_src,
-                        style: style.as_deref().map(Cow::Borrowed),
-                        data: None,
-                    }).await?;
+                        style_name: style.clone(),
+                        data: None, // Will be populated by ResourceManager
+                    });
                 }
                 TemplateElement::PageBreak => {
-                    proxy.process_event(IDFEvent::ForcePageBreak).await?;
+                    // Page breaks are handled by the layout engine, not represented in the IR tree.
+                    // This is a philosophical shift. If a hard break is needed, it should be
+                    // a property on a node, e.g., `break-before: page`. For now, we ignore it.
+                    log::warn!("PageBreak elements are currently ignored during IR construction.");
                 }
             }
         }
-        Ok(())
+        Ok(nodes)
     }
 
-    /// Handles the parsing of a `Table` template element.
-    async fn parse_table(
-        &mut self,
-        data_source: &'a str,
-        columns: &'a [TableColumn],
-        style: &'a Option<String>,
-        row_style_prefix_field: &'a Option<String>,
-        context: &'a Value,
-        proxy: &mut LayoutProcessorProxy<'a>,
-    ) -> Result<(), PipelineError> {
-        proxy.process_event(IDFEvent::StartTable {
-            style: style.as_deref().map(Cow::Borrowed),
-            columns: Cow::Borrowed(columns),
-        }).await?;
+    /// Handles the building of a `Table` IRNode.
+    fn build_table(
+        &self,
+        data_source: &str,
+        columns: &[TableColumn],
+        style: &Option<String>,
+        row_style_prefix_field: &Option<String>,
+        context: &Value,
+    ) -> Result<IRNode, PipelineError> {
+        // Build header
+        let header_rows: Vec<TableRow> = vec![TableRow {
+            cells: columns
+                .iter()
+                .map(|col| TableCell {
+                    style_override: col.header_style.clone(),
+                    children: vec![IRNode::Paragraph {
+                        style_name: None, // Inherits from cell style
+                        children: vec![InlineNode::Text(col.header.clone())],
+                    }],
+                })
+                .collect(),
+        }];
+        let header = Some(Box::new(TableHeader { rows: header_rows }));
 
-        proxy.process_event(IDFEvent::StartHeader).await?;
-        proxy.process_event(IDFEvent::StartRow {
-            context: &Value::Null,
-        }).await?;
-        for (i, col) in columns.iter().enumerate() {
-            proxy.process_event(IDFEvent::StartCell {
-                column_index: i,
-                style_override: col.header_style.clone(),
-            }).await?;
-            // Content of the header cell
-            proxy.process_event(IDFEvent::AddText {
-                content: Cow::Borrowed(&col.header),
-                style: col.header_style.as_deref().map(Cow::Borrowed),
-            }).await?;
-            proxy.process_event(IDFEvent::EndCell).await?;
-        }
-        proxy.process_event(IDFEvent::EndRow).await?;
-        proxy.process_event(IDFEvent::EndHeader).await?;
-
+        // Build body
         let rows_data = context
             .pointer(data_source)
             .and_then(|v| v.as_array())
@@ -153,80 +161,100 @@ impl<'a> JsonTemplateParser<'a> {
                 ))
             })?;
 
-        for row_item in rows_data {
-            let prefix_str = row_style_prefix_field
-                .as_ref()
-                .and_then(|field| row_item.pointer(field).and_then(|v| v.as_str()));
+        let body_rows: Vec<TableRow> = rows_data
+            .iter()
+            .map(|row_item| {
+                let prefix_str = row_style_prefix_field
+                    .as_ref()
+                    .and_then(|field| row_item.pointer(field).and_then(|v| v.as_str()));
 
-            proxy.process_event(IDFEvent::StartRow { context: row_item }).await?;
+                let cells = columns
+                    .iter()
+                    .map(|col| {
+                        let cell_value = row_item.pointer(&col.data_field).unwrap_or(&Value::Null);
 
-            for (i, col) in columns.iter().enumerate() {
-                let cell_value = row_item.pointer(&col.data_field).unwrap_or(&Value::Null);
+                        let cell_text: Cow<'_, str> =
+                            if let Some(template_string) = &col.content_template {
+                                Cow::Owned(
+                                    self.template_engine
+                                        .render_template(template_string, row_item)
+                                        .map_err(|e| PipelineError::TemplateParseError(e.to_string()))?,
+                                )
+                            } else {
+                                match cell_value {
+                                    Value::String(s) => Cow::Borrowed(s),
+                                    Value::Number(n) => Cow::Owned(n.to_string()),
+                                    Value::Bool(b) => Cow::Owned(b.to_string()),
+                                    _ => Cow::Borrowed(""),
+                                }
+                            };
 
-                let cell_text: Cow<'a, str> = if let Some(template_string) = &col.content_template {
-                    Cow::Owned(self.template_engine.render_template(template_string, row_item).map_err(|e| {
-                        PipelineError::TemplateParseError(e.to_string())
-                    })?)
-                } else {
-                    match cell_value {
-                        Value::String(s) => Cow::Borrowed(s),
-                        Value::Number(n) => Cow::Owned(n.to_string()),
-                        Value::Bool(b) => Cow::Owned(b.to_string()),
-                        _ => Cow::Borrowed(""),
-                    }
-                };
+                        let final_style = if let (Some(prefix), Some(base_style)) =
+                            (prefix_str, &col.style)
+                        {
+                            Some(format!("{}-{}", prefix, base_style))
+                        } else {
+                            col.style.clone()
+                        };
 
-                let final_style =
-                    if let (Some(prefix), Some(base_style)) = (prefix_str, &col.style) {
-                        Some(format!("{}-{}", prefix, base_style))
-                    } else {
-                        col.style.clone()
-                    };
+                        Ok(TableCell {
+                            style_override: final_style,
+                            children: vec![IRNode::Paragraph {
+                                style_name: None,
+                                children: vec![InlineNode::Text(cell_text.into_owned())],
+                            }],
+                        })
+                    })
+                    .collect::<Result<Vec<TableCell>, PipelineError>>()?;
+                Ok(TableRow { cells })
+            })
+            .collect::<Result<Vec<TableRow>, PipelineError>>()?;
 
-                proxy.process_event(IDFEvent::StartCell {
-                    column_index: i,
-                    style_override: final_style.clone(), // This is the container style for the cell
-                }).await?;
-                proxy.process_event(IDFEvent::AddText {
-                    content: cell_text,
-                    style: final_style.map(Cow::Owned), // This is the text style for the cell content
-                }).await?;
-                proxy.process_event(IDFEvent::EndCell).await?;
-            }
-            proxy.process_event(IDFEvent::EndRow).await?;
-        }
+        let body = Box::new(TableBody { rows: body_rows });
 
-        proxy.process_event(IDFEvent::EndTable).await?;
-        Ok(())
+        let col_defs = columns
+            .iter()
+            .map(|c| TableColumnDefinition {
+                width: c.width.clone(),
+                style: c.style.clone(),
+                header_style: c.header_style.clone(),
+            })
+            .collect();
+
+        Ok(IRNode::Table {
+            style_name: style.clone(),
+            columns: col_defs,
+            calculated_widths: vec![], // To be filled by layout engine
+            header,
+            body,
+        })
     }
 }
 
-#[async_trait(?Send)]
-impl<'a> TemplateProcessor<'a> for JsonTemplateParser<'a> {
-    async fn process(
-        &mut self,
+impl TemplateProcessor for JsonTemplateParser {
+    fn process<'a>(
+        &'a mut self,
         data: &'a Value,
-        proxy: &mut LayoutProcessorProxy<'a>,
-    ) -> Result<(), PipelineError> {
-        proxy.process_event(IDFEvent::StartDocument).await?;
-
+    ) -> Result<Box<dyn Iterator<Item = Result<LayoutUnit, PipelineError>> + 'a + Send>, PipelineError>
+    {
         if self.stylesheet.page_sequences.is_empty() {
             return Err(PipelineError::StylesheetError(
                 "No page_sequences defined in stylesheet.".to_string(),
             ));
         }
 
+        let mut layout_units = Vec::new();
+
         for (_seq_name, sequence) in &self.stylesheet.page_sequences {
-            let template: &Template = self
-                .stylesheet
-                .templates
-                .get(&sequence.template)
-                .ok_or_else(|| {
-                    PipelineError::TemplateParseError(format!(
-                        "Template '{}' not found",
-                        sequence.template
-                    ))
-                })?;
+            let template: &Template =
+                self.stylesheet.templates.get(&sequence.template).ok_or_else(
+                    || {
+                        PipelineError::TemplateParseError(format!(
+                            "Template '{}' not found",
+                            sequence.template
+                        ))
+                    },
+                )?;
 
             let data_items: Vec<&Value> = if sequence.data_source == "/" {
                 vec![data]
@@ -243,16 +271,15 @@ impl<'a> TemplateProcessor<'a> for JsonTemplateParser<'a> {
             };
 
             for item_data in data_items {
-                proxy
-                    .process_event(IDFEvent::BeginPageSequence { context: item_data })
-                    .await?;
-                self.parse_children(&template.children, item_data, proxy)
-                    .await?;
-                proxy.process_event(IDFEvent::EndPageSequence).await?;
+                let children = self.build_children(&template.children, item_data)?;
+                let tree = IRNode::Root(children);
+                layout_units.push(Ok(LayoutUnit {
+                    tree,
+                    context: item_data.clone(),
+                }));
             }
         }
 
-        proxy.process_event(IDFEvent::EndDocument).await?;
-        Ok(())
+        Ok(Box::new(layout_units.into_iter()))
     }
 }

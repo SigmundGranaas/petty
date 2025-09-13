@@ -31,8 +31,9 @@ fn main() -> Result<(), PipelineError> {
     let data_json = from_str(&data_json_str)?;
 
     println!("Building PDF generation pipeline...");
+    // Use the correct builder method for XSLT files.
     let pipeline = PipelineBuilder::new()
-        .with_stylesheet_file(template_path)?
+        .with_xslt_template_file(template_path)?
         .build()?;
 
     println!("Generating PDF to {}...", output_path);

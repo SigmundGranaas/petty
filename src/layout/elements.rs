@@ -1,7 +1,13 @@
-// src/layout/elements.rs
-use crate::layout::style::ComputedStyle;
-use std::sync::Arc;
 
+//! Defines the concrete, drawable elements that are the output of the layout engine.
+
+use crate::idf::SharedData;
+use crate::layout::style::ComputedStyle;
+
+/// A simple, geometry-aware data structure representing a single drawable item.
+/// This is the final output of the layout process for a given element, containing
+/// its absolute position and final styling information. A page is simply a collection
+/// of these elements.
 #[derive(Clone, Debug)]
 pub struct PositionedElement {
     pub x: f32,
@@ -12,6 +18,7 @@ pub struct PositionedElement {
     pub style: ComputedStyle,
 }
 
+/// An enum representing the different types of drawable elements.
 #[derive(Clone, Debug)]
 pub enum LayoutElement {
     Text(TextElement),
@@ -19,19 +26,20 @@ pub enum LayoutElement {
     Image(ImageElement),
 }
 
+/// Represents a block of text to be drawn.
 #[derive(Clone, Debug)]
 pub struct TextElement {
-    pub style_name: Option<String>,
-    pub content: String, // Content is a result of `join`, so it must be owned.
+    /// The final, wrapped text content. May contain newlines.
+    pub content: String,
 }
 
+/// Represents a simple rectangle, typically used for backgrounds, borders, or rules.
 #[derive(Clone, Debug)]
-pub struct RectElement {
-    pub style_name: Option<String>,
-}
+pub struct RectElement;
 
+/// Represents an image to be drawn.
 #[derive(Clone, Debug)]
 pub struct ImageElement {
     pub src: String,
-    pub image_data: Arc<Vec<u8>>,
+    pub image_data: SharedData,
 }

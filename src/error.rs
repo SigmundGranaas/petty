@@ -13,7 +13,12 @@ pub enum RenderError {
     TemplateError(String),
     #[error("I/O error during finalization: {0}")]
     IoError(#[from] std::io::Error),
+    #[error("PDF library error: {0}")]
+    PdfLibError(String),
 }
+
+// REMOVED: The `From<printpdf::Error>` implementation is no longer valid
+// as the printpdf crate does not export this error type directly.
 
 /// A comprehensive error type for the entire document generation pipeline.
 #[derive(Error, Debug)]

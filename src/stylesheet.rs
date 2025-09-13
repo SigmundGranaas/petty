@@ -1,3 +1,4 @@
+// src/stylesheet.rs
 use crate::error::PipelineError;
 use quick_xml::events::attributes::Attributes;
 use quick_xml::events::Event as XmlEvent;
@@ -8,7 +9,7 @@ use std::str::FromStr;
 
 // Main struct representing all style and layout information.
 // Can be constructed either from a JSON file or by pre-parsing an XSLT file.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)] // Removed Default derive
 pub struct Stylesheet {
     pub page: PageLayout,
     pub styles: HashMap<String, ElementStyle>,
@@ -19,13 +20,18 @@ pub struct Stylesheet {
     pub page_sequences: HashMap<String, PageSequence>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PageSequence {
-    pub template: String,
-    pub data_source: String,
+impl Default for Stylesheet {
+    fn default() -> Self {
+        Stylesheet {
+            page: PageLayout::default(),
+            styles: HashMap::new(),
+            templates: HashMap::new(),
+            page_sequences: HashMap::new(),
+        }
+    }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize)] // Removed Default derive
 pub struct PageLayout {
     #[serde(default)]
     pub title: Option<String>,
@@ -37,7 +43,52 @@ pub struct PageLayout {
     pub footer_style: Option<String>,
 }
 
+// Modify PageLayout::default() to set default page margins
+impl Default for PageLayout {
+    fn default() -> Self {
+        PageLayout {
+            title: None,
+            size: PageSize::A4,
+            margins: Margins { top: 10.0, right: 10.0, bottom: 10.0, left: 10.0 }, // Changed from Default::default()
+            footer_height: 0.0,
+            footer_text: None,
+            footer_style: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)] // Removed Default derive
+pub struct Margins {
+    #[serde(default)]
+    pub top: f32,
+    #[serde(default)]
+    pub right: f32,
+    #[serde(default)]
+    pub bottom: f32,
+    #[serde(default)]
+    pub left: f32,
+}
+
+// Keep Margins::default() as 0.0, as it's a generic struct
+impl Default for Margins {
+    fn default() -> Self {
+        Margins {
+            top: 0.0,
+            right: 0.0,
+            bottom: 0.0,
+            left: 0.0,
+        }
+    }
+}
+
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PageSequence {
+    pub template: String,
+    pub data_source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub enum PageSize {
     A4,
     Letter,
@@ -52,18 +103,8 @@ impl Default for PageSize {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct Margins {
-    #[serde(default)]
-    pub top: f32,
-    #[serde(default)]
-    pub right: f32,
-    #[serde(default)]
-    pub bottom: f32,
-    #[serde(default)]
-    pub left: f32,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+// Renamed from 'Style' to 'ElementStyle' to avoid conflict with `std::fmt::Style` or similar
+// and to be more descriptive.
 pub struct ElementStyle {
     pub font_family: Option<String>,
     pub font_size: Option<f32>,
@@ -182,7 +223,7 @@ fn default_alpha() -> f32 {
     1.0
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
 pub struct Color {
     pub r: u8,
     pub g: u8,
@@ -191,7 +232,7 @@ pub struct Color {
     pub a: f32,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Border {
     pub width: f32,
     pub style: BorderStyle,
@@ -298,6 +339,7 @@ fn parse_simple_page_master(attrs: Attributes) -> Result<PageLayout, PipelineErr
             b"margin-right" => layout.margins.right = parse_dimension_to_pt(&value)?,
             b"margin-bottom" => layout.margins.bottom = parse_dimension_to_pt(&value)?,
             b"margin-left" => layout.margins.left = parse_dimension_to_pt(&value)?,
+            b"margin" => layout.margins = parse_shorthand_value(&value)?,
             // These are not standard FO, but useful to keep for footers
             b"footer-text" => layout.footer_text = Some(value.into_owned()),
             b"footer-style" => layout.footer_style = Some(value.into_owned()),
@@ -312,6 +354,58 @@ fn parse_simple_page_master(attrs: Attributes) -> Result<PageLayout, PipelineErr
     }
 
     Ok(layout)
+}
+
+/// Helper to apply a parsed attribute value to the style structs.
+fn apply_attribute_value(
+    style: &mut ElementStyle,
+    margin: &mut Margins,
+    padding: &mut Margins,
+    has_margin: &mut bool,
+    has_padding: &mut bool,
+    attr_name: &str,
+    value: &str,
+) -> Result<(), PipelineError> {
+    // Some properties can have empty values (e.g., from an empty <xsl:attribute/>).
+    // Handle them gracefully.
+    match attr_name {
+        "font-family" => style.font_family = Some(value.to_string()),
+        "font-size" => style.font_size = Some(parse_pt_value(value)?),
+        "font-weight" => style.font_weight = Some(FontWeight::from_str(value)?),
+        "font-style" => style.font_style = Some(FontStyle::from_str(value)?),
+        "line-height" => style.line_height = Some(parse_pt_value(value)?),
+        "text-align" => style.text_align = Some(TextAlign::from_str(value)?),
+        "color" => style.color = Some(Color::from_str(value)?),
+        "background-color" => style.background_color = Some(Color::from_str(value)?),
+        "border" => style.border = Some(Border::from_str(value)?),
+        "margin" => {
+            *has_margin = true;
+            *margin = parse_shorthand_value(value)?;
+        }
+        "margin-top" => { *has_margin = true; margin.top = parse_pt_value(value)?; }
+        "margin-right" => { *has_margin = true; margin.right = parse_pt_value(value)?; }
+        "margin-bottom" => { *has_margin = true; margin.bottom = parse_pt_value(value)?; }
+        "margin-left" => { *has_margin = true; margin.left = parse_pt_value(value)?; }
+        "padding" => {
+            *has_padding = true;
+            *padding = parse_shorthand_value(value)?;
+        }
+        "padding-top" => { *has_padding = true; padding.top = parse_pt_value(value)?; }
+        "padding-right" => { *has_padding = true; padding.right = parse_pt_value(value)?; }
+        "padding-bottom" => { *has_padding = true; padding.bottom = parse_pt_value(value)?; }
+        "padding-left" => { *has_padding = true; padding.left = parse_pt_value(value)?; }
+        "width" => {
+            if value.contains('%') {
+                let val_str = value.trim_end_matches('%').trim();
+                style.width = Some(Dimension::Percent(val_str.parse()?));
+            } else {
+                style.width = Some(Dimension::Pt(parse_pt_value(value)?));
+            }
+        }
+        "height" => style.height = Some(Dimension::Pt(parse_pt_value(value)?)),
+        _ => {}
+    }
+    Ok(())
 }
 
 fn parse_attribute_set(
@@ -329,75 +423,37 @@ fn parse_attribute_set(
 
     loop {
         match reader.read_event_into(buf) {
-            Ok(XmlEvent::Start(e)) | Ok(XmlEvent::Empty(e))
-            if e.name().as_ref() == b"xsl:attribute" =>
-                {
-                    let attr_name = get_attr_val(e.attributes(), b"name")?.ok_or_else(|| {
-                        PipelineError::TemplateParseError("xsl:attribute missing name".into())
-                    })?;
-                    // Reading the text content of the xsl:attribute
-                    let mut content_buf = Vec::new();
-                    let value =
-                        if let Ok(XmlEvent::Text(text)) = reader.read_event_into(&mut content_buf) {
-                            text.unescape()?.to_string()
-                        } else {
-                            String::new() // Handle self-closing tags
-                        };
+            Ok(XmlEvent::Start(e)) if e.name().as_ref() == b"xsl:attribute" => {
+                let attr_name = get_attr_val(e.attributes(), b"name")?.ok_or_else(|| {
+                    PipelineError::TemplateParseError("xsl:attribute missing name".into())
+                })?;
 
-                    match attr_name.as_str() {
-                        "font-size" => style.font_size = Some(parse_pt_value(&value)?),
-                        "font-weight" => style.font_weight = Some(FontWeight::from_str(&value)?),
-                        "text-align" => style.text_align = Some(TextAlign::from_str(&value)?),
-                        "color" => style.color = Some(Color::from_str(&value)?),
-                        "background-color" => {
-                            style.background_color = Some(Color::from_str(&value)?)
+                let mut value = String::new();
+                let mut content_buf = Vec::new();
+                let end_tag = e.name().to_owned();
+
+                // Read content until we hit the end tag for this attribute.
+                loop {
+                    match reader.read_event_into(&mut content_buf) {
+                        Ok(XmlEvent::Text(text)) => {
+                            value = text.unescape()?.to_string();
                         }
-                        "border" => style.border = Some(Border::from_str(&value)?),
-                        "margin" => {
-                            has_margin = true;
-                            margin = parse_shorthand_value(&value)?;
+                        Ok(XmlEvent::End(end)) if end.name() == end_tag => {
+                            break;
                         }
-                        "margin-top" => {
-                            has_margin = true;
-                            margin.top = parse_pt_value(&value)?
-                        }
-                        "margin-right" => {
-                            has_margin = true;
-                            margin.right = parse_pt_value(&value)?
-                        }
-                        "margin-bottom" => {
-                            has_margin = true;
-                            margin.bottom = parse_pt_value(&value)?
-                        }
-                        "margin-left" => {
-                            has_margin = true;
-                            margin.left = parse_pt_value(&value)?
-                        }
-                        "padding" => {
-                            has_padding = true;
-                            padding = parse_shorthand_value(&value)?;
-                        }
-                        "padding-top" => {
-                            has_padding = true;
-                            padding.top = parse_pt_value(&value)?
-                        }
-                        "padding-right" => {
-                            has_padding = true;
-                            padding.right = parse_pt_value(&value)?
-                        }
-                        "padding-bottom" => {
-                            has_padding = true;
-                            padding.bottom = parse_pt_value(&value)?
-                        }
-                        "padding-left" => {
-                            has_padding = true;
-                            padding.left = parse_pt_value(&value)?
-                        }
-                        "width" => style.width = Some(Dimension::Pt(parse_pt_value(&value)?)),
-                        "height" => style.height = Some(Dimension::Pt(parse_pt_value(&value)?)),
-                        _ => {}
+                        Ok(XmlEvent::Eof) => return Err(PipelineError::TemplateParseError("Unexpected EOF in xsl:attribute".into())),
+                        Err(e) => return Err(e.into()),
+                        _ => {} // Ignore comments, etc.
                     }
+                    content_buf.clear();
                 }
+                if !value.trim().is_empty() {
+                    apply_attribute_value(&mut style, &mut margin, &mut padding, &mut has_margin, &mut has_padding, &attr_name, &value)?;
+                }
+            }
+            Ok(XmlEvent::Empty(e)) if e.name().as_ref() == b"xsl:attribute" => {
+                // An empty attribute tag, like <xsl:attribute name="..."/>. It has no value. We can ignore.
+            }
             Ok(XmlEvent::End(e)) if e.name().as_ref() == b"xsl:attribute-set" => break,
             Ok(XmlEvent::Eof) => {
                 return Err(PipelineError::TemplateParseError(
@@ -480,7 +536,7 @@ impl FromStr for FontWeight {
         Ok(match s.to_lowercase().as_str() {
             "thin" => FontWeight::Thin,
             "light" => FontWeight::Light,
-            "regular" => FontWeight::Regular,
+            "regular" | "normal" => FontWeight::Regular,
             "medium" => FontWeight::Medium,
             "bold" => FontWeight::Bold,
             "black" => FontWeight::Black,

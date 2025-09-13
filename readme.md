@@ -1,50 +1,23 @@
 # Petty PDF Generator
 
-Petty is a Rust-based document generation engine inspired by Apache FOP. It transforms structured JSON data into PDFs using a stylesheet that defines page layout, styling, and data-driven templates.
+Petty is a high-performance document generation engine designed to transform structured data (e.g., JSON) into professional-quality PDF documents using declarative templates. It is built on a concurrent pipeline architecture that processes a stream of self-contained document chunks, enabling sophisticated layout features while maintaining a low and predictable memory footprint.
 
 ## Key Concepts
 
-- **Stylesheet**: A JSON file that defines everything about the document: page size, margins, styles, and templates.
-- **Data File**: A JSON file containing the content to be populated into the document.
-- **Page Sequences**: A core concept where a template is applied to each item in a data array, allowing for the generation of multi-page documents like reports, invoices, or catalogs where each major section (e.g., each invoice) starts on a new page.
+- **Sequence**: A logical, self-contained part of a document (like an invoice or a chapter) that is processed in memory as a single unit. This gives the user explicit control over the memory-for-features trade-off.
+- **Templates**: Document structure can be defined using a simple JSON format or a more powerful XSLT-like syntax.
+- **Styling**: A simple, CSS-like styling model is used to control the appearance of elements. Styles can be defined in a JSON stylesheet or extracted from an XSLT file.
+- **Intermediate Representation (IR)**: The engine uses a rich, semantic tree (`IRNode`) as its canonical representation, decoupling input syntax from layout logic.
 
 ## How to Run
 
 ### Command-Line Interface
 
-The main binary acts as a simple CLI tool for PDF generation.
+The main binary acts as a simple CLI tool for PDF generation using the XSLT engine.
 
 ```bash
+# This command is for the XSLT engine.
 cargo run --release -- \
-  templates/invoice_stylesheet.json \
+  templates/invoice_template.xsl \
   data/invoice_data.json \
-  output/invoices.pdf
-
-
-
-### Running Examples
-
-The project includes several examples to demonstrate its capabilities. You can run them using Cargo:
-
-```bash
-# Generate a multi-page report from a single block of text (JSON)
-cargo run --example simple_report
-
-# Generate a separate invoice for each customer in the data file (JSON)
-cargo run --example invoice_per_customer
-
-# Generate a complex financial statement with dynamic row styling (JSON)
-cargo run --example financial_report
-
-# Generate invoices using the XSLT templating engine
-cargo run --example xslt_invoice
-
-# --- Performance Testing ---
-
-# Run a performance test with a large, generated dataset (JSON Engine).
-# You can pass the number of pages as an argument.
-cargo run --release --example performance_test -- 1000
-
-# Run the same performance test using the XSLT Engine for comparison.
-cargo run --release --example performance_test_xslt -- 1000
-```
+  output/xslt_invoices.pdf

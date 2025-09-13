@@ -1,9 +1,9 @@
 // src/pipeline.rs
-use crate::error::PipelineError;
-use crate::idf::IDFEvent;
-use crate::layout::StreamingLayoutProcessor;
+use crate::error::{PipelineError, RenderError};
+use crate::idf::LayoutUnit;
+use crate::layout::LayoutEngine;
 use crate::parser::json_processor::JsonTemplateParser;
-use crate::parser::processor::{LayoutProcessorProxy, TemplateProcessor};
+use crate::parser::processor::TemplateProcessor;
 use crate::parser::xslt::XsltTemplateParser;
 use crate::render::pdf::PdfDocumentRenderer;
 use crate::render::DocumentRenderer;
@@ -13,9 +13,10 @@ use serde_json::Value;
 use std::fs;
 use std::io;
 use std::path::Path;
-use tokio::join;
+use std::thread;
 use tokio::runtime::Builder;
 use tokio::sync::mpsc;
+use tokio::task;
 
 /// The main document generation pipeline orchestrator.
 pub struct DocumentPipeline {
@@ -46,7 +47,6 @@ fn format_currency_helper(
 
 impl DocumentPipeline {
     /// Creates a new pipeline from its constituent parts.
-    /// This is typically called by `PipelineBuilder`.
     pub fn new(stylesheet: Stylesheet, template_language: TemplateLanguage) -> Self {
         let mut template_engine = Handlebars::new();
         template_engine.set_strict_mode(true);
@@ -59,74 +59,105 @@ impl DocumentPipeline {
         }
     }
 
-    pub async fn generate_to_writer_async<'a, W: io::Write + Send + 'static>(
-        &'a self,
-        data: &'a Value,
+    /// Generates the document asynchronously and writes it to the provided stream.
+    /// This method implements the concurrent pipeline architecture.
+    pub async fn generate_to_writer_async<W: io::Write + Send + 'static>(
+        &self,
+        data: &Value,
         writer: W,
     ) -> Result<(), PipelineError> {
-        let (tx, mut rx) = mpsc::channel::<IDFEvent<'a>>(1024);
+        // A channel to send fully parsed sequence trees from the parser task to the layout task.
+        let (tx, mut rx) = mpsc::channel::<Result<LayoutUnit, PipelineError>>(32);
 
-        // Define the producer as a future. It can borrow from `self` and `data`.
-        let producer_fut = async {
-            // `proxy` takes ownership of `tx`. When `proxy` is dropped at the end of this
-            // future, the channel is closed, which will terminate the consumer's loop.
-            let mut proxy = LayoutProcessorProxy::new(tx);
-            match &self.template_language {
-                TemplateLanguage::Json => {
-                    let mut processor =
-                        JsonTemplateParser::new(&self.stylesheet, &self.template_engine);
-                    processor.process(data, &mut proxy).await
+        // --- PARSER TASK (Producer) ---
+        // This task runs on the Tokio runtime and sends `LayoutUnit`s asynchronously.
+        let producer_stylesheet = self.stylesheet.clone();
+        let producer_template_engine = self.template_engine.clone();
+        let producer_template_language = self.template_language.clone();
+        let data = data.clone();
+
+        let producer_handle = task::spawn(async move {
+            let mut processor: Box<dyn TemplateProcessor> = match producer_template_language {
+                TemplateLanguage::Json => Box::new(JsonTemplateParser::new(
+                    producer_stylesheet,
+                    producer_template_engine,
+                )),
+                TemplateLanguage::Xslt { xslt_content } => Box::new(XsltTemplateParser::new(
+                    xslt_content,
+                    producer_stylesheet,
+                    producer_template_engine,
+                )),
+            };
+
+            let iter = match processor.process(&data) {
+                Ok(it) => it,
+                Err(e) => {
+                    let _ = tx.send(Err(e)).await;
+                    return;
                 }
-                TemplateLanguage::Xslt { xslt_content } => {
-                    let mut processor = XsltTemplateParser::new(
-                        xslt_content,
-                        &self.stylesheet,
-                        self.template_engine.clone(),
-                    );
-                    processor.process(data, &mut proxy).await
+            };
+
+            for layout_unit_result in iter {
+                if tx.send(layout_unit_result).await.is_err() {
+                    // Receiver has been dropped, so we can stop.
+                    break;
                 }
             }
-        };
+        });
 
-        // Define the consumer as a future.
-        let consumer_fut = async {
-            let renderer = PdfDocumentRenderer::new(&self.stylesheet)?;
-            let mut layout_processor = StreamingLayoutProcessor::new(renderer, &self.stylesheet);
+        // --- LAYOUT & RENDER TASK (Consumer) ---
+        // This task runs in a dedicated OS thread to handle the `!Send` renderer.
+        let consumer_stylesheet = self.stylesheet.clone();
+        let consumer_template_engine = self.template_engine.clone();
 
-            while let Some(event) = rx.recv().await {
-                layout_processor.process_event(event)?;
+        let consumer_handle = thread::spawn(move || {
+            let layout_engine = LayoutEngine::new(consumer_stylesheet);
+            // The !Send renderer is created and used only within this thread.
+            let mut renderer = PdfDocumentRenderer::new(layout_engine.clone())?;
+            renderer.begin_document()?;
+
+            // Pull items from the channel using the blocking receive method.
+            while let Some(layout_unit_result) = rx.blocking_recv() {
+                let layout_unit = layout_unit_result?;
+                let page_iterator = layout_engine.paginate_tree(&layout_unit)?;
+
+                for page_elements in page_iterator {
+                    renderer.render_page(&layout_unit.context, page_elements)?;
+                }
             }
 
-            // Return the processor which owns the renderer, so it can be finalized.
-            Ok::<_, PipelineError>(layout_processor)
-        };
+            // The renderer's finalize method is blocking, which is fine in a std::thread.
+            renderer.finalize(writer, &consumer_template_engine)?;
 
-        // Run both futures concurrently. `join!` awaits both to complete.
-        let (producer_result, consumer_result) = join!(producer_fut, consumer_fut);
+            Ok::<(), PipelineError>(())
+        });
 
-        // Check for errors from both futures.
-        producer_result?;
-        let layout_processor = consumer_result?;
+        // Wait for the producer to finish.
+        producer_handle.await.map_err(|e| {
+            PipelineError::TemplateParseError(format!("Producer task panicked: {}", e))
+        })?;
 
-        // --- Finalization ---
-        let renderer = layout_processor.into_renderer();
-        renderer.finalize(writer, &self.template_engine)?;
-
-        Ok(())
+        // Wait for the consumer to finish and handle its result.
+        match consumer_handle.join() {
+            Ok(result) => result,
+            Err(_) => Err(PipelineError::RenderError(RenderError::Aborted)),
+        }
     }
 
     /// Generates the document and saves it to the specified file path.
     /// This is a convenience wrapper that sets up a Tokio runtime.
-    pub fn generate_to_file<'a, P: AsRef<std::path::Path>>(
-        &'a self,
-        data: &'a Value,
+    pub fn generate_to_file<P: AsRef<Path>>(
+        &self,
+        data: &Value,
         path: P,
     ) -> Result<(), PipelineError> {
         let file = std::fs::File::create(path)?;
-        let rt = Builder::new_current_thread()
+        let rt = Builder::new_multi_thread()
             .enable_all()
             .build()
             .expect("Failed to create Tokio runtime");
+
+        // Run the async function directly on the multi-threaded runtime.
         rt.block_on(self.generate_to_writer_async(data, file))
     }
 }
@@ -144,8 +175,7 @@ impl PipelineBuilder {
         Default::default()
     }
 
-    /// Configures the builder from a stylesheet JSON string. This will use the JSON
-    /// templating engine.
+    /// Configures the builder from a stylesheet JSON string.
     pub fn with_stylesheet_json(mut self, json: &str) -> Result<Self, PipelineError> {
         let stylesheet = Stylesheet::from_json(json)?;
         self.stylesheet = Some(stylesheet);
@@ -153,16 +183,13 @@ impl PipelineBuilder {
         Ok(self)
     }
 
-    /// Configures the builder from a stylesheet JSON file. This will use the JSON
-    /// templating engine.
+    /// Configures the builder from a stylesheet JSON file.
     pub fn with_stylesheet_file<P: AsRef<Path>>(self, path: P) -> Result<Self, PipelineError> {
         let json_str = fs::read_to_string(path)?;
         self.with_stylesheet_json(&json_str)
     }
 
     /// Configures the builder from a self-contained XSLT template file.
-    /// This template must contain `<petty:page-layout>` and `<xsl:attribute-set>`
-    /// blocks which are used to configure the document's styles and layout.
     pub fn with_xslt_template_file<P: AsRef<Path>>(
         mut self,
         path: P,

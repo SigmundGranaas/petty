@@ -1,4 +1,3 @@
-// src/xpath/mod.rs
 use serde_json::Value;
 
 /// Selects JSON values based on a simple path.

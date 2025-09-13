@@ -1,7 +1,6 @@
-// src/render/pdf.rs
 use crate::error::RenderError;
 use crate::layout::{
-    ImageElement, LayoutElement, LayoutEngine, PositionedElement, RectElement, TextElement,
+    LayoutElement, LayoutEngine, PositionedElement,
 };
 use crate::render::DocumentRenderer;
 use crate::stylesheet::{Color, PageLayout, PageSize, Stylesheet, TextAlign};
@@ -19,26 +18,19 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::io;
 
-pub struct PdfDocumentRenderer<'a> {
+pub struct PdfDocumentRenderer {
     document: PdfDocument,
     fonts: HashMap<String, FontId>,
     default_font: FontId,
-    page_contexts: Vec<&'a Value>,
-    current_page_ops: Vec<Op>,
-    current_page_layout: Option<PageLayout>,
-    has_errored: bool,
+    page_contexts: Vec<Value>,
     stylesheet: Stylesheet,
-    is_text_section_open: bool,
-    current_font_id: Option<FontId>,
-    current_font_size: Option<f32>,
-    current_fill_color: Option<printpdf::color::Color>,
     image_xobjects: HashMap<String, (XObjectId, (u32, u32))>,
-    // --- NEW: Hyperlink State ---
-    active_link_href: Option<String>,
+    layout_engine: LayoutEngine,
 }
 
-impl<'a> PdfDocumentRenderer<'a> {
-    pub fn new(stylesheet: &Stylesheet) -> Result<Self, RenderError> {
+impl PdfDocumentRenderer {
+    pub fn new(layout_engine: LayoutEngine) -> Result<Self, RenderError> {
+        let stylesheet = &layout_engine.stylesheet;
         let title = stylesheet.page.title.as_deref().unwrap_or("Document");
         let mut doc = PdfDocument::new(title);
         doc.metadata.info.conformance = PdfConformance::X3_2002_PDF_1_3;
@@ -58,27 +50,10 @@ impl<'a> PdfDocumentRenderer<'a> {
             fonts,
             default_font,
             page_contexts: Vec::new(),
-            current_page_ops: Vec::new(),
-            current_page_layout: None,
-            has_errored: false,
             stylesheet: stylesheet.clone(),
-            is_text_section_open: false,
-            current_font_id: None,
-            current_font_size: None,
-            current_fill_color: None,
             image_xobjects: HashMap::new(),
-            active_link_href: None,
+            layout_engine,
         })
-    }
-
-    fn close_text_section_if_open(&mut self) {
-        if self.is_text_section_open {
-            self.current_page_ops.push(Op::EndTextSection);
-            self.is_text_section_open = false;
-            self.current_font_id = None;
-            self.current_font_size = None;
-            self.current_fill_color = None;
-        }
     }
 
     fn get_font(&self, font_family: &str) -> FontId {
@@ -103,75 +78,40 @@ impl<'a> PdfDocumentRenderer<'a> {
     }
 }
 
-impl<'a> DocumentRenderer<'a> for PdfDocumentRenderer<'a> {
+impl DocumentRenderer for PdfDocumentRenderer {
     fn begin_document(&mut self) -> Result<(), RenderError> {
         Ok(())
     }
-    fn begin_page(&mut self, page_layout: &PageLayout) -> Result<(), RenderError> {
-        self.end_page();
-        self.current_page_layout = Some(page_layout.clone());
-        Ok(())
-    }
 
-    fn end_page(&mut self) {
-        self.close_text_section_if_open();
-        if let Some(layout) = self.current_page_layout.take() {
-            if !self.current_page_ops.is_empty() {
-                let (width_mm, height_mm) = Self::get_page_dimensions_mm(&layout);
-                let mut ops = Vec::new();
-                let layer_name = format!("Page {} Layer 1", self.document.pages.len() + 1);
-                let layer = Layer::new(&*layer_name);
-                let layer_id = self.document.add_layer(&layer);
-                ops.push(Op::BeginLayer { layer_id });
-                ops.append(&mut self.current_page_ops);
-                let pdf_page = PdfPage::new(width_mm, height_mm, ops);
-                self.document.pages.push(pdf_page);
-            }
-        }
-    }
-
-    fn start_new_logical_page(&mut self, context: &'a Value) {
-        self.page_contexts.push(context);
-    }
-
-    fn render_element(
+    fn render_page(
         &mut self,
-        element: &PositionedElement,
-        layout_engine: &LayoutEngine,
+        context: &Value,
+        elements: Vec<PositionedElement>,
     ) -> Result<(), RenderError> {
-        if self.has_errored {
-            return Ok(());
+        self.page_contexts.push(context.clone());
+        let page_layout = self.stylesheet.page.clone();
+        let (width_mm, height_mm) = Self::get_page_dimensions_mm(&page_layout);
+
+        let mut page_renderer = PageOpsRenderer::new(self, &page_layout);
+
+        for element in elements {
+            page_renderer.render_element(&element)?;
         }
 
-        if self.active_link_href.is_some() {
-            // TODO: Hyperlink Annotation Rendering is currently disabled.
-            // The version of the `printpdf` library that the build environment
-            // appears to be using does not have a public API for adding annotations
-            // to a page (e.g., the `PdfPage::annotations` field is missing).
-            // This feature cannot be fully implemented until the project's PDF
-            // library dependency is updated or corrected to a version that supports this.
-        }
+        let ops = page_renderer.into_ops();
+        let page_num = self.document.pages.len() + 1;
+        let mut final_ops = Vec::new();
 
-        match &element.element {
-            LayoutElement::Text(text) => {
-                self.render_text(text, element, layout_engine)?;
-            }
-            LayoutElement::Rectangle(rect) => {
-                self.render_rectangle(rect, element)?;
-            }
-            LayoutElement::Image(image) => {
-                self.render_image(image, element)?;
-            }
-        }
+        let layer_name = format!("Page {} Layer 1", page_num);
+        let layer = Layer::new(&*layer_name);
+        let layer_id = self.document.add_layer(&layer);
+        final_ops.push(Op::BeginLayer { layer_id });
+        final_ops.extend(ops);
+
+        let pdf_page = PdfPage::new(width_mm, height_mm, final_ops);
+        self.document.pages.push(pdf_page);
+
         Ok(())
-    }
-
-    fn start_hyperlink(&mut self, href: &str) {
-        self.active_link_href = Some(href.to_string());
-    }
-
-    fn end_hyperlink(&mut self) {
-        self.active_link_href = None;
     }
 
     fn finalize<W: io::Write>(
@@ -179,20 +119,12 @@ impl<'a> DocumentRenderer<'a> for PdfDocumentRenderer<'a> {
         mut writer: W,
         template_engine: &Handlebars,
     ) -> Result<(), RenderError> {
-        if self.has_errored {
-            return Err(RenderError::Aborted);
-        }
-        self.end_page();
-
-        let layout_engine = LayoutEngine::new(&self.stylesheet);
         let mut pages = std::mem::take(&mut self.document.pages);
         let total_pages = pages.len();
 
         for (i, page) in pages.iter_mut().enumerate() {
-            let context_data = self.page_contexts.get(i).unwrap_or(&&Value::Null);
-
-            // Create a mutable copy of the context to add page numbers
-            let mut context_with_pagination = (*context_data).clone();
+            let context_data = self.page_contexts.get(i).unwrap_or(&Value::Null);
+            let mut context_with_pagination = context_data.clone();
             if let Some(obj) = context_with_pagination.as_object_mut() {
                 obj.insert("page_num".to_string(), (i + 1).into());
                 obj.insert("total_pages".to_string(), total_pages.into());
@@ -201,296 +133,208 @@ impl<'a> DocumentRenderer<'a> for PdfDocumentRenderer<'a> {
             let page_layout = &self.stylesheet.page;
 
             if let Some(footer_template) = &page_layout.footer_text {
-                let mut footer_ops = Vec::new();
-                let style = layout_engine
-                    .compute_style_from_default(page_layout.footer_style.as_deref());
-
-                let rendered_text = template_engine
-                    .render_template(footer_template, &context_with_pagination)
+                let style = self.layout_engine.compute_style(page_layout.footer_style.as_deref(), &self.layout_engine.get_default_style());
+                let rendered_text = template_engine.render_template(footer_template, &context_with_pagination)
                     .map_err(|e| RenderError::TemplateError(e.to_string()))?;
 
-                // Legacy %p and %t replacement for backward compatibility, though {{page_num}} is preferred
-                let final_text = rendered_text
-                    .replace("%p", &(i + 1).to_string())
-                    .replace("%t", &total_pages.to_string());
-
+                let final_text = rendered_text.replace("%p", &(i + 1).to_string()).replace("%t", &total_pages.to_string());
                 let (page_width_pt, _) = Self::get_page_dimensions_pt(page_layout);
                 let font_id = self.get_font(&style.font_family);
-                let color = Rgb::new(
-                    style.color.r as f32 / 255.0,
-                    style.color.g as f32 / 255.0,
-                    style.color.b as f32 / 255.0,
-                    None,
-                );
+                let color = Rgb::new(style.color.r as f32 / 255.0, style.color.g as f32 / 255.0, style.color.b as f32 / 255.0, None);
 
+                let mut footer_ops = Vec::new();
                 footer_ops.push(Op::StartTextSection);
-                footer_ops.push(Op::SetFillColor {
-                    col: printpdf::color::Color::Rgb(color),
-                });
-                footer_ops.push(Op::SetFontSize {
-                    size: Pt(style.font_size),
-                    font: font_id.clone(),
-                });
+                footer_ops.push(Op::SetFillColor { col: printpdf::color::Color::Rgb(color) });
+                footer_ops.push(Op::SetFontSize { size: Pt(style.font_size), font: font_id.clone() });
 
                 let y = page_layout.margins.bottom - style.font_size;
                 let mut x = page_layout.margins.left;
-                if style.text_align != TextAlign::Left {
-                    let line_width = layout_engine.measure_text_width(&final_text, &style);
-                    let content_width =
-                        page_width_pt - page_layout.margins.left - page_layout.margins.right;
-                    match style.text_align {
-                        TextAlign::Right => {
-                            x = page_width_pt - page_layout.margins.right - line_width
-                        }
-                        TextAlign::Center => {
-                            x = page_layout.margins.left + (content_width - line_width) / 2.0
-                        }
-                        _ => {}
-                    }
+                let line_width = self.layout_engine.measure_text_width(&final_text, &style);
+                let content_width = page_width_pt - page_layout.margins.left - page_layout.margins.right;
+
+                match style.text_align {
+                    TextAlign::Right => x = page_width_pt - page_layout.margins.right - line_width,
+                    TextAlign::Center => x = page_layout.margins.left + (content_width - line_width) / 2.0,
+                    _ => {}
                 }
+
                 let matrix = TextMatrix::Translate(Pt(x), Pt(y));
                 footer_ops.push(Op::SetTextMatrix { matrix });
-                footer_ops.push(Op::WriteText {
-                    items: vec![TextItem::Text(final_text)],
-                    font: font_id,
-                });
+                footer_ops.push(Op::WriteText { items: vec![TextItem::Text(final_text)], font: font_id });
                 footer_ops.push(Op::EndTextSection);
-
                 page.ops.extend(footer_ops);
             }
         }
 
         self.document.pages = pages;
         let mut warnings = Vec::new();
-        self.document.save_writer(
-            &mut writer,
-            &PdfSaveOptions::default(),
-            &mut warnings,
-        );
+        self.document.save_writer(&mut writer, &PdfSaveOptions::default(), &mut warnings);
         Ok(())
     }
 }
 
-impl<'a> PdfDocumentRenderer<'a> {
-    fn to_pdf_color(c: &Color) -> printpdf::color::Color {
-        printpdf::color::Color::Rgb(Rgb::new(
-            c.r as f32 / 255.0,
-            c.g as f32 / 255.0,
-            c.b as f32 / 255.0,
-            None,
-        ))
+/// A helper struct to manage the state of PDF operations for a single page.
+struct PageOpsRenderer<'a> {
+    doc_renderer: &'a mut PdfDocumentRenderer,
+    page_height_pt: f32,
+    ops: Vec<Op>,
+    is_text_section_open: bool,
+    current_font_id: Option<FontId>,
+    current_font_size: Option<f32>,
+    current_fill_color: Option<printpdf::color::Color>,
+}
+
+impl<'a> PageOpsRenderer<'a> {
+    fn new(doc_renderer: &'a mut PdfDocumentRenderer, page_layout: &'a PageLayout) -> Self {
+        let (_, page_height_pt) = PdfDocumentRenderer::get_page_dimensions_pt(page_layout);
+        Self {
+            doc_renderer,
+            page_height_pt,
+            ops: Vec::new(),
+            is_text_section_open: false,
+            current_font_id: None,
+            current_font_size: None,
+            current_fill_color: None,
+        }
     }
 
-    fn render_image(
-        &mut self,
-        image_el: &ImageElement,
-        positioned: &PositionedElement,
-    ) -> Result<(), RenderError> {
+    fn into_ops(mut self) -> Vec<Op> {
         self.close_text_section_if_open();
+        self.ops
+    }
 
-        let (xobj_id, (img_w, img_h)) =
-            if let Some((id, dims)) = self.image_xobjects.get(&image_el.src) {
-                (id.clone(), *dims)
-            } else {
-                let mut warnings = Vec::new();
-                let raw_image = printpdf::image::RawImage::decode_from_bytes(
-                    &image_el.image_data,
-                    &mut warnings,
-                )
-                    .map_err(|e| {
-                        RenderError::InternalPdfError(format!(
-                            "Failed to decode image data for {}: {}",
-                            image_el.src, e
-                        ))
-                    })?;
+    fn close_text_section_if_open(&mut self) {
+        if self.is_text_section_open {
+            self.ops.push(Op::EndTextSection);
+            self.is_text_section_open = false;
+        }
+    }
 
-                let dims = (raw_image.width as u32, raw_image.height as u32);
-                let xobj_id = XObjectId::new();
-                self.document
-                    .resources
-                    .xobjects
-                    .map
-                    .insert(xobj_id.clone(), XObject::Image(raw_image));
+    fn to_pdf_color(c: &Color) -> printpdf::color::Color {
+        printpdf::color::Color::Rgb(Rgb::new(c.r as f32 / 255.0, c.g as f32 / 255.0, c.b as f32 / 255.0, None))
+    }
 
-                self.image_xobjects
-                    .insert(image_el.src.clone(), (xobj_id.clone(), dims));
-                (xobj_id, dims)
+    // Add a helper for drawing debug rectangles
+    fn draw_debug_rectangle(&mut self, x: f32, y: f32, width: f32, height: f32, color: Rgb) {
+        self.close_text_section_if_open(); // Ensure text section is closed before drawing shapes
+        let pdf_y = self.page_height_pt - (y + height); // Convert top-left to PDF bottom-left origin
+
+        let polygon = Polygon {
+            rings: vec![PolygonRing {
+                points: vec![
+                    LinePoint { p: Point { x: Pt(x), y: Pt(pdf_y) }, bezier: false },
+                    LinePoint { p: Point { x: Pt(x + width), y: Pt(pdf_y) }, bezier: false },
+                    LinePoint { p: Point { x: Pt(x + width), y: Pt(pdf_y + height) }, bezier: false },
+                    LinePoint { p: Point { x: Pt(x), y: Pt(pdf_y + height) }, bezier: false },
+                ],
+            }],
+            mode: PaintMode::FillStroke, // Corrected from FillAndStroke
+            winding_order: WindingOrder::EvenOdd,
+        };
+        self.ops.push(Op::SetFillColor { col: printpdf::color::Color::Rgb(color.clone()) });
+        self.ops.push(Op::SetOutlineColor { col: printpdf::color::Color::Rgb(color) }); // Corrected from SetStrokeColor
+        self.ops.push(Op::SetOutlineThickness { pt: Pt(0.2) }); // Corrected from SetLineWidth
+        self.ops.push(Op::DrawPolygon { polygon });
+    }
+
+    fn render_element(&mut self, element: &PositionedElement) -> Result<(), RenderError> {
+        // Render debug layout overlay if enabled via environment variable
+        if std::env::var("PETTY_DEBUG_LAYOUT").is_ok() {
+            let debug_color = match element.element {
+                LayoutElement::Text(_) => Rgb::new(1.0, 0.0, 0.0, None), // Red for text (alpha not direct in Rgb)
+                LayoutElement::Rectangle(_) => Rgb::new(0.0, 0.0, 1.0, None), // Blue for generic blocks (backgrounds)
+                LayoutElement::Image(_) => Rgb::new(0.0, 1.0, 0.0, None), // Green for images
             };
+            // Note: drawing debug rectangle before content, so close text section if open.
+            self.draw_debug_rectangle(element.x, element.y, element.width, element.height, debug_color);
+        }
 
-        let page_layout = self.current_page_layout.as_ref().unwrap();
-        let (_width_pt, page_height_pt) = Self::get_page_dimensions_pt(page_layout);
+        // Render element's actual background first, if it's not a self-rendering rectangle.
+        // `LayoutElement::Rectangle` is often used *for* a background, so we don't want to draw it twice.
+        if element.style.background_color.is_some() && !matches!(element.element, LayoutElement::Rectangle(_)) {
+            self.render_rectangle(element)?;
+        }
 
-        // The position needs to be the bottom-left corner of the image
-        let x = positioned.x;
-        let y = page_height_pt - (positioned.y + positioned.height);
+        match &element.element {
+            LayoutElement::Text(text) => self.render_text(text, element)?,
+            LayoutElement::Rectangle(_) => {
+                // If this is specifically a LayoutElement::Rectangle, then render it.
+                // It's not a background *of another element*, but the element itself.
+                self.render_rectangle(element)?;
+            }
+            LayoutElement::Image(image) => self.render_image(image, element)?,
+        }
+        Ok(())
+    }
 
-        // The `UseXobject` operation ignores the CTM and uses its own transform.
-        // We set a DPI of 72, which makes one pixel equal to one point. Then,
-        // we can use the scale_x/scale_y factors to scale the image from its
-        // intrinsic pixel dimensions to the target point dimensions on the page.
+    fn render_image(&mut self, image_el: &crate::layout::ImageElement, positioned: &PositionedElement) -> Result<(), RenderError> {
+        self.close_text_section_if_open();
+        let (xobj_id, (img_w, img_h)) = if let Some(cached) = self.doc_renderer.image_xobjects.get(&image_el.src) {
+            (cached.0.clone(), cached.1)
+        } else {
+            let mut warnings = Vec::new();
+            let raw_image = printpdf::image::RawImage::decode_from_bytes(&image_el.image_data, &mut warnings)
+                .map_err(|e| RenderError::InternalPdfError(format!("Failed to decode image data for {}: {}", image_el.src, e)))?;
+            let dims = (raw_image.width as u32, raw_image.height as u32);
+            let xobj_id = XObjectId::new();
+            self.doc_renderer.document.resources.xobjects.map.insert(xobj_id.clone(), XObject::Image(raw_image));
+            self.doc_renderer.image_xobjects.insert(image_el.src.clone(), (xobj_id.clone(), dims));
+            (xobj_id, dims)
+        };
+        let y = self.page_height_pt - (positioned.y + positioned.height);
         let transform = XObjectTransform {
-            translate_x: Some(Pt(x)),
+            translate_x: Some(Pt(positioned.x)),
             translate_y: Some(Pt(y)),
             scale_x: Some(positioned.width / (img_w as f32)),
             scale_y: Some(positioned.height / (img_h as f32)),
-            rotate: None,
-            dpi: Some(72.0),
+            rotate: None, dpi: Some(72.0),
         };
-
-        self.current_page_ops.push(Op::UseXobject {
-            id: xobj_id,
-            transform,
-        });
+        self.ops.push(Op::UseXobject { id: xobj_id, transform });
         Ok(())
     }
 
-    fn render_rectangle(
-        &mut self,
-        _rect: &RectElement,
-        positioned: &PositionedElement,
-    ) -> Result<(), RenderError> {
+    fn render_rectangle(&mut self, positioned: &PositionedElement) -> Result<(), RenderError> {
         self.close_text_section_if_open();
-
-        let style = &positioned.style;
-        if let Some(bg_color) = &style.background_color {
-            let page_layout = self.current_page_layout.as_ref().unwrap();
-            let (_width_pt, page_height_pt) = Self::get_page_dimensions_pt(page_layout);
-            let x = positioned.x;
-            let y = page_height_pt - (positioned.y + positioned.height);
-            let width = positioned.width;
-            let height = positioned.height;
-
+        if let Some(bg_color) = &positioned.style.background_color {
+            let y = self.page_height_pt - (positioned.y + positioned.height);
             let polygon = Polygon {
                 rings: vec![PolygonRing {
                     points: vec![
-                        LinePoint {
-                            p: Point { x: Pt(x), y: Pt(y) },
-                            bezier: false,
-                        },
-                        LinePoint {
-                            p: Point {
-                                x: Pt(x + width),
-                                y: Pt(y),
-                            },
-                            bezier: false,
-                        },
-                        LinePoint {
-                            p: Point {
-                                x: Pt(x + width),
-                                y: Pt(y + height),
-                            },
-                            bezier: false,
-                        },
-                        LinePoint {
-                            p: Point {
-                                x: Pt(x),
-                                y: Pt(y + height),
-                            },
-                            bezier: false,
-                        },
+                        LinePoint { p: Point { x: Pt(positioned.x), y: Pt(y) }, bezier: false },
+                        LinePoint { p: Point { x: Pt(positioned.x + positioned.width), y: Pt(y) }, bezier: false },
+                        LinePoint { p: Point { x: Pt(positioned.x + positioned.width), y: Pt(y + positioned.height) }, bezier: false },
+                        LinePoint { p: Point { x: Pt(positioned.x), y: Pt(y + positioned.height) }, bezier: false },
                     ],
                 }],
-                mode: PaintMode::Fill,
-                winding_order: WindingOrder::EvenOdd,
+                mode: PaintMode::Fill, winding_order: WindingOrder::EvenOdd,
             };
-
-            self.current_page_ops
-                .push(Op::SetFillColor {
-                    col: Self::to_pdf_color(bg_color),
-                });
-            self.current_page_ops.push(Op::DrawPolygon { polygon });
+            self.ops.push(Op::SetFillColor { col: Self::to_pdf_color(bg_color) });
+            self.ops.push(Op::DrawPolygon { polygon });
         }
         Ok(())
     }
 
-    fn render_text(
-        &mut self,
-        text: &TextElement,
-        positioned: &PositionedElement,
-        layout_engine: &LayoutEngine,
-    ) -> Result<(), RenderError> {
+    fn render_text(&mut self, text: &crate::layout::TextElement, positioned: &PositionedElement) -> Result<(), RenderError> {
+        if text.content.is_empty() { return Ok(()); }
         let style = &positioned.style;
-        let font_id = self.get_font(&style.font_family);
+        let font_id = self.doc_renderer.get_font(&style.font_family);
         let fill_color = Self::to_pdf_color(&style.color);
 
-        if let Some(bg_color) = &style.background_color {
-            self.close_text_section_if_open();
-            // This is a simplified version of rectangle drawing.
-            // A full implementation would be in `render_rectangle`.
-            // Here, we just draw the background for this specific text element.
-            let page_layout = self.current_page_layout.as_ref().unwrap();
-            let (_width_pt, page_height_pt) = Self::get_page_dimensions_pt(page_layout);
-            let x = positioned.x;
-            let y = page_height_pt - (positioned.y + positioned.height);
-            let width = positioned.width;
-            let height = positioned.height;
-            let polygon = Polygon { rings: vec![PolygonRing { points: vec![ LinePoint { p: Point { x: Pt(x), y: Pt(y) }, bezier: false }, LinePoint { p: Point { x: Pt(x + width), y: Pt(y) }, bezier: false }, LinePoint { p: Point { x: Pt(x + width), y: Pt(y + height) }, bezier: false }, LinePoint { p: Point { x: Pt(x), y: Pt(y + height) }, bezier: false }, ], }], mode: PaintMode::Fill, winding_order: WindingOrder::EvenOdd, };
-            self.current_page_ops
-                .push(Op::SetFillColor {
-                    col: Self::to_pdf_color(bg_color),
-                });
-            self.current_page_ops.push(Op::DrawPolygon { polygon });
+        if !self.is_text_section_open { self.ops.push(Op::StartTextSection); self.is_text_section_open = true; }
+        if self.current_fill_color.as_ref() != Some(&fill_color) { self.ops.push(Op::SetFillColor { col: fill_color.clone() }); self.current_fill_color = Some(fill_color); }
+        if self.current_font_id.as_ref() != Some(&font_id) || self.current_font_size != Some(style.font_size) {
+            self.ops.push(Op::SetFontSize { size: Pt(style.font_size), font: font_id.clone() });
+            self.current_font_id = Some(font_id.clone()); self.current_font_size = Some(style.font_size);
         }
 
-        if !self.is_text_section_open {
-            self.current_page_ops.push(Op::StartTextSection);
-            self.is_text_section_open = true;
-            self.current_fill_color = None;
-            self.current_font_id = None;
-            self.current_font_size = None;
-        }
+        // The layout engine now provides perfectly positioned lines. We just need to draw them.
+        // The baseline is typically slightly below the top 'y' coordinate.
+        let baseline_y = positioned.y + style.font_size * 0.8;
+        let pdf_y = self.page_height_pt - baseline_y;
 
-        if self.current_fill_color.as_ref() != Some(&fill_color) {
-            self.current_page_ops
-                .push(Op::SetFillColor {
-                    col: fill_color.clone(),
-                });
-            self.current_fill_color = Some(fill_color);
-        }
-
-        if self.current_font_id.as_ref() != Some(&font_id)
-            || self.current_font_size != Some(style.font_size)
-        {
-            self.current_page_ops.push(Op::SetFontSize {
-                size: Pt(style.font_size),
-                font: font_id.clone(),
-            });
-            self.current_font_id = Some(font_id.clone());
-            self.current_font_size = Some(style.font_size);
-        }
-
-        let page_layout = self.current_page_layout.as_ref().unwrap();
-        let (_width_pt, page_height_pt) = Self::get_page_dimensions_pt(page_layout);
-        let content_width = positioned.width - style.padding.left - style.padding.right;
-        let lines = layout_engine.wrap_text(&text.content, style, content_width);
-
-        for (i, line) in lines.iter().enumerate() {
-            let mut x = positioned.x + style.padding.left;
-            let line_top_y = positioned.y + style.padding.top + (i as f32 * style.line_height);
-
-            if style.text_align != TextAlign::Left {
-                let line_width = layout_engine.measure_text_width(line, style);
-
-                match style.text_align {
-                    TextAlign::Right => {
-                        x = (positioned.x + positioned.width - style.padding.right) - line_width
-                    }
-                    TextAlign::Center => {
-                        x = positioned.x + style.padding.left + (content_width - line_width) / 2.0
-                    }
-                    _ => {}
-                }
-            }
-
-            let baseline_y = line_top_y + style.font_size * 0.8;
-            let pdf_y = page_height_pt - baseline_y;
-            let matrix = TextMatrix::Translate(Pt(x), Pt(pdf_y));
-            self.current_page_ops.push(Op::SetTextMatrix { matrix });
-            self.current_page_ops.push(Op::WriteText {
-                items: vec![TextItem::Text(line.clone())],
-                font: font_id.clone(),
-            });
-        }
+        let matrix = TextMatrix::Translate(Pt(positioned.x), Pt(pdf_y));
+        self.ops.push(Op::SetTextMatrix { matrix });
+        self.ops.push(Op::WriteText { items: vec![TextItem::Text(text.content.clone())], font: font_id.clone() });
 
         Ok(())
     }

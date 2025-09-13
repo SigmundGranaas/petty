@@ -1,42 +1,27 @@
 // src/parser/processor.rs
 use crate::error::PipelineError;
-use crate::idf::IDFEvent;
-use async_trait::async_trait;
+use crate::idf::LayoutUnit;
 use serde_json::Value;
-use tokio::sync::mpsc;
 
-/// A proxy that allows a parser to send events into the async pipeline channel.
-pub struct LayoutProcessorProxy<'a> {
-    tx: mpsc::Sender<IDFEvent<'a>>,
-}
-
-impl<'a> LayoutProcessorProxy<'a> {
-    pub fn new(tx: mpsc::Sender<IDFEvent<'a>>) -> Self {
-        Self { tx }
-    }
-    /// Asynchronously sends an event into the pipeline.
-    pub async fn process_event(&mut self, event: IDFEvent<'a>) -> Result<(), PipelineError> {
-        self.tx
-            .send(event)
-            .await
-            .map_err(|e| PipelineError::TemplateParseError(format!("Channel send error: {}", e)))
-    }
-}
-
-/// A trait for processing a template and data into a stream of layout events.
-/// This allows for multiple templating languages (e.g., JSON, XSLT) to be
-/// used interchangeably by the document generation pipeline.
-#[async_trait(?Send)]
-pub trait TemplateProcessor<'a> {
-    /// Asynchronously processes the given data with its configured template, feeding `IDFEvent`s
-    /// to the layout processor via the proxy.
+/// A trait for processing a template and data into a stream of `LayoutUnit`s.
+///
+/// This abstraction allows multiple templating languages (e.g., JSON, XSLT) to be
+/// used interchangeably by the document generation pipeline. An implementation's `process`
+/// method is responsible for parsing the input template against the provided data and
+/// producing an iterator, where each item represents one complete `sequence` tree.
+pub trait TemplateProcessor: Send {
+    /// Processes the template against the given data source.
     ///
     /// # Arguments
     /// * `data` - The source `serde_json::Value` to use for templating.
-    /// * `proxy` - The proxy to send events into the pipeline.
-    async fn process(
-        &mut self,
+    ///
+    /// # Returns
+    /// A `Result` containing a boxed iterator that yields `LayoutUnit`s. This design
+    /// supports the engine's streaming architecture by allowing the parser to lazily
+    /// produce document chunks (`sequence`s) as they are needed by the layout engine,
+    /// keeping memory usage low and predictable.
+    fn process<'a>(
+        &'a mut self,
         data: &'a Value,
-        proxy: &mut LayoutProcessorProxy<'a>,
-    ) -> Result<(), PipelineError>;
+    ) -> Result<Box<dyn Iterator<Item = Result<LayoutUnit, PipelineError>> + 'a + Send>, PipelineError>;
 }
