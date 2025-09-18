@@ -1,31 +1,30 @@
+// src/xpath/mod.rs
 use serde_json::Value;
 
 /// Selects JSON values based on a simple path.
-/// This is a simplified engine that supports three modes:
-/// 1. JSON Pointer (e.g., `/customers/0/name`)
-/// 2. Simple Key Lookup (e.g., `name` looks for a "name" key in the current object)
-/// 3. Current Context (e.g., `.` returns the current value itself)
+/// This engine supports:
+/// 1. Simple Key Lookup (e.g., `name` in the current object)
+/// 2. Relative JSON Pointer (e.g., `user/name` from the current object)
+/// 3. Absolute JSON Pointer (e.g., `/customers/0` from the root of the provided context)
+/// 4. Current Context (e.g., `.` returns the current value itself)
 pub fn select<'a>(context: &'a Value, path: &str) -> Vec<&'a Value> {
-    // Handle "current context" selector
     if path == "." {
         return vec![context];
     }
 
-    // Handle JSON Pointer paths
-    if path.starts_with('/') {
-        return context.pointer(path).map_or(vec![], |v| vec![v]);
-    }
+    // Unify path handling by always using the JSON pointer mechanism.
+    // The pointer is relative to the `context` Value.
+    // A path like "user/name" is transformed into "/user/name" for the pointer.
+    // A path like "items" is transformed into "/items".
+    let pointer_path = if path.starts_with('/') {
+        path.to_string()
+    } else {
+        format!("/{}", path)
+    };
 
-    // Handle simple key lookup on the current context if it's an object
-    if let Some(obj) = context.as_object() {
-        if let Some(value) = obj.get(path) {
-            return vec![value];
-        }
-    }
-
-    // If no match is found, return an empty vector
-    vec![]
+    context.pointer(&pointer_path).map_or(vec![], |v| vec![v])
 }
+
 
 /// Selects the first matching value and converts it to a `String`.
 pub fn select_as_string(context: &Value, path: &str) -> String {
@@ -85,6 +84,14 @@ mod tests {
         let result = select(&data, "/customers/1/name");
         assert_eq!(result, vec![&json!("Bob")]);
     }
+
+    #[test]
+    fn test_select_json_pointer_style_relative_path() {
+        let data = get_test_data();
+        let result = select(&data, "customers/0/name");
+        assert_eq!(result, vec![&json!("Alice")]);
+    }
+
 
     #[test]
     fn test_select_entire_object() {

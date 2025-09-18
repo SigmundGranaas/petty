@@ -69,6 +69,12 @@
       "url": "github.com/alexdoe/petty",
       "description": "A Rust-based document engine transforming JSON data into PDFs via XSLT or JSON stylesheets.",
       "technologies": "Rust, Tokio, Serde, PrintPDF, Quick-XML"
+    },
+    {
+      "name": "Forgero",
+      "url": "github.com/alexdoe/forgero",
+      "description": "A fabric based custom tool mod.",
+      "technologies": "Rust, Tokio, Serde, PrintPDF, Quick-XML"
     }
   ]
 }

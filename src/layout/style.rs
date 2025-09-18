@@ -3,7 +3,8 @@
 //! Style computation and management.
 
 use crate::stylesheet::{
-    Color, Dimension, FontStyle, FontWeight, Margins, PageSize, Stylesheet, TextAlign,
+    Border, Color, Dimension, ElementStyle, FontStyle, FontWeight, Margins, PageSize, Stylesheet,
+    TextAlign,
 };
 
 /// A fully resolved style with no optional values, ready for layout.
@@ -21,18 +22,34 @@ pub struct ComputedStyle {
     pub width: Option<Dimension>,
     pub height: Option<f32>,
     pub background_color: Option<Color>,
-    pub border: Option<crate::stylesheet::Border>,
+    pub border: Option<Border>,
+    pub border_bottom: Option<Border>,
 }
 
-/// Computes the style for a node by inheriting from its parent and applying
-/// any rules from the stylesheet that match its `style_name`.
+/// Computes the style for a node by inheriting from its parent, applying any named
+/// style from the stylesheet, and finally applying any inline style overrides.
 pub fn compute_style(
     stylesheet: &Stylesheet,
     style_name: Option<&str>,
+    style_override: Option<&ElementStyle>,
     parent_style: &ComputedStyle,
 ) -> ComputedStyle {
-    let inherited_style = parent_style.clone();
-    apply_style_rules(stylesheet, inherited_style, style_name)
+    // 1. Start with the inherited style from the parent.
+    let mut computed = parent_style.clone();
+
+    // 2. Apply the named style from the central stylesheet, if it exists.
+    if let Some(name) = style_name {
+        if let Some(named_style_def) = stylesheet.styles.get(name) {
+            apply_element_style(&mut computed, named_style_def);
+        }
+    }
+
+    // 3. Apply the inline style override, which has the highest precedence.
+    if let Some(override_style_def) = style_override {
+        apply_element_style(&mut computed, override_style_def);
+    }
+
+    computed
 }
 
 /// Returns the default style for the document root.
@@ -56,6 +73,7 @@ pub fn get_default_style() -> ComputedStyle {
         height: None,
         background_color: None,
         border: None,
+        border_bottom: None,
     }
 }
 
@@ -69,84 +87,83 @@ pub fn get_page_dimensions(stylesheet: &Stylesheet) -> (f32, f32) {
     }
 }
 
-/// Applies style rules from a stylesheet to a computed style.
-fn apply_style_rules(
-    stylesheet: &Stylesheet,
-    mut computed: ComputedStyle,
-    style_name: Option<&str>,
-) -> ComputedStyle {
-    if let Some(name) = style_name {
-        if let Some(style_def) = stylesheet.styles.get(name) {
-            if let Some(ff) = &style_def.font_family {
-                computed.font_family = ff.clone();
-            }
-            if let Some(fs) = style_def.font_size {
-                computed.font_size = fs;
-                if style_def.line_height.is_none() {
-                    computed.line_height = fs * 1.2;
-                }
-            }
-            if let Some(fw) = &style_def.font_weight {
-                computed.font_weight = fw.clone();
-            }
-            if let Some(fs) = &style_def.font_style {
-                computed.font_style = fs.clone();
-            }
-            if let Some(lh) = style_def.line_height {
-                computed.line_height = lh;
-            }
-            if let Some(ta) = &style_def.text_align {
-                computed.text_align = ta.clone();
-            }
-            if let Some(c) = &style_def.color {
-                computed.color = c.clone();
-            }
-            if let Some(m) = &style_def.margin {
-                computed.margin = m.clone();
-            }
-            if let Some(p) = &style_def.padding {
-                computed.padding = p.clone();
-            }
-            if let Some(w) = &style_def.width {
-                computed.width = Some(w.clone())
-            }
-            if let Some(h) = &style_def.height {
-                if let Dimension::Pt(h_pt) = h {
-                    computed.height = Some(*h_pt)
-                }
-            }
-            if let Some(bg) = &style_def.background_color {
-                computed.background_color = Some(bg.clone());
-            }
-            if let Some(b) = &style_def.border {
-                computed.border = Some(b.clone());
-            }
+/// Applies style rules from an `ElementStyle` definition to a `ComputedStyle`.
+fn apply_element_style(computed: &mut ComputedStyle, style_def: &ElementStyle) {
+    if let Some(ff) = &style_def.font_family {
+        computed.font_family = ff.clone();
+    }
+    if let Some(fs) = style_def.font_size {
+        computed.font_size = fs;
+        if style_def.line_height.is_none() {
+            computed.line_height = fs * 1.2;
         }
     }
-    computed
+    if let Some(fw) = &style_def.font_weight {
+        computed.font_weight = fw.clone();
+    }
+    if let Some(fs) = &style_def.font_style {
+        computed.font_style = fs.clone();
+    }
+    if let Some(lh) = style_def.line_height {
+        computed.line_height = lh;
+    }
+    if let Some(ta) = &style_def.text_align {
+        computed.text_align = ta.clone();
+    }
+    if let Some(c) = &style_def.color {
+        computed.color = c.clone();
+    }
+    if let Some(m) = &style_def.margin {
+        computed.margin = m.clone();
+    }
+    if let Some(p) = &style_def.padding {
+        computed.padding = p.clone();
+    }
+    if let Some(w) = &style_def.width {
+        computed.width = Some(w.clone())
+    }
+    if let Some(h) = &style_def.height {
+        if let Dimension::Pt(h_pt) = h {
+            computed.height = Some(*h_pt)
+        }
+    }
+    if let Some(bg) = &style_def.background_color {
+        computed.background_color = Some(bg.clone());
+    }
+    if let Some(b) = &style_def.border {
+        computed.border = Some(b.clone());
+    }
+    if let Some(b) = &style_def.border_bottom {
+        computed.border_bottom = Some(b.clone());
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::stylesheet::ElementStyle; // Corrected import for ElementStyle
+    use crate::stylesheet::ElementStyle;
     use std::collections::HashMap;
 
     fn create_test_stylesheet() -> Stylesheet {
         let mut styles = HashMap::new();
         styles.insert(
             "override".to_string(),
-            ElementStyle { // Use ElementStyle here
+            ElementStyle {
                 font_size: Some(20.0),
-                color: Some(Color { r: 255, g: 0, b: 0, a: 1.0 }),
+                color: Some(Color {
+                    r: 255,
+                    g: 0,
+                    b: 0,
+                    a: 1.0,
+                }),
                 ..Default::default()
             },
         );
         Stylesheet {
             styles,
             page: Default::default(),
-            templates: HashMap::new(), // Added missing field
-            page_sequences: HashMap::new(), // Added missing field
+            templates: HashMap::new(),
+            page_sequences: HashMap::new(),
         }
     }
 
@@ -161,7 +178,7 @@ mod tests {
     fn test_style_application() {
         let stylesheet = create_test_stylesheet();
         let parent_style = get_default_style();
-        let computed = compute_style(&stylesheet, Some("override"), &parent_style);
+        let computed = compute_style(&stylesheet, Some("override"), None, &parent_style);
 
         assert_eq!(computed.font_size, 20.0);
         assert_eq!(computed.line_height, 24.0); // 20.0 * 1.2
@@ -173,9 +190,39 @@ mod tests {
     fn test_no_style_name() {
         let stylesheet = create_test_stylesheet();
         let parent_style = get_default_style();
-        let computed = compute_style(&stylesheet, None, &parent_style);
+        let computed = compute_style(&stylesheet, None, None, &parent_style);
 
         // Should be identical to the parent style
         assert_eq!(computed, parent_style);
+    }
+
+    #[test]
+    fn test_style_cascade_override() {
+        let stylesheet = create_test_stylesheet();
+        let override_style = ElementStyle {
+            font_size: Some(30.0), // Override "override" style
+            font_weight: Some(FontWeight::Bold), // New property
+            ..Default::default()
+        };
+        let parent_style = get_default_style();
+
+        // Named style is "override" which sets font-size: 20.0
+        let computed = compute_style(
+            &stylesheet,
+            Some("override"),
+            Some(&override_style),
+            &parent_style,
+        );
+
+        assert_eq!(computed.font_size, 30.0, "Inline override should win");
+        assert_eq!(
+            computed.font_weight,
+            FontWeight::Bold,
+            "Inline override should add properties"
+        );
+        assert_eq!(
+            computed.color.r, 255,
+            "Named style property should still apply"
+        );
     }
 }

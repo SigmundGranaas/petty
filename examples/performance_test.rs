@@ -4,6 +4,7 @@ use serde_json::{json, Value};
 use std::env;
 use std::fs;
 use std::time::Instant;
+use rand::{rng};
 
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]
@@ -18,7 +19,7 @@ const MOCK_ITEMS: &[&str] = &[
 /// Generates a large, complex JSON dataset in memory.
 fn generate_perf_test_data(num_records: usize, max_items_per_record: usize) -> Value {
     println!("Generating {} records in memory...", num_records);
-    let mut rng = rand::rng();
+    let mut rng = rng();
     let records: Vec<Value> = (0..num_records).map(|i| {
         let num_items = rng.random_range(2..=max_items_per_record);
         let mut total = 0.0;

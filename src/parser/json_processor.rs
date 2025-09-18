@@ -50,6 +50,7 @@ impl JsonTemplateParser {
                     };
                     nodes.push(IRNode::Paragraph {
                         style_name: style.clone(),
+                        style_override: None,
                         children: vec![InlineNode::Text(rendered_content)],
                     });
                 }
@@ -57,6 +58,7 @@ impl JsonTemplateParser {
                     // Rectangles are typically style-only, represented as a styled Block.
                     nodes.push(IRNode::Block {
                         style_name: style.clone(),
+                        style_override: None,
                         children: vec![],
                     });
                 }
@@ -78,6 +80,7 @@ impl JsonTemplateParser {
                     for item_context in data_items {
                         nodes.push(IRNode::Block {
                             style_name: style.clone(),
+                            style_override: None,
                             children: self.build_children(children, item_context)?,
                         });
                     }
@@ -112,6 +115,7 @@ impl JsonTemplateParser {
                     nodes.push(IRNode::Image {
                         src: rendered_src,
                         style_name: style.clone(),
+                        style_override: None,
                         data: None, // Will be populated by ResourceManager
                     });
                 }
@@ -140,30 +144,45 @@ impl JsonTemplateParser {
             cells: columns
                 .iter()
                 .map(|col| TableCell {
-                    style_override: col.header_style.clone(),
+                    style_name: col.header_style.clone(),
+                    style_override: None,
                     children: vec![IRNode::Paragraph {
                         style_name: None, // Inherits from cell style
+                        style_override: None,
                         children: vec![InlineNode::Text(col.header.clone())],
                     }],
                 })
                 .collect(),
         }];
-        let header = Some(Box::new(TableHeader { rows: header_rows }));
+        let header = if columns.iter().any(|c| !c.header.is_empty()) {
+            Some(Box::new(TableHeader { rows: header_rows }))
+        } else {
+            None
+        };
+
 
         // Build body
-        let rows_data = context
-            .pointer(data_source)
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| {
-                PipelineError::TemplateParseError(format!(
-                    "Table data source '{}' not found or is not an array in context",
-                    data_source
-                ))
-            })?;
+        let rows_data: Vec<&Value> = if data_source == "/" || data_source == "." {
+            // Special case: if data_source is the root, treat the context as a single-row data source.
+            vec![context]
+        } else {
+            context
+                .pointer(data_source)
+                .and_then(|v| v.as_array())
+                .ok_or_else(|| {
+                    PipelineError::TemplateParseError(format!(
+                        "Table data source '{}' not found or is not an array in context",
+                        data_source
+                    ))
+                })?
+                .iter()
+                .collect()
+        };
+
 
         let body_rows: Vec<TableRow> = rows_data
             .iter()
-            .map(|row_item| {
+            .map(|&row_item| {
                 let prefix_str = row_style_prefix_field
                     .as_ref()
                     .and_then(|field| row_item.pointer(field).and_then(|v| v.as_str()));
@@ -198,9 +217,11 @@ impl JsonTemplateParser {
                         };
 
                         Ok(TableCell {
-                            style_override: final_style,
+                            style_name: final_style,
+                            style_override: None,
                             children: vec![IRNode::Paragraph {
                                 style_name: None,
+                                style_override: None,
                                 children: vec![InlineNode::Text(cell_text.into_owned())],
                             }],
                         })
@@ -223,11 +244,39 @@ impl JsonTemplateParser {
 
         Ok(IRNode::Table {
             style_name: style.clone(),
+            style_override: None,
             columns: col_defs,
             calculated_widths: vec![], // To be filled by layout engine
             header,
             body,
         })
+    }
+}
+
+/// A lazy iterator that builds one `LayoutUnit` at a time.
+struct JsonIterator<'a> {
+    parser: &'a JsonTemplateParser,
+    items_to_process: vec::IntoIter<(&'a Template, &'a Value)>,
+}
+
+impl<'a> Iterator for JsonIterator<'a> {
+    type Item = Result<LayoutUnit, PipelineError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (template, item_data) = self.items_to_process.next()?;
+
+        let result = self
+            .parser
+            .build_children(&template.children, item_data)
+            .map(|children| {
+                let tree = IRNode::Root(children);
+                LayoutUnit {
+                    tree,
+                    context: item_data.clone(),
+                }
+            });
+
+        Some(result)
     }
 }
 
@@ -243,7 +292,7 @@ impl TemplateProcessor for JsonTemplateParser {
             ));
         }
 
-        let mut layout_units = Vec::new();
+        let mut items_to_process = Vec::new();
 
         for (_seq_name, sequence) in &self.stylesheet.page_sequences {
             let template: &Template =
@@ -271,15 +320,99 @@ impl TemplateProcessor for JsonTemplateParser {
             };
 
             for item_data in data_items {
-                let children = self.build_children(&template.children, item_data)?;
-                let tree = IRNode::Root(children);
-                layout_units.push(Ok(LayoutUnit {
-                    tree,
-                    context: item_data.clone(),
-                }));
+                items_to_process.push((template, item_data));
             }
         }
 
-        Ok(Box::new(layout_units.into_iter()))
+        Ok(Box::new(JsonIterator {
+            parser: self,
+            items_to_process: items_to_process.into_iter(),
+        }))
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::stylesheet::{PageSequence, Template};
+    use serde_json::json;
+    use std::collections::HashMap;
+
+    fn create_test_stylesheet(
+        template_name: &str,
+        data_source: &str,
+        template: Template,
+    ) -> Stylesheet {
+        let mut templates = HashMap::new();
+        templates.insert(template_name.to_string(), template);
+
+        let mut page_sequences = HashMap::new();
+        page_sequences.insert(
+            "main".to_string(),
+            PageSequence {
+                template: template_name.to_string(),
+                data_source: data_source.to_string(),
+            },
+        );
+
+        Stylesheet {
+            templates,
+            page_sequences,
+            ..Default::default()
+        }
+    }
+
+    fn generate_large_test_data(count: usize) -> Value {
+        let records: Vec<Value> = (0..count).map(|i| json!({ "id": i })).collect();
+        json!({ "records": records })
+    }
+
+    #[test]
+    fn test_json_parser_is_lazy_and_streams_data() {
+        let num_records = 10_000;
+        let data = generate_large_test_data(num_records);
+
+        let template = Template {
+            name: "recordPage".to_string(),
+            children: vec![TemplateElement::Text {
+                content: "ID: {{id}}".to_string(),
+                style: None,
+            }],
+        };
+
+        let stylesheet = create_test_stylesheet("recordPage", "/records", template);
+        let handlebars = Handlebars::new();
+        let mut parser = JsonTemplateParser::new(stylesheet, handlebars);
+
+        // The `process` call should be very fast as it only sets up the iterator.
+        let mut iterator_result = parser.process(&data).unwrap();
+
+        // Consume the iterator and verify its output.
+        let mut count = 0;
+        let mut first_context: Option<Value> = None;
+        let mut last_context: Option<Value> = None;
+
+        while let Some(item_result) = iterator_result.next() {
+            let layout_unit = item_result.expect("LayoutUnit should be generated successfully");
+            if count == 0 {
+                first_context = Some(layout_unit.context.clone());
+            }
+            last_context = Some(layout_unit.context.clone());
+            count += 1;
+        }
+
+        // Assert that the iterator produced one LayoutUnit for each record.
+        assert_eq!(
+            count, num_records,
+            "The iterator should produce one LayoutUnit per record"
+        );
+
+        // Assert the context of the first and last items to ensure correct data processing.
+        assert_eq!(first_context, Some(json!({"id": 0})));
+        assert_eq!(
+            last_context,
+            Some(json!({"id": num_records - 1}))
+        );
     }
 }

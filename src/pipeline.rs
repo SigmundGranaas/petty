@@ -122,12 +122,12 @@ impl DocumentPipeline {
                 let page_iterator = layout_engine.paginate_tree(&layout_unit)?;
 
                 for page_elements in page_iterator {
-                    renderer.render_page(&layout_unit.context, page_elements)?;
+                    renderer.render_page(&layout_unit.context, page_elements, &consumer_template_engine)?;
                 }
             }
 
             // The renderer's finalize method is blocking, which is fine in a std::thread.
-            renderer.finalize(writer, &consumer_template_engine)?;
+            renderer.finalize(writer)?;
 
             Ok::<(), PipelineError>(())
         });

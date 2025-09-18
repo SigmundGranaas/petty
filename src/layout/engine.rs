@@ -7,6 +7,7 @@ use super::style::{self, ComputedStyle};
 use super::table;
 use super::text;
 use super::{IRNode, LayoutUnit, PipelineError, Stylesheet};
+use crate::stylesheet::ElementStyle;
 
 /// The main layout engine. It is responsible for orchestrating the multi-pass
 /// layout algorithm on a single `IRNode` tree.
@@ -87,9 +88,10 @@ impl LayoutEngine {
     pub fn compute_style(
         &self,
         style_name: Option<&str>,
+        style_override: Option<&ElementStyle>,
         parent_style: &ComputedStyle,
     ) -> ComputedStyle {
-        style::compute_style(&self.stylesheet, style_name, parent_style)
+        style::compute_style(&self.stylesheet, style_name, style_override, parent_style)
     }
 
     pub fn get_default_style(&self) -> ComputedStyle {
@@ -106,7 +108,7 @@ impl LayoutEngine {
 mod tests {
     use super::*;
     use crate::idf::{InlineNode, IRNode, LayoutUnit};
-    use crate::stylesheet::{ElementStyle, Stylesheet}; // Corrected import for ElementStyle
+    use crate::stylesheet::{ElementStyle, Stylesheet};
     use serde_json::Value;
     use std::collections::HashMap;
 
@@ -114,7 +116,7 @@ mod tests {
         let mut styles = HashMap::new();
         styles.insert(
             "h1".to_string(),
-            ElementStyle { // Use ElementStyle here
+            ElementStyle {
                 font_size: Some(24.0),
                 ..Default::default()
             },
@@ -122,8 +124,8 @@ mod tests {
         let stylesheet = Stylesheet {
             styles,
             page: Default::default(),
-            templates: HashMap::new(), // Added missing field
-            page_sequences: HashMap::new(), // Added missing field
+            templates: HashMap::new(),
+            page_sequences: HashMap::new(),
         };
         LayoutEngine::new(stylesheet)
     }
@@ -133,6 +135,7 @@ mod tests {
         let engine = create_test_engine();
         let tree = IRNode::Root(vec![IRNode::Paragraph {
             style_name: None,
+            style_override: None,
             children: vec![InlineNode::Text("Hello World".to_string())],
         }]);
         let layout_unit = LayoutUnit {

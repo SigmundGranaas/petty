@@ -1,3 +1,4 @@
+// src/layout/elements.rs
 
 //! Defines the concrete, drawable elements that are the output of the layout engine.
 
@@ -31,6 +32,8 @@ pub enum LayoutElement {
 pub struct TextElement {
     /// The final, wrapped text content. May contain newlines.
     pub content: String,
+    /// If present, this text is a hyperlink to the given URL.
+    pub href: Option<String>,
 }
 
 /// Represents a simple rectangle, typically used for backgrounds, borders, or rules.

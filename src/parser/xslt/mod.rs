@@ -1,3 +1,6 @@
+// src/parser/xslt/mod.rs
+
+// src/parser/xslt/mod.rs
 mod builder;
 mod util;
 
@@ -134,7 +137,7 @@ impl<'a> XsltIterator<'a> {
             Vec::new()
         };
 
-        log::debug!(
+        log::info!(
             "Found <page-sequence select=\"{}\">, yielding {} sequences.",
             path,
             data_items.len()
@@ -154,10 +157,10 @@ impl<'a> Iterator for XsltIterator<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let context = self.data_iterator.next()?;
-        log::debug!("Building next sequence tree...");
+        log::debug!("Building next sequence tree with context: {}", serde_json::to_string(context).unwrap_or_default());
 
         // Each sequence gets its own builder instance.
-        let mut builder = TreeBuilder::new(self.stylesheet, &self.template_engine);
+        let mut builder = TreeBuilder::new(&self.template_engine);
 
         // Parse the captured template fragment for the current data context.
         let result = builder.build_tree_from_xml_str(&self.sequence_template, context);
@@ -177,7 +180,7 @@ impl<'a> Iterator for XsltIterator<'a> {
 
 /// A utility to capture the inner raw XML of a node.
 /// Assumes the reader is positioned after the Start tag.
-fn capture_inner_xml<B: BufRead>(
+pub(crate) fn capture_inner_xml<B: BufRead>(
     reader: &mut Reader<B>,
     tag_name: QName,
 ) -> Result<String, PipelineError> {
@@ -189,6 +192,8 @@ fn capture_inner_xml<B: BufRead>(
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(XmlEvent::Start(e)) => {
+                // The original tag was already consumed, so the first tag with this name
+                // increases the depth.
                 if e.name() == tag_name {
                     depth += 1;
                 }
@@ -197,8 +202,10 @@ fn capture_inner_xml<B: BufRead>(
             Ok(XmlEvent::End(e)) => {
                 if e.name() == tag_name {
                     if depth == 0 {
+                        // This is the closing tag for the original node.
                         break;
                     }
+                    // This is a closing tag for a nested node of the same name.
                     depth -= 1;
                 }
                 writer.write_event(XmlEvent::End(e))?;
@@ -217,4 +224,121 @@ fn capture_inner_xml<B: BufRead>(
     }
     drop(writer);
     Ok(String::from_utf8(writer_buf)?)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::idf::InlineNode;
+    use handlebars::Handlebars;
+    use serde_json::json;
+
+    fn generate_large_test_data(count: usize) -> Value {
+        let records: Vec<Value> = (0..count).map(|i| json!({ "id": i })).collect();
+        json!({ "records": records })
+    }
+
+    #[test]
+    fn test_xslt_parser_is_lazy_and_streams_data() {
+        let num_records = 10_000;
+        let data = generate_large_test_data(num_records);
+
+        let xslt_content = r#"
+            <xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:fo="http://www.w3.org/1999/XSL/Format">
+                <fo:simple-page-master page-width="8.5in" page-height="11in" />
+                <xsl:template match="/">
+                    <page-sequence select="records">
+                        <container>
+                            <text>Record ID: <xsl:value-of select="id"/></text>
+                        </container>
+                    </page-sequence>
+                </xsl:template>
+            </xsl:stylesheet>
+        "#;
+
+        let stylesheet = Stylesheet::from_xslt(xslt_content).unwrap();
+        let handlebars = Handlebars::new();
+        let mut parser = XsltTemplateParser::new(xslt_content.to_string(), stylesheet, handlebars);
+
+        // `process` should return quickly, creating the iterator.
+        let mut iterator_result = parser.process(&data).unwrap();
+
+        // Consume the iterator.
+        let mut count = 0;
+        let mut first_context: Option<Value> = None;
+        let mut last_context: Option<Value> = None;
+
+        while let Some(item_result) = iterator_result.next() {
+            let layout_unit = item_result.expect("LayoutUnit should be generated successfully");
+            if count == 0 {
+                first_context = Some(layout_unit.context.clone());
+            }
+            last_context = Some(layout_unit.context.clone());
+            count += 1;
+        }
+
+        // Assert that the iterator produced one LayoutUnit for each record.
+        assert_eq!(count, num_records, "The iterator should produce one LayoutUnit per record");
+
+        // Assert the context of the first and last items.
+        assert_eq!(first_context, Some(json!({"id": 0})));
+        assert_eq!(last_context, Some(json!({"id": num_records - 1})));
+    }
+
+    #[test]
+    fn test_xslt_perf_template_iteration() {
+        let data = json!({
+            "records": [
+                { "user": { "account": "ACC-1" } },
+                { "user": { "account": "ACC-2" } }
+            ]
+        });
+
+        // A simplified version of the perf_test_template.xsl
+        let xslt_content = r#"
+            <xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:fo="http://www.w3.org/1999/XSL/Format">
+                <fo:simple-page-master page-width="8.5in" page-height="11in" />
+                <xsl:template match="/">
+                    <page-sequence select="records">
+                        <text>Account: <xsl:value-of select="user/account"/></text>
+                    </page-sequence>
+                </xsl:template>
+            </xsl:stylesheet>
+        "#;
+
+        let stylesheet = Stylesheet::from_xslt(xslt_content).unwrap();
+        let handlebars = Handlebars::new();
+        let mut parser = XsltTemplateParser::new(xslt_content.to_string(), stylesheet, handlebars);
+
+        let mut iterator = parser.process(&data).unwrap();
+
+        // Check first layout unit
+        let unit1 = iterator.next().unwrap().unwrap();
+        assert_eq!(unit1.context, json!({ "user": { "account": "ACC-1" } }));
+        if let IRNode::Root(children) = unit1.tree {
+            assert_eq!(children.len(), 1);
+            if let IRNode::Paragraph { children: inlines, .. } = &children[0] {
+                // Expecting "Account: " and "ACC-1" as two separate inline text nodes
+                assert_eq!(inlines.len(), 2, "Expected two inline text nodes for static text and value-of");
+                if let (Some(InlineNode::Text(t1)), Some(InlineNode::Text(t2))) = (inlines.get(0), inlines.get(1)) {
+                    assert_eq!(t1, "Account: ");
+                    assert_eq!(t2, "ACC-1");
+                } else {
+                    panic!("Expected two text inlines, got: {:?}", inlines);
+                }
+            } else {
+                panic!("Expected a Paragraph node");
+            }
+        } else {
+            panic!("Expected a Root node");
+        }
+
+        // Check second layout unit
+        let unit2 = iterator.next().unwrap().unwrap();
+        assert_eq!(unit2.context, json!({ "user": { "account": "ACC-2" } }));
+
+        // Check for end of iteration
+        assert!(iterator.next().is_none(), "Iterator should be exhausted");
+    }
 }

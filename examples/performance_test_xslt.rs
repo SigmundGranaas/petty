@@ -3,6 +3,7 @@ use rand::prelude::*;
 use serde_json::{json, Value};
 use std::env;
 use std::time::Instant;
+use rand::{rng};
 
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]
@@ -17,7 +18,7 @@ const MOCK_ITEMS: &[&str] = &[
 /// Generates a large, complex JSON dataset in memory.
 fn generate_perf_test_data(num_records: usize, max_items_per_record: usize) -> Value {
     println!("Generating {} records in memory...", num_records);
-    let mut rng = rand::rng();
+    let mut rng = rng();
     let records: Vec<Value> = (0..num_records).map(|i| {
         let num_items = rng.random_range(2..=max_items_per_record);
         let mut total = 0.0;
@@ -44,6 +45,12 @@ fn generate_perf_test_data(num_records: usize, max_items_per_record: usize) -> V
 fn main() -> Result<(), PipelineError> {
     #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::new_heap();
+
+    // Added: Initialize the logger to enable debug messages.
+    if env::var("RUST_LOG").is_err() {
+        //env::set_var("RUST_LOG", "petty=debug");
+    }
+    env_logger::init();
 
     if cfg!(debug_assertions) {
         println!("\nWARNING: Running in debug build. For accurate results, run with `--release`.\n");

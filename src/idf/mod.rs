@@ -9,7 +9,7 @@
 //! The layout engine's primary role is to process this tree, annotate it with
 //! measurements, and then generate positioned elements for rendering.
 
-use crate::stylesheet::Dimension;
+use crate::stylesheet::{Dimension, ElementStyle};
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -35,12 +35,14 @@ pub enum IRNode {
     /// A generic block-level container, analogous to an HTML `<div>`.
     Block {
         style_name: Option<String>,
+        style_override: Option<ElementStyle>,
         children: Vec<IRNode>,
     },
 
     /// A container that lays out its children horizontally.
     FlexContainer {
         style_name: Option<String>,
+        style_override: Option<ElementStyle>,
         children: Vec<IRNode>,
     },
 
@@ -49,6 +51,7 @@ pub enum IRNode {
     /// for text wrapping and line breaking.
     Paragraph {
         style_name: Option<String>,
+        style_override: Option<ElementStyle>,
         children: Vec<InlineNode>,
     },
 
@@ -56,6 +59,7 @@ pub enum IRNode {
     Image {
         src: String,
         style_name: Option<String>,
+        style_override: Option<ElementStyle>,
         /// This field is populated by the `ResourceManager` during the parsing stage.
         data: Option<SharedData>,
     },
@@ -63,6 +67,7 @@ pub enum IRNode {
     /// An ordered or unordered list container. Its children should exclusively be `ListItem` nodes.
     List {
         style_name: Option<String>,
+        style_override: Option<ElementStyle>,
         /// Children are expected to be `IRNode::ListItem`.
         children: Vec<IRNode>,
     },
@@ -70,12 +75,14 @@ pub enum IRNode {
     /// A single item within a `List`.
     ListItem {
         style_name: Option<String>,
+        style_override: Option<ElementStyle>,
         children: Vec<IRNode>,
     },
 
     /// A highly structured table node that enforces a clear component hierarchy.
     Table {
         style_name: Option<String>,
+        style_override: Option<ElementStyle>,
         columns: Vec<TableColumnDefinition>,
         /// This field is populated by the Layout Engine's measurement pass.
         calculated_widths: Vec<f32>,
@@ -95,6 +102,20 @@ impl IRNode {
             | IRNode::List { style_name, .. }
             | IRNode::ListItem { style_name, .. }
             | IRNode::Table { style_name, .. } => style_name.as_deref(),
+            IRNode::Root(_) => None,
+        }
+    }
+
+    /// Returns the parsed inline style override of the node, if it has one.
+    pub(crate) fn style_override(&self) -> Option<&ElementStyle> {
+        match self {
+            IRNode::Block { style_override, .. }
+            | IRNode::FlexContainer { style_override, .. }
+            | IRNode::Paragraph { style_override, .. }
+            | IRNode::Image { style_override, .. }
+            | IRNode::List { style_override, .. }
+            | IRNode::ListItem { style_override, .. }
+            | IRNode::Table { style_override, .. } => style_override.as_ref(),
             IRNode::Root(_) => None,
         }
     }
@@ -118,7 +139,7 @@ pub struct TableHeader {
 }
 
 /// A container for the body rows of a `Table`.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TableBody {
     pub rows: Vec<TableRow>,
 }
@@ -133,7 +154,8 @@ pub struct TableRow {
 /// block-level `IRNode` elements, allowing for nested structures.
 #[derive(Debug, Clone)]
 pub struct TableCell {
-    pub style_override: Option<String>,
+    pub style_name: Option<String>,
+    pub style_override: Option<ElementStyle>,
     /// Cell content is block-level, allowing for complex nested layouts.
     pub children: Vec<IRNode>,
 }
@@ -149,6 +171,7 @@ pub enum InlineNode {
     /// A styled text container, analogous to an HTML `<span>`.
     StyledSpan {
         style_name: Option<String>,
+        style_override: Option<ElementStyle>,
         children: Vec<InlineNode>,
     },
 
@@ -156,6 +179,7 @@ pub enum InlineNode {
     Hyperlink {
         href: String,
         style_name: Option<String>,
+        style_override: Option<ElementStyle>,
         children: Vec<InlineNode>,
     },
 
@@ -163,10 +187,33 @@ pub enum InlineNode {
     Image {
         src: String,
         style_name: Option<String>,
+        style_override: Option<ElementStyle>,
         /// This field is populated by the `ResourceManager` during the parsing stage.
         data: Option<SharedData>,
     },
 
     /// A hard line break, analogous to an HTML `<br>`.
     LineBreak,
+}
+
+impl InlineNode {
+    /// Returns the style name of the inline node, if it has one.
+    pub(crate) fn style_name(&self) -> Option<&str> {
+        match self {
+            InlineNode::StyledSpan { style_name, .. }
+            | InlineNode::Hyperlink { style_name, .. }
+            | InlineNode::Image { style_name, .. } => style_name.as_deref(),
+            _ => None,
+        }
+    }
+
+    /// Returns the parsed inline style override of the inline node, if it has one.
+    pub(crate) fn style_override(&self) -> Option<&ElementStyle> {
+        match self {
+            InlineNode::StyledSpan { style_override, .. }
+            | InlineNode::Hyperlink { style_override, .. }
+            | InlineNode::Image { style_override, .. } => style_override.as_ref(),
+            _ => None,
+        }
+    }
 }

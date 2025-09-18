@@ -119,6 +119,10 @@ pub struct ElementStyle {
     pub height: Option<Dimension>,
     pub background_color: Option<Color>,
     pub border: Option<Border>,
+    #[serde(default)]
+    pub border_top: Option<Border>,
+    #[serde(default)]
+    pub border_bottom: Option<Border>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -166,7 +170,6 @@ pub struct TableColumn {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(untagged)]
 pub enum Dimension {
     Px(f32),
     Pt(f32),
@@ -366,44 +369,129 @@ fn apply_attribute_value(
     attr_name: &str,
     value: &str,
 ) -> Result<(), PipelineError> {
-    // Some properties can have empty values (e.g., from an empty <xsl:attribute/>).
-    // Handle them gracefully.
-    match attr_name {
-        "font-family" => style.font_family = Some(value.to_string()),
-        "font-size" => style.font_size = Some(parse_pt_value(value)?),
-        "font-weight" => style.font_weight = Some(FontWeight::from_str(value)?),
-        "font-style" => style.font_style = Some(FontStyle::from_str(value)?),
-        "line-height" => style.line_height = Some(parse_pt_value(value)?),
-        "text-align" => style.text_align = Some(TextAlign::from_str(value)?),
-        "color" => style.color = Some(Color::from_str(value)?),
-        "background-color" => style.background_color = Some(Color::from_str(value)?),
-        "border" => style.border = Some(Border::from_str(value)?),
-        "margin" => {
-            *has_margin = true;
-            *margin = parse_shorthand_value(value)?;
-        }
-        "margin-top" => { *has_margin = true; margin.top = parse_pt_value(value)?; }
-        "margin-right" => { *has_margin = true; margin.right = parse_pt_value(value)?; }
-        "margin-bottom" => { *has_margin = true; margin.bottom = parse_pt_value(value)?; }
-        "margin-left" => { *has_margin = true; margin.left = parse_pt_value(value)?; }
-        "padding" => {
-            *has_padding = true;
-            *padding = parse_shorthand_value(value)?;
-        }
-        "padding-top" => { *has_padding = true; padding.top = parse_pt_value(value)?; }
-        "padding-right" => { *has_padding = true; padding.right = parse_pt_value(value)?; }
-        "padding-bottom" => { *has_padding = true; padding.bottom = parse_pt_value(value)?; }
-        "padding-left" => { *has_padding = true; padding.left = parse_pt_value(value)?; }
-        "width" => {
-            if value.contains('%') {
-                let val_str = value.trim_end_matches('%').trim();
-                style.width = Some(Dimension::Percent(val_str.parse()?));
-            } else {
-                style.width = Some(Dimension::Pt(parse_pt_value(value)?));
+    let result: Result<(), PipelineError> = (|| {
+        match attr_name {
+            "font-family" => {
+                style.font_family = Some(value.to_string());
+                Ok(())
             }
+            "font-size" => {
+                style.font_size = Some(parse_pt_value(value)?);
+                Ok(())
+            }
+            "font-weight" => {
+                style.font_weight = Some(FontWeight::from_str(value)?);
+                Ok(())
+            }
+            "font-style" => {
+                style.font_style = Some(FontStyle::from_str(value)?);
+                Ok(())
+            }
+            "line-height" => {
+                style.line_height = Some(parse_pt_value(value)?);
+                Ok(())
+            }
+            "text-align" => {
+                style.text_align = Some(TextAlign::from_str(value)?);
+                Ok(())
+            }
+            "color" => {
+                style.color = Some(Color::from_str(value)?);
+                Ok(())
+            }
+            "background-color" => {
+                style.background_color = Some(Color::from_str(value)?);
+                Ok(())
+            }
+            "border" => {
+                style.border = Some(Border::from_str(value)?);
+                Ok(())
+            }
+            "border-top" => {
+                style.border_top = Some(Border::from_str(value)?);
+                Ok(())
+            }
+            "border-bottom" => {
+                style.border_bottom = Some(Border::from_str(value)?);
+                Ok(())
+            }
+            "margin" => {
+                *has_margin = true;
+                *margin = parse_shorthand_value(value)?;
+                Ok(())
+            }
+            "margin-top" => {
+                *has_margin = true;
+                margin.top = parse_pt_value(value)?;
+                Ok(())
+            }
+            "margin-right" => {
+                *has_margin = true;
+                margin.right = parse_pt_value(value)?;
+                Ok(())
+            }
+            "margin-bottom" => {
+                *has_margin = true;
+                margin.bottom = parse_pt_value(value)?;
+                Ok(())
+            }
+            "margin-left" => {
+                *has_margin = true;
+                margin.left = parse_pt_value(value)?;
+                Ok(())
+            }
+            "padding" => {
+                *has_padding = true;
+                *padding = parse_shorthand_value(value)?;
+                Ok(())
+            }
+            "padding-top" => {
+                *has_padding = true;
+                padding.top = parse_pt_value(value)?;
+                Ok(())
+            }
+            "padding-right" => {
+                *has_padding = true;
+                padding.right = parse_pt_value(value)?;
+                Ok(())
+            }
+            "padding-bottom" => {
+                *has_padding = true;
+                padding.bottom = parse_pt_value(value)?;
+                Ok(())
+            }
+            "padding-left" => {
+                *has_padding = true;
+                padding.left = parse_pt_value(value)?;
+                Ok(())
+            }
+            "width" => {
+                if value.trim() == "auto" {
+                    style.width = Some(Dimension::Auto);
+                } else if value.contains('%') {
+                    let val_str = value.trim_end_matches('%').trim();
+                    style.width = Some(Dimension::Percent(val_str.parse()?));
+                } else {
+                    style.width = Some(Dimension::Pt(parse_pt_value(value)?));
+                }
+                Ok(())
+            }
+            "height" => {
+                style.height = Some(Dimension::Pt(parse_pt_value(value)?));
+                Ok(())
+            }
+            _ => Ok(()),
         }
-        "height" => style.height = Some(Dimension::Pt(parse_pt_value(value)?)),
-        _ => {}
+    })();
+
+    if let Err(e) = result {
+        // If parsing fails, it's likely a template string. Log and ignore the attribute.
+        if let PipelineError::FloatParseError(_) = e {
+            log::warn!("Could not pre-parse value '{}' for attribute '{}' in XSLT attribute-set. Dynamic values are not supported and will be ignored.", value, attr_name);
+        } else {
+            // It's a different kind of error, so propagate it.
+            return Err(e);
+        }
     }
     Ok(())
 }
@@ -429,7 +517,7 @@ fn parse_attribute_set(
                 })?;
 
                 let mut value = String::new();
-                let mut content_buf = Vec::new();
+                let mut content_buf = Vec::<u8>::new();
                 let end_tag = e.name().to_owned();
 
                 // Read content until we hit the end tag for this attribute.
@@ -592,10 +680,18 @@ impl FromStr for Color {
                 let g = u8::from_str_radix(&hex[2..4], 16).unwrap_or(0);
                 let b = u8::from_str_radix(&hex[4..6], 16).unwrap_or(0);
                 return Ok(Color { r, g, b, a: 1.0 });
+            } else if hex.len() == 3 {
+                let r_char = hex.chars().next().unwrap();
+                let g_char = hex.chars().nth(1).unwrap();
+                let b_char = hex.chars().nth(2).unwrap();
+                let r = u8::from_str_radix(&format!("{}{}", r_char, r_char), 16).unwrap_or(0);
+                let g = u8::from_str_radix(&format!("{}{}", g_char, g_char), 16).unwrap_or(0);
+                let b = u8::from_str_radix(&format!("{}{}", b_char, b_char), 16).unwrap_or(0);
+                return Ok(Color { r, g, b, a: 1.0 });
             }
         }
         Err(PipelineError::TemplateParseError(format!(
-            "Invalid color format: '{}'. Use #RRGGBB.",
+            "Invalid color format: '{}'. Use #RRGGBB or #RGB.",
             s
         )))
     }

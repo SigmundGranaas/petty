@@ -21,6 +21,7 @@ pub trait DocumentRenderer {
         &mut self,
         context: &Value,
         elements: Vec<PositionedElement>,
+        template_engine: &Handlebars,
     ) -> Result<(), RenderError>;
 
     /// Finalizes the document and writes it to the provided output stream.
@@ -28,6 +29,5 @@ pub trait DocumentRenderer {
     fn finalize<W: io::Write>(
         self,
         writer: W,
-        template_engine: &Handlebars,
     ) -> Result<(), RenderError>;
 }
