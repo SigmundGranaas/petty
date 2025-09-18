@@ -33,7 +33,7 @@ pub use crate::stylesheet::Stylesheet;
 /// It represents either a node to be laid out or a marker to end a node's context
 /// (e.g., to apply bottom margin).
 #[derive(Clone)]
-enum WorkItem {
+pub(crate) enum WorkItem {
     Node(IRNode),
     EndNode(style::ComputedStyle),
 }

@@ -14,7 +14,9 @@ pub fn layout_flex_container(
     style: &ComputedStyle,
     available_width: f32,
 ) -> (Vec<PositionedElement>, f32, Option<super::WorkItem>) {
-    let child_widths = calculate_flex_child_widths(engine, children, available_width);
+    let content_width = available_width - style.padding.left - style.padding.right;
+
+    let child_widths = calculate_flex_child_widths(engine, children, content_width);
     let mut all_elements = Vec::new();
     let mut max_child_height = 0.0f32;
     let mut child_layouts = Vec::new();

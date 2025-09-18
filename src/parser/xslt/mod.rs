@@ -1,7 +1,7 @@
 // src/parser/xslt/mod.rs
-
 // src/parser/xslt/mod.rs
 mod builder;
+mod handlers;
 mod util;
 
 use super::processor::TemplateProcessor;

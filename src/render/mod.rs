@@ -1,4 +1,5 @@
 // src/render/mod.rs
+// src/render/mod.rs
 use crate::error::RenderError;
 use crate::layout::PositionedElement;
 use handlebars::Handlebars;
@@ -6,6 +7,7 @@ use serde_json::Value;
 use std::io;
 
 pub mod pdf;
+mod drawing;
 
 /// A trait defining the API for a document renderer.
 /// The pipeline uses this trait to draw pages of elements, making it possible

@@ -1,3 +1,4 @@
+// src/layout/page.rs
 //! The stateful page iterator for the positioning pass.
 
 use super::block;
@@ -89,44 +90,26 @@ impl<'a> PageIterator<'a> {
                 children,
                 style_name,
                 style_override,
-            } => {
-                let content_width = available_width - style.padding.left - style.padding.right;
-                let max_height_for_text = inner_available_height
-                    - style.padding.top
-                    - style.padding.bottom
-                    - style.margin.bottom;
-
-                let (els, height, remaining_inlines) = text::layout_paragraph(
-                    self.engine,
-                    children,
-                    &style,
-                    content_width,
-                    max_height_for_text.max(0.0),
-                );
-
-                let pending_work = remaining_inlines.map(|rem| {
-                    WorkItem::Node(IRNode::Paragraph {
-                        style_name: style_name.clone(),
-                        style_override: style_override.clone(),
-                        children: rem,
-                    })
-                });
-
-                (els, height, pending_work)
-            }
+            } => text::layout_paragraph_node(
+                self.engine,
+                children,
+                style_name,
+                style_override,
+                style,
+                available_width,
+                inner_available_height,
+            ),
             IRNode::Block { children, .. } | IRNode::List { children, .. } => {
-                block::layout_block(&mut self.work_stack, children, &style)
+                block::layout_block(&mut self.work_stack, children, style)
             }
             IRNode::ListItem { children, .. } => {
-                block::layout_list_item(&mut self.work_stack, children, &style)
+                block::layout_list_item(&mut self.work_stack, children, style)
             }
             IRNode::FlexContainer { children, .. } => {
-                let content_width = available_width - style.padding.left - style.padding.right;
-                flex::layout_flex_container(self.engine, children, &style, content_width)
+                flex::layout_flex_container(self.engine, children, style, available_width)
             }
             IRNode::Image { src, data, .. } => {
-                let content_width = available_width - style.padding.left - style.padding.right;
-                image::layout_image(src, data.as_ref(), &style, content_width)
+                image::layout_image(src, data.as_ref(), style, available_width)
             }
             IRNode::Table {
                 ref style_name,
@@ -136,38 +119,17 @@ impl<'a> PageIterator<'a> {
                 ref mut body,
                 ref calculated_widths,
                 ..
-            } => {
-                let max_height_for_table = inner_available_height
-                    - style.padding.top
-                    - style.padding.bottom
-                    - style.margin.bottom;
-
-                // FIX: Clone the header *before* layout, so we have a clean copy for the next page.
-                let original_header = header.clone();
-
-                let (els, height, remaining_body) = table::layout_table(
-                    self.engine,
-                    header.as_deref_mut(),
-                    body,
-                    style,
-                    calculated_widths,
-                    max_height_for_table.max(0.0),
-                );
-
-                let pending_work = if let Some(rem_body) = remaining_body {
-                    Some(WorkItem::Node(IRNode::Table {
-                        style_name: style_name.clone(),
-                        style_override: style_override.clone(),
-                        columns: columns.clone(),
-                        calculated_widths: calculated_widths.clone(),
-                        header: original_header, // Use the clean, cloned header
-                        body: rem_body,
-                    }))
-                } else {
-                    None
-                };
-                (els, height, pending_work)
-            }
+            } => table::layout_table_node(
+                self.engine,
+                style_name,
+                style_override,
+                columns,
+                header,
+                body,
+                calculated_widths,
+                style,
+                inner_available_height,
+            ),
             _ => (vec![], 0.0, None),
         };
 
@@ -212,7 +174,7 @@ impl<'a> PageIterator<'a> {
             let total_content_width = available_width - style.margin.left - style.margin.right;
             block::add_background(
                 &mut elements,
-                &style,
+                style,
                 total_content_width,
                 height_with_padding,
             );

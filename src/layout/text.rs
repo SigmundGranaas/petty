@@ -1,11 +1,12 @@
+// src/layout/text.rs
 
 //! Text measurement and paragraph layout with line breaking.
 
 use super::elements::{ImageElement, LayoutElement, PositionedElement, TextElement};
 use super::style::ComputedStyle;
-use super::{InlineNode, LayoutEngine};
-use crate::idf::SharedData;
-use crate::stylesheet::{Color, Dimension, TextAlign};
+use super::{InlineNode, LayoutEngine, WorkItem};
+use crate::idf::{IRNode, SharedData};
+use crate::stylesheet::{Color, Dimension, ElementStyle, TextAlign};
 
 /// Represents a piece of content that can be placed on a line (text or image).
 #[derive(Debug, Clone)]
@@ -67,7 +68,7 @@ pub fn layout_paragraph(
     let mut line_buffer = Vec::new();
     let mut current_line_width = 0.0;
 
-    let mut all_items = line_items.into_iter().collect::<Vec<_>>();
+    let mut all_items = line_items;
     let mut item_idx = 0;
 
     while item_idx < all_items.len() {
@@ -371,6 +372,40 @@ fn flatten_inlines(
         }
     }
     items
+}
+
+/// Lays out a full paragraph node, handling pagination.
+/// This function is the public API for laying out a paragraph, called from the page layout dispatcher.
+pub fn layout_paragraph_node(
+    engine: &LayoutEngine,
+    children: &[InlineNode],
+    style_name: &Option<String>,
+    style_override: &Option<ElementStyle>,
+    style: &ComputedStyle,
+    available_width: f32,
+    available_height: f32,
+) -> (Vec<PositionedElement>, f32, Option<WorkItem>) {
+    let content_width = available_width - style.padding.left - style.padding.right;
+    let max_height_for_text =
+        available_height - style.padding.top - style.padding.bottom - style.margin.bottom;
+
+    let (els, height, remaining_inlines) = layout_paragraph(
+        engine,
+        children,
+        style,
+        content_width,
+        max_height_for_text.max(0.0),
+    );
+
+    let pending_work = remaining_inlines.map(|rem| {
+        WorkItem::Node(IRNode::Paragraph {
+            style_name: style_name.clone(),
+            style_override: style_override.clone(),
+            children: rem,
+        })
+    });
+
+    (els, height, pending_work)
 }
 
 /// Measures the width of a text string based on its style.

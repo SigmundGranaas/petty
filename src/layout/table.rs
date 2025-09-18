@@ -2,9 +2,9 @@
 
 use super::flex::layout_subtree; // Re-use the subtree layout for cells
 use super::style::ComputedStyle;
-use super::{IRNode, LayoutEngine, PositionedElement};
-use crate::idf::{TableBody, TableHeader, TableRow};
-use crate::stylesheet::Dimension;
+use super::{IRNode, LayoutEngine, PositionedElement, WorkItem};
+use crate::idf::{TableBody, TableColumnDefinition, TableHeader, TableRow};
+use crate::stylesheet::{Dimension, ElementStyle};
 
 /// Lays out a single table row and its cells.
 fn layout_table_row(
@@ -134,6 +134,50 @@ pub fn layout_table(
     };
 
     (elements, total_height, remainder)
+}
+
+/// Lays out a full table node, handling pagination.
+/// This function is the public API for laying out a table, called from the page layout dispatcher.
+pub fn layout_table_node(
+    engine: &LayoutEngine,
+    style_name: &Option<String>,
+    style_override: &Option<ElementStyle>,
+    columns: &[TableColumnDefinition],
+    header: &mut Option<Box<TableHeader>>,
+    body: &mut TableBody,
+    calculated_widths: &[f32],
+    style: &ComputedStyle,
+    available_height: f32,
+) -> (Vec<PositionedElement>, f32, Option<WorkItem>) {
+    let max_height_for_table =
+        available_height - style.padding.top - style.padding.bottom - style.margin.bottom;
+
+    // Clone the header *before* layout, so we have a clean copy for the next page.
+    let original_header = header.clone();
+
+    let (els, height, remaining_body) = layout_table(
+        engine,
+        header.as_deref_mut(),
+        body,
+        style,
+        calculated_widths,
+        max_height_for_table.max(0.0),
+    );
+
+    let pending_work = if let Some(rem_body) = remaining_body {
+        Some(WorkItem::Node(IRNode::Table {
+            style_name: style_name.clone(),
+            style_override: style_override.clone(),
+            columns: columns.to_vec(),
+            calculated_widths: calculated_widths.to_vec(),
+            header: original_header, // Use the clean, cloned header
+            body: rem_body,
+        }))
+    } else {
+        None
+    };
+
+    (els, height, pending_work)
 }
 
 /// Calculates final column widths based on definitions and available space.

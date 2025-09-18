@@ -13,11 +13,13 @@ pub fn layout_image(
     style: &ComputedStyle,
     available_width: f32,
 ) -> (Vec<PositionedElement>, f32, Option<super::WorkItem>) {
+    let content_width = available_width - style.padding.left - style.padding.right;
+
     let height = style.height.unwrap_or(50.0);
     let width = match style.width {
         Some(Dimension::Pt(w)) => w,
-        Some(Dimension::Percent(p)) => available_width * (p / 100.0),
-        _ => available_width,
+        Some(Dimension::Percent(p)) => content_width * (p / 100.0),
+        _ => content_width,
     };
 
     if let Some(image_data) = data {

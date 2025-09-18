@@ -1,12 +1,8 @@
-use super::util::{
-    get_attr_owned_optional, get_attr_owned_required, get_attr_required,
-    parse_fo_attributes_to_element_style, parse_table_columns, OwnedAttributes,
-};
+// src/parser/xslt/builder.rs
+// src/parser/xslt/builder.rs
+use super::util::OwnedAttributes;
 use crate::error::PipelineError;
-use crate::idf::{
-    IRNode, InlineNode, TableBody, TableCell, TableColumnDefinition, TableHeader, TableRow,
-};
-use crate::xpath;
+use crate::idf::{IRNode, InlineNode};
 use handlebars::Handlebars;
 use log::debug;
 use quick_xml::events::{BytesStart, Event as XmlEvent};
@@ -16,15 +12,15 @@ use serde_json::Value;
 
 /// A stateful builder that constructs a single `IRNode` tree from an XML fragment.
 pub(super) struct TreeBuilder<'a> {
-    template_engine: &'a Handlebars<'static>,
+    pub(super) template_engine: &'a Handlebars<'static>,
     // A stack of nodes currently being built. The top of the stack is the current parent.
-    node_stack: Vec<IRNode>,
+    pub(super) node_stack: Vec<IRNode>,
     // A stack for inline nodes (e.g., within a paragraph).
-    inline_stack: Vec<InlineNode>,
+    pub(super) inline_stack: Vec<InlineNode>,
     // Tracks the current column index when parsing a table row.
-    row_column_index_stack: Vec<usize>,
+    pub(super) row_column_index_stack: Vec<usize>,
     // Tracks if the parser is currently inside a <table>'s <header> tag.
-    is_in_table_header: bool,
+    pub(super) is_in_table_header: bool,
 }
 
 impl<'a> TreeBuilder<'a> {
@@ -64,7 +60,7 @@ impl<'a> TreeBuilder<'a> {
     }
 
     /// Adds a constructed block-level node to its parent in the tree.
-    fn push_block_to_parent(&mut self, node: IRNode) {
+    pub(super) fn push_block_to_parent(&mut self, node: IRNode) {
         match self.node_stack.last_mut() {
             Some(IRNode::Root(children))
             | Some(IRNode::Block { children, .. })
@@ -98,7 +94,7 @@ impl<'a> TreeBuilder<'a> {
     }
 
     /// Adds a constructed inline-level node to its parent in the tree.
-    fn push_inline_to_parent(&mut self, node: InlineNode) {
+    pub(super) fn push_inline_to_parent(&mut self, node: InlineNode) {
         match self.inline_stack.last_mut() {
             Some(InlineNode::StyledSpan { children, .. })
             | Some(InlineNode::Hyperlink { children, .. }) => children.push(node),
@@ -114,7 +110,7 @@ impl<'a> TreeBuilder<'a> {
     }
 
     /// Iteratively parses XML nodes and builds the `IRNode` tree.
-    fn parse_nodes(
+    pub(super) fn parse_nodes(
         &mut self,
         reader: &mut Reader<&[u8]>,
         context: &'a Value,
@@ -156,51 +152,9 @@ impl<'a> TreeBuilder<'a> {
             String::from_utf8_lossy(e.name().as_ref())
         );
         match e.name().as_ref() {
-            b"xsl:value-of" => {
-                let path = get_attr_required(e, b"select")?;
-                let content = xpath::select_as_string(context, &path);
-                debug!("  <xsl:value-of select=\"{}\"> -> \"{}\"", path, content);
-                if !content.is_empty() {
-                    self.push_inline_to_parent(InlineNode::Text(content));
-                }
-            }
-            b"image" => {
-                let src_template = get_attr_required(e, b"src")?;
-                let attributes = e
-                    .attributes()
-                    .map(|a| a.map(|attr| (attr.key.as_ref().to_vec(), attr.value.into_owned())))
-                    .collect::<Result<OwnedAttributes, _>>()?;
-
-                let style_name = get_attr_owned_optional(&attributes, b"style")?;
-                let style_override = parse_fo_attributes_to_element_style(&attributes)?;
-
-                let src = self
-                    .template_engine
-                    .render_template(&src_template, context)
-                    .map_err(|err| PipelineError::TemplateParseError(err.to_string()))?;
-
-                let in_paragraph = matches!(self.node_stack.last(), Some(IRNode::Paragraph { .. }));
-
-                if in_paragraph {
-                    let node = InlineNode::Image {
-                        src,
-                        style_name,
-                        style_override,
-                        data: None,
-                    };
-                    self.push_inline_to_parent(node);
-                } else {
-                    let node = IRNode::Image {
-                        src,
-                        style_name,
-                        style_override,
-                        data: None,
-                    };
-                    self.push_block_to_parent(node);
-                }
-            }
-            b"br" => self.push_inline_to_parent(InlineNode::LineBreak),
-            // Other empty tags can be handled here
+            b"xsl:value-of" => self.handle_value_of(e, context)?,
+            b"image" => self.handle_image(e, context)?,
+            b"br" => self.handle_line_break(),
             b"rectangle" | b"page-break" => { /* Layout-specific, ignored in IR */ }
             _ => {}
         }
@@ -213,10 +167,9 @@ impl<'a> TreeBuilder<'a> {
         reader: &mut Reader<&[u8]>,
         context: &'a Value,
     ) -> Result<(), PipelineError> {
-        let tag_name = e.name();
         debug!(
             "Handling start tag: <{}>",
-            String::from_utf8_lossy(tag_name.as_ref())
+            String::from_utf8_lossy(e.name().as_ref())
         );
 
         let attributes = e
@@ -224,110 +177,19 @@ impl<'a> TreeBuilder<'a> {
             .map(|a| a.map(|attr| (attr.key.as_ref().to_vec(), attr.value.into_owned())))
             .collect::<Result<OwnedAttributes, _>>()?;
 
-        match tag_name.as_ref() {
+        match e.name().as_ref() {
             // --- Control Flow ---
-            b"xsl:for-each" => {
-                let path = get_attr_owned_required(&attributes, b"select", b"xsl:for-each")?;
-                debug!("Starting <xsl:for-each select=\"{}\">", path);
-                let inner_xml =
-                    super::super::xslt::capture_inner_xml(reader, QName(b"xsl:for-each"))?;
-                let selected_values = xpath::select(context, &path);
-                let items: Vec<&'a Value> = if let Some(arr) =
-                    selected_values.first().and_then(|v| v.as_array())
-                {
-                    arr.iter().collect()
-                } else {
-                    selected_values
-                };
-                debug!("  <xsl:for-each> found {} items to iterate.", items.len());
-                for (i, item_context) in items.iter().enumerate() {
-                    debug!("  <xsl:for-each> processing item {}", i);
-                    let mut template_reader = Reader::from_str(&inner_xml);
-                    template_reader.config_mut().trim_text(false);
-                    self.parse_nodes(&mut template_reader, item_context)?;
-                }
-                debug!("Finished <xsl:for-each select=\"{}\">", path);
-            }
-            b"xsl:if" => {
-                let test = get_attr_owned_required(&attributes, b"test", b"xsl:if")?;
-                let results = xpath::select(context, &test);
-                let is_truthy = !results.is_empty()
-                    && results
-                    .iter()
-                    .all(|v| !v.is_null() && v.as_bool() != Some(false));
-                debug!("<xsl:if test=\"{}\"> evaluated to {}", test, is_truthy);
-                if !is_truthy {
-                    reader.read_to_end_into(tag_name, &mut vec![])?;
-                }
-            }
+            b"xsl:for-each" => self.handle_for_each(e, reader, context, &attributes)?,
+            b"xsl:if" => self.handle_if(e, reader, context, &attributes)?,
 
             // --- Block Elements ---
             b"container" | b"list" | b"list-item" | b"flex-container" | b"text" => {
-                let style_name = get_attr_owned_optional(&attributes, b"style")?;
-                let style_override = parse_fo_attributes_to_element_style(&attributes)?;
-
-                let node = match tag_name.as_ref() {
-                    b"list" => IRNode::List {
-                        style_name,
-                        style_override,
-                        children: vec![],
-                    },
-                    b"list-item" => IRNode::ListItem {
-                        style_name,
-                        style_override,
-                        children: vec![],
-                    },
-                    b"flex-container" => IRNode::FlexContainer {
-                        style_name,
-                        style_override,
-                        children: vec![],
-                    },
-                    b"text" => IRNode::Paragraph {
-                        style_name,
-                        style_override,
-                        children: vec![],
-                    },
-                    _ => IRNode::Block {
-                        style_name,
-                        style_override,
-                        children: vec![],
-                    },
-                };
-                self.node_stack.push(node);
+                self.handle_block_element(e, &attributes)?
             }
 
             // --- Inline Elements ---
-            b"link" => {
-                let href_template = get_attr_owned_required(&attributes, b"href", b"link")?;
-                let style_name = get_attr_owned_optional(&attributes, b"style")?;
-                let style_override = parse_fo_attributes_to_element_style(&attributes)?;
-                let href = self
-                    .template_engine
-                    .render_template(&href_template, context)
-                    .map_err(|err| PipelineError::TemplateParseError(err.to_string()))?;
-                self.inline_stack.push(InlineNode::Hyperlink {
-                    href,
-                    style_name,
-                    style_override,
-                    children: vec![],
-                });
-            }
-            b"strong" | b"b" => {
-                let style_override = parse_fo_attributes_to_element_style(&attributes)?;
-                self.inline_stack.push(InlineNode::StyledSpan {
-                    style_name: Some("bold".to_string()),
-                    style_override,
-                    children: vec![],
-                });
-            }
-            b"em" | b"i" => {
-                let style_override = parse_fo_attributes_to_element_style(&attributes)?;
-                self.inline_stack.push(InlineNode::StyledSpan {
-                    style_name: Some("italic".to_string()),
-                    style_override,
-                    children: vec![],
-                });
-            }
+            b"link" => self.handle_link(context, &attributes)?,
+            b"strong" | b"b" | b"em" | b"i" => self.handle_styled_span(e.name().as_ref(), &attributes)?,
 
             // --- Tables ---
             b"table" => self.handle_table_start(&attributes, reader, context)?,
@@ -339,12 +201,13 @@ impl<'a> TreeBuilder<'a> {
             // --- Structural / Ignored ---
             b"petty-wrapper" => {} // Descend into dummy wrapper
             b"columns" | b"column" => {
-                reader.read_to_end_into(tag_name, &mut vec![])?;
+                // <columns> is handled inside handle_table_start, so we skip it here.
+                reader.read_to_end_into(e.name(), &mut vec![])?;
             }
             _ => {
                 log::warn!(
                     "Ignoring unknown start tag: {}",
-                    String::from_utf8_lossy(tag_name.as_ref())
+                    String::from_utf8_lossy(e.name().as_ref())
                 );
             }
         }
@@ -362,7 +225,7 @@ impl<'a> TreeBuilder<'a> {
                     self.push_block_to_parent(node);
                 }
             }
-            b"table" => { /* This is now handled in handle_table_start */ }
+            b"table" => { /* Popping is handled by `handle_table_start` */ }
             b"row" => {
                 self.row_column_index_stack.pop();
             }
@@ -372,8 +235,7 @@ impl<'a> TreeBuilder<'a> {
                 }
             }
             b"header" => self.is_in_table_header = false,
-            b"tbody" | b"xsl:if" => { /* State managed by start handlers or requires no action */
-            }
+            b"tbody" | b"xsl:if" => { /* State managed by start handlers or requires no action */ }
             b"link" | b"strong" | b"b" | b"em" | b"i" => {
                 if let Some(node) = self.inline_stack.pop() {
                     self.push_inline_to_parent(node);
@@ -387,135 +249,11 @@ impl<'a> TreeBuilder<'a> {
     }
 }
 
-// --- Tag-Specific Handlers ---
-impl<'a> TreeBuilder<'a> {
-    fn handle_table_start(
-        &mut self,
-        attributes: &OwnedAttributes,
-        reader: &mut Reader<&[u8]>,
-        context: &'a Value,
-    ) -> Result<(), PipelineError> {
-        let style_name = get_attr_owned_optional(attributes, b"style")?;
-        let style_override = parse_fo_attributes_to_element_style(attributes)?;
-
-        let inner_xml = super::super::xslt::capture_inner_xml(reader, QName(b"table"))?;
-
-        let mut columns_reader = Reader::from_str(&inner_xml);
-        let mut buf = Vec::new();
-        let mut col_defs = Vec::new();
-        loop {
-            match columns_reader.read_event_into(&mut buf) {
-                Ok(XmlEvent::Start(e)) if e.name().as_ref() == b"columns" => {
-                    col_defs = parse_table_columns(&mut columns_reader, e.name())?
-                        .into_iter()
-                        .map(|c| TableColumnDefinition {
-                            width: c.width,
-                            style: c.style,
-                            header_style: c.header_style,
-                        })
-                        .collect();
-                    break;
-                }
-                Ok(XmlEvent::Eof) => break,
-                Err(e) => return Err(e.into()),
-                _ => (),
-            }
-        }
-
-        let table_node = IRNode::Table {
-            style_name,
-            style_override,
-            columns: col_defs,
-            calculated_widths: Vec::new(),
-            header: None,
-            body: Box::new(TableBody { rows: Vec::new() }),
-        };
-        self.node_stack.push(table_node);
-
-        let mut content_reader = Reader::from_str(&inner_xml);
-        content_reader.config_mut().trim_text(false);
-        self.parse_nodes(&mut content_reader, context)?;
-
-        if let Some(table_node) = self.node_stack.pop() {
-            self.push_block_to_parent(table_node);
-        }
-
-        Ok(())
-    }
-
-    fn handle_header_start(&mut self) -> Result<(), PipelineError> {
-        if let Some(IRNode::Table { header, .. }) = self.node_stack.last_mut() {
-            *header = Some(Box::new(TableHeader { rows: Vec::new() }));
-            self.is_in_table_header = true;
-        }
-        Ok(())
-    }
-
-    fn handle_row_start(&mut self) -> Result<(), PipelineError> {
-        self.row_column_index_stack.push(0);
-        let new_row = TableRow { cells: Vec::new() };
-
-        match self.node_stack.last_mut() {
-            Some(IRNode::Table { header, body, .. }) => {
-                if self.is_in_table_header {
-                    if let Some(h) = header {
-                        h.rows.push(new_row);
-                    }
-                } else {
-                    body.rows.push(new_row);
-                }
-            }
-            _ => {
-                return Err(PipelineError::TemplateParseError(
-                    "<row> found outside a <table>".to_string(),
-                ));
-            }
-        }
-        Ok(())
-    }
-
-    fn handle_cell_start(&mut self, attributes: &OwnedAttributes) -> Result<(), PipelineError> {
-        let style_name = get_attr_owned_optional(attributes, b"style")?;
-        let style_override = parse_fo_attributes_to_element_style(attributes)?;
-        let _col_index = *self.row_column_index_stack.last().ok_or_else(|| {
-            PipelineError::TemplateParseError("<cell> outside of <row>".into())
-        })?;
-
-        let new_cell = TableCell {
-            style_name,
-            style_override,
-            children: Vec::new(),
-        };
-
-        match self.node_stack.last_mut() {
-            Some(IRNode::Table { header, body, .. }) => {
-                let row = if self.is_in_table_header {
-                    header.as_mut().and_then(|h| h.rows.last_mut())
-                } else {
-                    body.rows.last_mut()
-                };
-
-                if let Some(r) = row {
-                    r.cells.push(new_cell);
-                } else {
-                    return Err(PipelineError::TemplateParseError(
-                        "<cell> found without a parent <row>".to_string(),
-                    ));
-                }
-            }
-            _ => {
-                return Err(PipelineError::TemplateParseError(
-                    "<cell> found outside a <table>".to_string(),
-                ));
-            }
-        }
-        Ok(())
-    }
-}
-
+// Tests are now moved to the handler files, but we can keep a few high-level integration tests here.
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::idf::{InlineNode, IRNode};
     use crate::stylesheet::Color;
     use handlebars::Handlebars;
     use serde_json::json;
@@ -589,50 +327,6 @@ mod tests {
     }
 
     #[test]
-    fn test_for_each_with_nested_data_and_paths() {
-        let data = json!({
-            "id": 123,
-            "user": { "name": "Test User" },
-            "items": [
-                { "description": "Item A" },
-                { "description": "Item B" }
-            ]
-        });
-        let template = r#"
-            <text>User: <xsl:value-of select="user/name"/></text>
-            <xsl:for-each select="items">
-                <text>Item: <xsl:value-of select="description"/></text>
-            </xsl:for-each>
-        "#;
-
-        let tree = build_test_tree(template, &data).unwrap();
-
-        // Expected output: 1 "User" paragraph, 2 "Item" paragraphs.
-        assert_eq!(tree.len(), 3, "Should create a node for the user and each item");
-
-        let get_text = |node: &IRNode| -> String {
-            if let IRNode::Paragraph { children, .. } = node {
-                // Text can be split, so we need to join it.
-                return children
-                    .iter()
-                    .map(|inline| {
-                        if let InlineNode::Text(text) = inline {
-                            text.as_str()
-                        } else {
-                            ""
-                        }
-                    })
-                    .collect::<String>();
-            }
-            panic!("Expected paragraph with text");
-        };
-
-        assert_eq!(get_text(&tree[0]), "User: Test User");
-        assert_eq!(get_text(&tree[1]), "Item: Item A");
-        assert_eq!(get_text(&tree[2]), "Item: Item B");
-    }
-
-    #[test]
     fn test_block_elements_are_nested_correctly() {
         let data = json!({});
         let template = r#"
@@ -646,11 +340,9 @@ mod tests {
 
         assert_eq!(tree.len(), 3);
 
-        // Check Paragraph 1
         let p1 = &tree[0];
         assert!(matches!(p1, IRNode::Paragraph { style_name, .. } if style_name == &Some("p1".to_string())));
 
-        // Check Container
         let c1 = &tree[1];
         if let IRNode::Block {
             style_name,
@@ -660,14 +352,12 @@ mod tests {
         {
             assert_eq!(style_name, &Some("c1".to_string()));
             assert_eq!(children.len(), 1);
-            // Check Paragraph 2 inside container
             let p2 = &children[0];
             assert!(matches!(p2, IRNode::Paragraph { style_name, .. } if style_name == &Some("p2".to_string())));
         } else {
             panic!("Expected a Block node, got {:?}", c1);
         }
 
-        // Check Paragraph 3
         let p3 = &tree[2];
         assert!(matches!(p3, IRNode::Paragraph { style_name, .. } if style_name == &Some("p3".to_string())));
     }
