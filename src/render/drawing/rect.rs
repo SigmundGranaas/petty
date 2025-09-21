@@ -8,6 +8,7 @@ use crate::stylesheet::Color;
 use printpdf::graphics::{LinePoint, PaintMode, Point, Polygon, PolygonRing, WindingOrder};
 use printpdf::ops::Op;
 use printpdf::{Pt, Rgb};
+use std::io;
 
 /// A helper to convert our internal `Color` to the `printpdf` library's `Color`.
 fn to_pdf_color(c: &Color) -> printpdf::color::Color {
@@ -20,8 +21,8 @@ fn to_pdf_color(c: &Color) -> printpdf::color::Color {
 }
 
 /// Renders the background color and borders for any `PositionedElement`.
-pub(super) fn draw_background_and_borders(
-    page: &mut PageRenderer,
+pub(super) fn draw_background_and_borders<W: io::Write + Send>(
+    page: &mut PageRenderer<W>,
     positioned: &PositionedElement,
 ) -> Result<(), RenderError> {
     // Rectangles cannot be drawn within a text section.

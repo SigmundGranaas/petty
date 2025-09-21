@@ -4,7 +4,7 @@ use serde_json::{json, Value};
 use std::env;
 use std::fs;
 use std::time::Instant;
-use rand::{rng};
+use rand::rng;
 
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]
@@ -16,31 +16,35 @@ const MOCK_ITEMS: &[&str] = &[
     "Cloud Storage (1TB)", "API Access Key", "Consulting Hour", "Hardware Rental",
 ];
 
-/// Generates a large, complex JSON dataset in memory.
-fn generate_perf_test_data(num_records: usize, max_items_per_record: usize) -> Value {
-    println!("Generating {} records in memory...", num_records);
+/// Generates a lazy iterator that produces one complex JSON record on demand.
+fn generate_perf_test_data_iter(
+    num_records: usize,
+    max_items_per_record: usize,
+) -> impl Iterator<Item = Value> {
+    println!("Generating {} records via an iterator...", num_records);
     let mut rng = rng();
-    let records: Vec<Value> = (0..num_records).map(|i| {
-        let num_items = rng.random_range(2..=max_items_per_record);
+    (0..num_records).map(move |i| {
+        let num_items = rng.gen_range(2..=max_items_per_record);
         let mut total = 0.0;
-        let items: Vec<Value> = (0..num_items).map(|_| {
-            let quantity = rng.random_range(1..=10);
-            let price: f64 = rng.random_range(10.0..500.0);
-            let line_total = quantity as f64 * price;
-            total += line_total;
-            json!({
-                "description": MOCK_ITEMS.choose(&mut rng).unwrap_or(&""),
-                "quantity": quantity, "price": price, "line_total": line_total
+        let items: Vec<Value> = (0..num_items)
+            .map(|_| {
+                let quantity = rng.gen_range(1..=10);
+                let price: f64 = rng.gen_range(10.0..500.0);
+                let line_total = quantity as f64 * price;
+                total += line_total;
+                json!({
+                    "description": MOCK_ITEMS.choose(&mut rng).unwrap_or(&""),
+                    "quantity": quantity, "price": price, "line_total": line_total
+                })
             })
-        }).collect();
+            .collect();
         json!({
             "id": 10000 + i,
-            "user": { "name": MOCK_USERS.choose(&mut rng).unwrap_or(&""), "account": format!("ACC-{}", rng.random_range(100000..999999)) },
+            "user": { "name": MOCK_USERS.choose(&mut rng).unwrap_or(&""), "account": format!("ACC-{}", rng.gen_range(100000..999999)) },
             "items": items,
             "summary": { "total": total, "tax": total * 0.08, "grand_total": total * 1.08 }
         })
-    }).collect();
-    json!({ "records": records })
+    })
 }
 
 fn main() -> Result<(), PipelineError> {
@@ -59,8 +63,8 @@ fn main() -> Result<(), PipelineError> {
 
     let stylesheet_json = fs::read_to_string("templates/perf_test_stylesheet.json")?;
     println!("✓ Stylesheet loaded.");
-    let data_json = generate_perf_test_data(num_records, max_items);
-    println!("✓ Data generated.");
+    let data_iterator = generate_perf_test_data_iter(num_records, max_items);
+    println!("✓ Data iterator created.");
 
     let pipeline = PipelineBuilder::new()
         .with_stylesheet_json(&stylesheet_json)?
@@ -71,7 +75,7 @@ fn main() -> Result<(), PipelineError> {
     println!("Starting PDF generation for {} records...", num_records);
     let start_time = Instant::now();
 
-    pipeline.generate_to_file(&data_json, output_path)?;
+    pipeline.generate_to_file(data_iterator, output_path)?;
 
     let duration = start_time.elapsed();
     println!("\nSuccess! Generated {}", output_path);

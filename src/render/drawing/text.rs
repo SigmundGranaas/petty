@@ -4,10 +4,11 @@ use crate::error::RenderError;
 use crate::layout::{PositionedElement, TextElement};
 use printpdf::ops::Op;
 use printpdf::{Pt, Rgb, TextItem, TextMatrix};
+use std::io;
 
 /// Renders a `TextElement` to the page, managing the text section state.
-pub(super) fn draw_text(
-    page: &mut PageRenderer,
+pub(super) fn draw_text<W: io::Write + Send>(
+    page: &mut PageRenderer<W>,
     text: &TextElement,
     positioned: &PositionedElement,
 ) -> Result<(), RenderError> {

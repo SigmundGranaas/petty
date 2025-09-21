@@ -1,7 +1,5 @@
-// src/pipeline.rs
-
 use crate::error::PipelineError;
-use crate::idf::{IRNode, LayoutUnit};
+use crate::idf::{IRNode, InlineNode, LayoutUnit, SharedData};
 use crate::layout::LayoutEngine;
 use crate::layout::PositionedElement;
 use crate::parser::xslt;
@@ -10,7 +8,6 @@ use crate::render::lopdf::LopdfDocumentRenderer;
 use crate::render::pdf::PdfDocumentRenderer;
 use crate::render::DocumentRenderer;
 use crate::stylesheet::Stylesheet;
-use crate::xpath;
 use async_channel;
 use handlebars::{Context, Handlebars, Helper, HelperResult, Output, RenderContext};
 use log::{debug, info, warn};
@@ -18,7 +15,7 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::runtime::Builder;
@@ -45,6 +42,7 @@ pub enum TemplateLanguage {
     Xslt {
         xslt_content: String,
         preparsed_template: PreparsedTemplate,
+        resource_base_path: PathBuf,
     },
 }
 
@@ -84,15 +82,19 @@ impl DocumentPipeline {
         }
     }
 
-    pub async fn generate_to_writer_async<W: io::Write + Send + 'static>(
+    pub async fn generate_to_writer_async<W, I>(
         &self,
-        data: &Value,
+        data_iterator: I,
         writer: W,
-    ) -> Result<(), PipelineError> {
+    ) -> Result<(), PipelineError>
+    where
+        W: io::Write + Send + 'static,
+        I: Iterator<Item = Value> + Send + 'static,
+    {
         let writer: Box<dyn io::Write + Send> = Box::new(writer);
 
         // Calculate the number of workers first.
-        let num_layout_threads = num_cpus::get().saturating_sub(1).max(4);
+        let num_layout_threads = num_cpus::get().saturating_sub(1).max(10);
         // Set the buffer size to match the number of workers. This creates backpressure,
         // preventing the layout stage from getting too far ahead of the rendering bottleneck.
         let channel_buffer_size = num_layout_threads;
@@ -104,29 +106,18 @@ impl DocumentPipeline {
         let (tx2, rx2) =
             async_channel::bounded::<(usize, Result<LaidOutSequence, PipelineError>)>(channel_buffer_size);
 
-        let data = data.clone();
-        let producer_stylesheet = self.stylesheet.clone();
-        let template_language = self.template_language.clone();
-
         let producer_handle = task::spawn(async move {
-            info!("[PRODUCE] Starting sequence production.");
-            match get_sequence_data(&data, &producer_stylesheet, &template_language) {
-                Ok(data_items) => {
-                    info!("[PRODUCE] Found {} sequences to process.", data_items.len());
-                    for (i, item) in data_items.into_iter().enumerate() {
-                        debug!("[PRODUCE] Sending sequence #{} to layout workers.", i);
-                        if tx1.send(Ok((i, Arc::new(item)))).await.is_err() {
-                            warn!("[PRODUCE] Layout channel closed, stopping producer.");
-                            break;
-                        }
-                    }
+            info!("[PRODUCE] Starting sequence production from iterator.");
+            for (i, item) in data_iterator.enumerate() {
+                debug!("[PRODUCE] Sending item #{} to layout workers.", i);
+                if tx1.send(Ok((i, Arc::new(item)))).await.is_err() {
+                    warn!("[PRODUCE] Layout channel closed, stopping producer.");
+                    break;
                 }
-                Err(e) => {
-                    let _ = tx1.send(Err(e)).await;
-                }
-            };
+            }
             info!("[PRODUCE] Finished sequence production.");
         });
+
 
         info!(
             "[MANAGER] Spawning {} layout worker threads.",
@@ -188,19 +179,19 @@ impl DocumentPipeline {
         let consumer_handle = task::spawn_blocking(move || {
             info!("[CONSUME] Started. Awaiting laid-out sequences.");
             let res = || -> Result<(), PipelineError> {
-                let mut renderer: Box<dyn DocumentRenderer> = match pdf_backend {
+                let mut renderer: Box<dyn DocumentRenderer<Box<dyn io::Write + Send>>> = match pdf_backend {
                     PdfBackend::PrintPdf => {
                         Box::new(PdfDocumentRenderer::new(final_layout_engine)?)
                     }
                     PdfBackend::Lopdf => Box::new(LopdfDocumentRenderer::new(final_layout_engine)?),
                 };
 
-                renderer.begin_document()?;
+                renderer.begin_document(writer)?;
                 consume_and_render_pages(rx2, renderer.as_mut(), &consumer_template_engine)?;
 
                 let finalize_start = Instant::now();
                 info!("[CONSUME] Finalizing document.");
-                renderer.finalize(writer)?;
+                renderer.finalize()?;
                 let finalize_duration = finalize_start.elapsed();
                 info!("[CONSUME] Document finalized successfully in {:.2?}.", finalize_duration);
                 Ok(())
@@ -223,53 +214,105 @@ impl DocumentPipeline {
 
     pub fn generate_to_file<P: AsRef<Path>>(
         &self,
-        data: &Value,
+        data_iterator: impl Iterator<Item = Value> + Send + 'static,
         path: P,
     ) -> Result<(), PipelineError> {
-        let file = std::fs::File::create(path)?;
+        let output_path = path.as_ref();
+
+        // Ensure the parent directory exists before creating the file.
+        if let Some(parent_dir) = output_path.parent() {
+            if !parent_dir.exists() {
+                fs::create_dir_all(parent_dir)?;
+            }
+        }
+
+        let file = fs::File::create(output_path)?;
+        // --- CHANGE HERE ---
+        let writer = io::BufWriter::new(file);
         let rt = Builder::new_multi_thread()
             .enable_all()
             .build()
             .expect("Failed to create Tokio runtime");
-        rt.block_on(self.generate_to_writer_async(data, file))
+
+        // Pass the buffered writer to the async function.
+        rt.block_on(self.generate_to_writer_async(data_iterator, writer))
     }
 }
 
-fn get_sequence_data(
-    data: &Value,
-    stylesheet: &Stylesheet,
-    lang: &TemplateLanguage,
-) -> Result<Vec<Value>, PipelineError> {
-    match lang {
-        TemplateLanguage::Json => {
-            let seq = stylesheet.page_sequences.values().next().ok_or_else(|| {
-                PipelineError::StylesheetError("No page_sequences in stylesheet".to_string())
-            })?;
-            let data_items = xpath::select(data, &seq.data_source);
-            if let Some(first_item) = data_items.get(0) {
-                if let Some(arr) = first_item.as_array() {
-                    return Ok(arr.clone());
+/// A recursive helper to load image data for inline elements.
+fn load_inline_resources(inline: &mut InlineNode, base_path: &Path) -> Result<(), PipelineError> {
+    match inline {
+        InlineNode::Image { src, data, .. } => {
+            if data.is_none() {
+                let image_path = base_path.join(src);
+                let image_bytes = fs::read(&image_path).map_err(|e| {
+                    PipelineError::IoError(std::io::Error::new(
+                        e.kind(),
+                        format!("Failed to load image '{}': {}", image_path.display(), e),
+                    ))
+                })?;
+                *data = Some(Arc::new(image_bytes) as SharedData);
+            }
+        }
+        InlineNode::StyledSpan { children, .. } | InlineNode::Hyperlink { children, .. } => {
+            for child in children {
+                load_inline_resources(child, base_path)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Recursively walks an `IRNode` tree and loads any linked resources like images from disk.
+fn load_resources(node: &mut IRNode, base_path: &Path) -> Result<(), PipelineError> {
+    match node {
+        IRNode::Root(children)
+        | IRNode::Block { children, .. }
+        | IRNode::FlexContainer { children, .. }
+        | IRNode::List { children, .. }
+        | IRNode::ListItem { children, .. } => {
+            for child in children {
+                load_resources(child, base_path)?;
+            }
+        }
+        IRNode::Paragraph { children, .. } => {
+            for inline in children {
+                load_inline_resources(inline, base_path)?;
+            }
+        }
+        IRNode::Image { src, data, .. } => {
+            if data.is_none() {
+                let image_path = base_path.join(src);
+                let image_bytes = fs::read(&image_path).map_err(|e| {
+                    PipelineError::IoError(std::io::Error::new(
+                        e.kind(),
+                        format!("Failed to load image '{}': {}", image_path.display(), e),
+                    ))
+                })?;
+                *data = Some(Arc::new(image_bytes) as SharedData);
+            }
+        }
+        IRNode::Table { header, body, .. } => {
+            if let Some(h) = header {
+                for row in &mut h.rows {
+                    for cell in &mut row.cells {
+                        for child in &mut cell.children {
+                            load_resources(child, base_path)?;
+                        }
+                    }
                 }
             }
-            Ok(data_items.into_iter().cloned().collect())
-        }
-        TemplateLanguage::Xslt { .. } => {
-            let path = xslt::get_sequence_path(&stylesheet.page_sequences)?;
-            let results = xpath::select(data, &path);
-            let items: Vec<Value> = if path == "." || path == "/" {
-                vec![data.clone()]
-            } else if let Some(first_val) = results.get(0) {
-                if let Some(arr) = first_val.as_array() {
-                    arr.clone()
-                } else {
-                    results.into_iter().cloned().collect()
+            for row in &mut body.rows {
+                for cell in &mut row.cells {
+                    for child in &mut cell.children {
+                        load_resources(child, base_path)?;
+                    }
                 }
-            } else {
-                Vec::new()
-            };
-            Ok(items)
+            }
         }
     }
+    Ok(())
 }
 
 // Function now accepts a mutable reference to a TreeBuilder.
@@ -283,7 +326,7 @@ fn do_parse_and_layout<'h>(
     let total_start = Instant::now();
     info!("[WORKER-{}] Starting processing sequence.", worker_id);
 
-    let tree = match lang {
+    let mut tree = match lang {
         TemplateLanguage::Xslt {
             preparsed_template, ..
         } => {
@@ -303,11 +346,29 @@ fn do_parse_and_layout<'h>(
         }
         TemplateLanguage::Json => {
             return Err(PipelineError::StylesheetError(
-                "Parallel processing for JSON templates not fully implemented in this refactor."
-                    .to_string(),
+                "Parallel processing for JSON templates not yet implemented.".to_string(),
             ));
         }
     };
+
+    // --- NEW: Resource Loading Pass ---
+    if let TemplateLanguage::Xslt {
+        resource_base_path, ..
+    } = lang
+    {
+        let resource_start = Instant::now();
+        debug!(
+            "[WORKER-{}] Loading resources relative to '{}'.",
+            worker_id,
+            resource_base_path.display()
+        );
+        load_resources(&mut tree, resource_base_path)?;
+        let resource_duration = resource_start.elapsed();
+        debug!(
+            "[WORKER-{}] Finished loading resources in {:.2?}.",
+            worker_id, resource_duration
+        );
+    }
 
     let layout_unit = LayoutUnit {
         tree,
@@ -338,9 +399,9 @@ fn do_parse_and_layout<'h>(
     })
 }
 
-fn consume_and_render_pages<R: DocumentRenderer + ?Sized>(
+fn consume_and_render_pages<W: io::Write + Send>(
     rx: async_channel::Receiver<(usize, Result<LaidOutSequence, PipelineError>)>,
-    renderer: &mut R,
+    renderer: &mut dyn DocumentRenderer<W>,
     template_engine: &Handlebars,
 ) -> Result<(), PipelineError> {
     let mut buffer = BTreeMap::new();
@@ -401,8 +462,25 @@ impl PipelineBuilder {
         mut self,
         path: P,
     ) -> Result<Self, PipelineError> {
-        let xslt_content = fs::read_to_string(path)?;
+        let path_ref = path.as_ref();
+        // --- DEBUGGING FIX: Improve error message ---
+        let xslt_content = fs::read_to_string(path_ref).map_err(|e| {
+            PipelineError::IoError(io::Error::new(
+                e.kind(),
+                format!(
+                    "Failed to read XSLT template from '{}': {}",
+                    path_ref.display(),
+                    e
+                ),
+            ))
+        })?;
         let stylesheet = Stylesheet::from_xslt(&xslt_content)?;
+
+        // Determine the base path for resolving relative resource paths (e.g., images).
+        let resource_base_path = path_ref
+            .parent()
+            .unwrap_or_else(|| Path::new(""))
+            .to_path_buf();
 
         // Pre-parse the template right here, once.
         let sequence_template_str = xslt::extract_sequence_template(&xslt_content)?;
@@ -414,6 +492,7 @@ impl PipelineBuilder {
         self.template_language = Some(TemplateLanguage::Xslt {
             xslt_content,
             preparsed_template,
+            resource_base_path,
         });
         Ok(self)
     }

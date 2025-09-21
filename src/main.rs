@@ -1,5 +1,6 @@
+// FILE: src/main.rs
 use petty::{PipelineBuilder, PipelineError};
-use serde_json::from_str;
+use serde_json::{from_str, Value};
 use std::env;
 use std::fs;
 
@@ -28,7 +29,7 @@ fn main() -> Result<(), PipelineError> {
 
     println!("Loading data from {}", data_path);
     let data_json_str = fs::read_to_string(data_path)?;
-    let data_json = from_str(&data_json_str)?;
+    let data_json: Value = from_str(&data_json_str)?;
 
     println!("Building PDF generation pipeline...");
     // Use the correct builder method for XSLT files.
@@ -37,7 +38,9 @@ fn main() -> Result<(), PipelineError> {
         .build()?;
 
     println!("Generating PDF to {}...", output_path);
-    pipeline.generate_to_file(&data_json, output_path)?;
+    // The CLI can't know the structure of the data, so we assume the XSLT's
+    // <page-sequence> will select the items. We pass an iterator with the single root object.
+    pipeline.generate_to_file(std::iter::once(data_json), output_path)?;
 
     println!("Successfully generated {}", output_path);
     Ok(())

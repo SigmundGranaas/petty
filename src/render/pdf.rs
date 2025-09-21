@@ -16,16 +16,17 @@ use std::io;
 use std::sync::Arc;
 
 /// Manages the state of the entire PDF document, including pages, fonts, and global resources.
-pub struct PdfDocumentRenderer {
+pub struct PdfDocumentRenderer<W: io::Write + Send> {
     document: PdfDocument,
     pub(super) fonts: HashMap<String, FontId>,
     pub(super) default_font: FontId,
     stylesheet: Stylesheet,
     pub(super) image_xobjects: HashMap<String, (XObjectId, (u32, u32))>,
     layout_engine: LayoutEngine,
+    writer: Option<W>,
 }
 
-impl PdfDocumentRenderer {
+impl<W: io::Write + Send> PdfDocumentRenderer<W> {
     /// Creates a new document renderer.
     pub fn new(layout_engine: LayoutEngine) -> Result<Self, RenderError> {
         let stylesheet = &layout_engine.stylesheet;
@@ -50,6 +51,7 @@ impl PdfDocumentRenderer {
             stylesheet: stylesheet.clone(),
             image_xobjects: HashMap::new(),
             layout_engine,
+            writer: None,
         })
     }
 
@@ -95,8 +97,9 @@ impl PdfDocumentRenderer {
     }
 }
 
-impl DocumentRenderer for PdfDocumentRenderer {
-    fn begin_document(&mut self) -> Result<(), RenderError> {
+impl<W: io::Write + Send> DocumentRenderer<W> for PdfDocumentRenderer<W> {
+    fn begin_document(&mut self, writer: W) -> Result<(), RenderError> {
+        self.writer = Some(writer);
         Ok(())
     }
 
@@ -139,7 +142,8 @@ impl DocumentRenderer for PdfDocumentRenderer {
         Ok(())
     }
 
-    fn finalize(self: Box<Self>, mut writer: Box<dyn io::Write + Send>) -> Result<(), RenderError> {
+    fn finalize(self: Box<Self>) -> Result<(), RenderError> {
+        let mut writer = self.writer.ok_or_else(|| RenderError::Other("Document was never started with begin_document".into()))?;
         let mut warnings = Vec::new();
         self.document
             .save_writer(&mut writer, &PdfSaveOptions::default(), &mut warnings);
@@ -158,7 +162,7 @@ struct FooterRenderContext<'a> {
     total_pages: &'static str,
 }
 
-impl PdfDocumentRenderer {
+impl<W: io::Write + Send> PdfDocumentRenderer<W> {
     /// Renders the footer for a given page and returns the PDF operations.
     fn render_footer(
         &self,
@@ -229,8 +233,8 @@ impl PdfDocumentRenderer {
 }
 
 /// Manages the state and generation of PDF operations for a single page's content.
-pub(super) struct PageRenderer<'a> {
-    pub(super) doc_renderer: &'a mut PdfDocumentRenderer,
+pub(super) struct PageRenderer<'a, W: io::Write + Send> {
+    pub(super) doc_renderer: &'a mut PdfDocumentRenderer<W>,
     pub(super) page_height_pt: f32,
     pub(super) ops: Vec<Op>,
     pub(super) state: PageRenderState,
@@ -246,8 +250,8 @@ pub(super) struct PageRenderState {
     pub(super) current_fill_color: Option<printpdf::color::Color>,
 }
 
-impl<'a> PageRenderer<'a> {
-    fn new(doc_renderer: &'a mut PdfDocumentRenderer, page_height_pt: f32) -> Self {
+impl<'a, W: io::Write + Send> PageRenderer<'a, W> {
+    fn new(doc_renderer: &'a mut PdfDocumentRenderer<W>, page_height_pt: f32) -> Self {
         Self {
             doc_renderer,
             page_height_pt,

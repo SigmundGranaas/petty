@@ -6,7 +6,7 @@ pub use self::engine::LayoutEngine;
 // Declare the modules that make up the layout engine.
 mod engine;
 mod page;
-pub(crate) mod style;
+pub mod style;
 
 // Sub-modules for laying out specific element types.
 mod block;
@@ -25,6 +25,7 @@ pub use crate::idf::{IRNode, InlineNode, LayoutUnit};
 pub use self::elements::{
     ImageElement, LayoutElement, PositionedElement, TextElement,
 };
+pub use self::style::ComputedStyle;
 pub use crate::stylesheet::Stylesheet;
 use std::sync::Arc;
 
@@ -34,5 +35,5 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub(crate) enum WorkItem {
     Node(IRNode),
-    EndNode(Arc<style::ComputedStyle>),
+    EndNode(Arc<ComputedStyle>),
 }

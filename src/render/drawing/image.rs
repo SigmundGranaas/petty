@@ -7,10 +7,11 @@ use crate::layout::{ImageElement, PositionedElement};
 use printpdf::ops::Op;
 use printpdf::xobject::XObjectTransform;
 use printpdf::Pt;
+use std::io;
 
 /// Renders an `ImageElement` to the page.
-pub(super) fn draw_image(
-    page: &mut PageRenderer,
+pub(super) fn draw_image<W: io::Write + Send>(
+    page: &mut PageRenderer<W>,
     image_el: &ImageElement,
     positioned: &PositionedElement,
 ) -> Result<(), RenderError> {

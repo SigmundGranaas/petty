@@ -6,14 +6,15 @@
 use super::pdf::PageRenderer;
 use crate::error::RenderError;
 use crate::layout::{LayoutElement, PositionedElement};
+use std::io;
 
 pub(super) mod image;
 pub(super) mod rect;
 pub(super) mod text;
 
 /// The main dispatcher for drawing any `LayoutElement`.
-pub(super) fn draw_element(
-    page: &mut PageRenderer,
+pub(super) fn draw_element<W: io::Write + Send>(
+    page: &mut PageRenderer<W>,
     element: &PositionedElement,
 ) -> Result<(), RenderError> {
     // Background and borders are drawn first, underneath the content.

@@ -15,6 +15,14 @@ pub enum RenderError {
     IoError(#[from] std::io::Error),
     #[error("PDF library error: {0}")]
     PdfLibError(String),
+    #[error("An unspecified error occurred: {0}")]
+    Other(String),
+}
+
+impl From<handlebars::RenderError> for RenderError {
+    fn from(e: handlebars::RenderError) -> Self {
+        RenderError::TemplateError(e.to_string())
+    }
 }
 
 // REMOVED: The `From<printpdf::Error>` implementation is no longer valid
