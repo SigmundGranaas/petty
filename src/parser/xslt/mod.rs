@@ -1,14 +1,13 @@
-// src/parser/xslt/mod.rs
-// src/parser/xslt/mod.rs
-mod builder;
+pub mod builder;
 mod handlers;
 mod util;
 
 use super::processor::TemplateProcessor;
 use crate::error::PipelineError;
 use crate::idf::{IRNode, LayoutUnit};
-use crate::stylesheet::Stylesheet;
+use crate::stylesheet::{PageSequence, Stylesheet};
 use crate::xpath;
+pub use builder::PreparsedTemplate;
 use builder::TreeBuilder;
 use handlebars::Handlebars;
 use log;
@@ -16,14 +15,13 @@ use quick_xml::events::Event as XmlEvent;
 use quick_xml::name::QName;
 use quick_xml::Reader;
 use serde_json::Value;
-use std::io::BufRead;
+use std::collections::HashMap;
+use std::sync::Arc;
 
-/// The main parser for XSLT-like templates. This struct acts as a factory
-/// for creating an iterator that will produce one `IRNode` tree per `sequence`.
 pub struct XsltTemplateParser {
-    xslt_content: String,
     stylesheet: Stylesheet,
     template_engine: Handlebars<'static>,
+    preparsed_template: PreparsedTemplate,
 }
 
 impl XsltTemplateParser {
@@ -31,12 +29,16 @@ impl XsltTemplateParser {
         xslt_content: String,
         stylesheet: Stylesheet,
         template_engine: Handlebars<'static>,
-    ) -> Self {
-        Self {
-            xslt_content,
+    ) -> Result<Self, PipelineError> {
+        let sequence_template_str = extract_sequence_template(&xslt_content)?;
+        let builder = TreeBuilder::new(&template_engine);
+        let preparsed_template = builder.preparse_from_str(&sequence_template_str)?;
+
+        Ok(Self {
             stylesheet,
             template_engine,
-        }
+            preparsed_template,
+        })
     }
 }
 
@@ -47,83 +49,32 @@ impl TemplateProcessor for XsltTemplateParser {
     ) -> Result<Box<dyn Iterator<Item = Result<LayoutUnit, PipelineError>> + 'a + Send>, PipelineError>
     {
         Ok(Box::new(XsltIterator::new(
-            &self.xslt_content,
+            &self.preparsed_template,
             data,
             &self.stylesheet,
-            self.template_engine.clone(),
+            &self.template_engine,
         )?))
     }
 }
 
-/// An iterator that lazily parses an XSLT template and produces a `LayoutUnit`
-/// for each item found in the driving `<page-sequence>` tag.
 pub struct XsltIterator<'a> {
-    sequence_template: String,
+    preparsed_template: &'a PreparsedTemplate,
     data_iterator: std::vec::IntoIter<&'a Value>,
     stylesheet: &'a Stylesheet,
-    template_engine: Handlebars<'static>,
+    builder: TreeBuilder<'a>,
 }
 
 impl<'a> XsltIterator<'a> {
     fn new(
-        xslt_content: &'a str,
+        preparsed_template: &'a PreparsedTemplate,
         data: &'a Value,
         stylesheet: &'a Stylesheet,
-        template_engine: Handlebars<'static>,
+        template_engine: &'a Handlebars<'static>,
     ) -> Result<Self, PipelineError> {
         log::info!("Initializing XSLT iterator...");
-        let mut reader = Reader::from_str(xslt_content);
-        reader.config_mut().trim_text(false);
-        let mut buf = Vec::new();
 
-        // 1. Find the root template <xsl:template match="/">
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(XmlEvent::Start(e)) if e.name().as_ref() == b"xsl:template" => {
-                    if e.attributes().flatten().any(|a| {
-                        a.key.as_ref() == b"match" && a.value.as_ref() == b"/"
-                    }) {
-                        break; // Found it, now find the sequence inside
-                    }
-                }
-                Ok(XmlEvent::Eof) => {
-                    return Err(PipelineError::TemplateParseError(
-                        "Could not find root <xsl:template match=\"/\">".to_string(),
-                    ));
-                }
-                Err(e) => return Err(e.into()),
-                _ => (),
-            }
-            buf.clear();
-        }
+        let path = get_sequence_path(&stylesheet.page_sequences)?;
 
-        // 2. Find the <page-sequence> tag inside the root template
-        let mut select_path: Option<String> = None;
-        let mut sequence_template: Option<String> = None;
-        loop {
-            match reader.read_event_into(&mut buf) {
-                Ok(XmlEvent::Start(e)) if e.name().as_ref() == b"page-sequence" => {
-                    select_path = Some(util::get_attr_required(&e, b"select")?);
-                    sequence_template =
-                        Some(capture_inner_xml(&mut reader, QName(b"page-sequence"))?);
-                    break;
-                }
-                Ok(XmlEvent::End(e)) if e.name().as_ref() == b"xsl:template" => break, // End of root template
-                Ok(XmlEvent::Eof) => break,
-                Err(e) => return Err(e.into()),
-                _ => (),
-            }
-            buf.clear();
-        }
-
-        let path = select_path.ok_or_else(|| {
-            PipelineError::TemplateParseError("Missing <page-sequence> in root template".into())
-        })?;
-        let template = sequence_template.ok_or_else(|| {
-            PipelineError::TemplateParseError("Missing <page-sequence> in root template".into())
-        })?;
-
-        // 3. Select the data items to iterate over
         let selected_values = xpath::select(data, &path);
         let data_items: Vec<&'a Value> = if path == "." || path == "/" {
             vec![data]
@@ -143,13 +94,69 @@ impl<'a> XsltIterator<'a> {
             data_items.len()
         );
 
+        let builder = TreeBuilder::new(template_engine);
+
         Ok(Self {
-            sequence_template: template,
+            preparsed_template,
             data_iterator: data_items.into_iter(),
             stylesheet,
-            template_engine,
+            builder,
         })
     }
+}
+
+pub fn get_sequence_path(
+    page_sequences: &HashMap<String, PageSequence>,
+) -> Result<String, PipelineError> {
+    let seq = page_sequences.values().next().ok_or_else(|| {
+        PipelineError::StylesheetError("No <page-sequence> defined in template.".to_string())
+    })?;
+    Ok(seq.data_source.clone())
+}
+
+pub fn extract_sequence_template(xslt_content: &str) -> Result<String, PipelineError> {
+    let mut reader = Reader::from_str(xslt_content);
+    reader.config_mut().trim_text(false);
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(XmlEvent::Start(e)) if e.name().as_ref() == b"xsl:template" => {
+                if e.attributes().flatten().any(|a| {
+                    a.key.as_ref() == b"match" && a.value.as_ref() == b"/"
+                }) {
+                    break;
+                }
+            }
+            Ok(XmlEvent::Eof) => {
+                return Err(PipelineError::TemplateParseError(
+                    "Could not find root <xsl:template match=\"/\">".to_string(),
+                ));
+            }
+            Err(e) => return Err(e.into()),
+            _ => (),
+        }
+        buf.clear();
+    }
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(XmlEvent::Start(e)) if e.name().as_ref() == b"page-sequence" => {
+                return Ok(util::capture_inner_xml(
+                    &mut reader,
+                    QName(b"page-sequence"),
+                )?);
+            }
+            Ok(XmlEvent::End(e)) if e.name().as_ref() == b"xsl:template" => break,
+            Ok(XmlEvent::Eof) => break,
+            Err(e) => return Err(e.into()),
+            _ => (),
+        }
+        buf.clear();
+    }
+    Err(PipelineError::TemplateParseError(
+        "Missing <page-sequence> in root template".into(),
+    ))
 }
 
 impl<'a> Iterator for XsltIterator<'a> {
@@ -157,13 +164,14 @@ impl<'a> Iterator for XsltIterator<'a> {
 
     fn next(&mut self) -> Option<Self::Item> {
         let context = self.data_iterator.next()?;
-        log::debug!("Building next sequence tree with context: {}", serde_json::to_string(context).unwrap_or_default());
+        log::debug!(
+            "Building next sequence tree with context: {}",
+            serde_json::to_string(context).unwrap_or_default()
+        );
 
-        // Each sequence gets its own builder instance.
-        let mut builder = TreeBuilder::new(&self.template_engine);
-
-        // Parse the captured template fragment for the current data context.
-        let result = builder.build_tree_from_xml_str(&self.sequence_template, context);
+        let result = self
+            .builder
+            .build_tree_from_preparsed(self.preparsed_template, context);
 
         let tree = match result {
             Ok(root_node) => root_node,
@@ -173,59 +181,10 @@ impl<'a> Iterator for XsltIterator<'a> {
         log::debug!("Successfully built sequence tree.");
         Some(Ok(LayoutUnit {
             tree: IRNode::Root(tree),
-            context: context.clone(),
+            context: Arc::new(context.clone()),
         }))
     }
 }
-
-/// A utility to capture the inner raw XML of a node.
-/// Assumes the reader is positioned after the Start tag.
-pub(crate) fn capture_inner_xml<B: BufRead>(
-    reader: &mut Reader<B>,
-    tag_name: QName,
-) -> Result<String, PipelineError> {
-    let mut buf = Vec::new();
-    let mut writer_buf = Vec::new();
-    let mut writer = quick_xml::Writer::new(&mut writer_buf);
-    let mut depth = 0;
-
-    loop {
-        match reader.read_event_into(&mut buf) {
-            Ok(XmlEvent::Start(e)) => {
-                // The original tag was already consumed, so the first tag with this name
-                // increases the depth.
-                if e.name() == tag_name {
-                    depth += 1;
-                }
-                writer.write_event(XmlEvent::Start(e))?;
-            }
-            Ok(XmlEvent::End(e)) => {
-                if e.name() == tag_name {
-                    if depth == 0 {
-                        // This is the closing tag for the original node.
-                        break;
-                    }
-                    // This is a closing tag for a nested node of the same name.
-                    depth -= 1;
-                }
-                writer.write_event(XmlEvent::End(e))?;
-            }
-            Ok(XmlEvent::Eof) => {
-                return Err(PipelineError::TemplateParseError(
-                    "Unclosed tag while capturing inner XML".into(),
-                ))
-            }
-            Ok(event) => {
-                writer.write_event(event)?;
-            }
-            Err(e) => return Err(e.into()),
-        }
-        buf.clear();
-    }
-    drop(writer);
-    Ok(String::from_utf8(writer_buf)?)
-}
-
 
 #[cfg(test)]
 mod tests {
@@ -233,6 +192,7 @@ mod tests {
     use crate::idf::InlineNode;
     use handlebars::Handlebars;
     use serde_json::json;
+    use std::sync::Arc;
 
     fn generate_large_test_data(count: usize) -> Value {
         let records: Vec<Value> = (0..count).map(|i| json!({ "id": i })).collect();
@@ -259,15 +219,14 @@ mod tests {
 
         let stylesheet = Stylesheet::from_xslt(xslt_content).unwrap();
         let handlebars = Handlebars::new();
-        let mut parser = XsltTemplateParser::new(xslt_content.to_string(), stylesheet, handlebars);
+        let mut parser =
+            XsltTemplateParser::new(xslt_content.to_string(), stylesheet, handlebars).unwrap();
 
-        // `process` should return quickly, creating the iterator.
         let mut iterator_result = parser.process(&data).unwrap();
 
-        // Consume the iterator.
         let mut count = 0;
-        let mut first_context: Option<Value> = None;
-        let mut last_context: Option<Value> = None;
+        let mut first_context: Option<Arc<Value>> = None;
+        let mut last_context: Option<Arc<Value>> = None;
 
         while let Some(item_result) = iterator_result.next() {
             let layout_unit = item_result.expect("LayoutUnit should be generated successfully");
@@ -278,12 +237,13 @@ mod tests {
             count += 1;
         }
 
-        // Assert that the iterator produced one LayoutUnit for each record.
-        assert_eq!(count, num_records, "The iterator should produce one LayoutUnit per record");
-
-        // Assert the context of the first and last items.
-        assert_eq!(first_context, Some(json!({"id": 0})));
-        assert_eq!(last_context, Some(json!({"id": num_records - 1})));
+        assert_eq!(
+            count,
+            num_records,
+            "The iterator should produce one LayoutUnit per record"
+        );
+        assert_eq!(*first_context.unwrap(), json!({"id": 0}));
+        assert_eq!(*last_context.unwrap(), json!({"id": num_records - 1}));
     }
 
     #[test]
@@ -295,7 +255,6 @@ mod tests {
             ]
         });
 
-        // A simplified version of the perf_test_template.xsl
         let xslt_content = r#"
             <xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:fo="http://www.w3.org/1999/XSL/Format">
                 <fo:simple-page-master page-width="8.5in" page-height="11in" />
@@ -309,19 +268,27 @@ mod tests {
 
         let stylesheet = Stylesheet::from_xslt(xslt_content).unwrap();
         let handlebars = Handlebars::new();
-        let mut parser = XsltTemplateParser::new(xslt_content.to_string(), stylesheet, handlebars);
+        let mut parser =
+            XsltTemplateParser::new(xslt_content.to_string(), stylesheet, handlebars).unwrap();
 
         let mut iterator = parser.process(&data).unwrap();
 
-        // Check first layout unit
         let unit1 = iterator.next().unwrap().unwrap();
-        assert_eq!(unit1.context, json!({ "user": { "account": "ACC-1" } }));
+        assert_eq!(*unit1.context, json!({ "user": { "account": "ACC-1" } }));
         if let IRNode::Root(children) = unit1.tree {
             assert_eq!(children.len(), 1);
-            if let IRNode::Paragraph { children: inlines, .. } = &children[0] {
-                // Expecting "Account: " and "ACC-1" as two separate inline text nodes
-                assert_eq!(inlines.len(), 2, "Expected two inline text nodes for static text and value-of");
-                if let (Some(InlineNode::Text(t1)), Some(InlineNode::Text(t2))) = (inlines.get(0), inlines.get(1)) {
+            if let IRNode::Paragraph {
+                children: inlines, ..
+            } = &children[0]
+            {
+                assert_eq!(
+                    inlines.len(),
+                    2,
+                    "Expected two inline text nodes for static text and value-of"
+                );
+                if let (Some(InlineNode::Text(t1)), Some(InlineNode::Text(t2))) =
+                    (inlines.get(0), inlines.get(1))
+                {
                     assert_eq!(t1, "Account: ");
                     assert_eq!(t2, "ACC-1");
                 } else {
@@ -334,11 +301,8 @@ mod tests {
             panic!("Expected a Root node");
         }
 
-        // Check second layout unit
         let unit2 = iterator.next().unwrap().unwrap();
-        assert_eq!(unit2.context, json!({ "user": { "account": "ACC-2" } }));
-
-        // Check for end of iteration
+        assert_eq!(*unit2.context, json!({ "user": { "account": "ACC-2" } }));
         assert!(iterator.next().is_none(), "Iterator should be exhausted");
     }
 }

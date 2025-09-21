@@ -1,5 +1,4 @@
 // src/parser/xslt/handlers/inline.rs
-// src/parser/xslt/handlers/inline.rs
 use super::super::builder::TreeBuilder;
 use super::super::util::{
     get_attr_owned_optional, get_attr_owned_required, parse_fo_attributes_to_element_style,
@@ -9,7 +8,8 @@ use crate::error::PipelineError;
 use crate::idf::InlineNode;
 use serde_json::Value;
 
-impl<'a> TreeBuilder<'a> {
+// MODIFIED: Updated impl block to use the correct lifetime parameter.
+impl<'h> TreeBuilder<'h> {
     pub(in crate::parser::xslt) fn handle_link(
         &mut self,
         context: &Value,
@@ -18,15 +18,12 @@ impl<'a> TreeBuilder<'a> {
         let href_template = get_attr_owned_required(attributes, b"href", b"link")?;
         let style_name = get_attr_owned_optional(attributes, b"style")?;
         let style_override = parse_fo_attributes_to_element_style(attributes)?;
-        let href = self
-            .template_engine
-            .render_template(&href_template, context)
-            .map_err(|err| PipelineError::TemplateParseError(err.to_string()))?;
+        let href = self.render_text(&href_template, context)?;
         self.inline_stack.push(InlineNode::Hyperlink {
             href,
             style_name,
             style_override,
-            children: vec![],
+            children: Vec::with_capacity(4), // PERF: Pre-allocate children vector
         });
         Ok(())
     }
@@ -46,7 +43,7 @@ impl<'a> TreeBuilder<'a> {
         self.inline_stack.push(InlineNode::StyledSpan {
             style_name,
             style_override,
-            children: vec![],
+            children: Vec::with_capacity(4), // PERF: Pre-allocate children vector
         });
         Ok(())
     }

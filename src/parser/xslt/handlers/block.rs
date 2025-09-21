@@ -1,48 +1,49 @@
 // src/parser/xslt/handlers/block.rs
-// src/parser/xslt/handlers/block.rs
+
 use super::super::builder::TreeBuilder;
 use super::super::util::{
     get_attr_owned_optional, parse_fo_attributes_to_element_style, OwnedAttributes,
 };
 use crate::error::PipelineError;
 use crate::idf::IRNode;
-use quick_xml::events::BytesStart;
 
-impl<'a> TreeBuilder<'a> {
+impl<'h> TreeBuilder<'h> {
     pub(in crate::parser::xslt) fn handle_block_element(
         &mut self,
-        e: &BytesStart,
+        tag_name: &[u8],
         attributes: &OwnedAttributes,
     ) -> Result<(), PipelineError> {
         let style_name = get_attr_owned_optional(attributes, b"style")?;
         let style_override = parse_fo_attributes_to_element_style(attributes)?;
 
-        let node = match e.name().as_ref() {
+        // PERF: Pre-allocate children vectors with a small, reasonable capacity
+        // to avoid repeated reallocations for small-to-medium sized containers.
+        let node = match tag_name {
             b"list" => IRNode::List {
                 style_name,
                 style_override,
-                children: vec![],
+                children: Vec::with_capacity(8),
             },
             b"list-item" => IRNode::ListItem {
                 style_name,
                 style_override,
-                children: vec![],
+                children: Vec::with_capacity(4),
             },
             b"flex-container" => IRNode::FlexContainer {
                 style_name,
                 style_override,
-                children: vec![],
+                children: Vec::with_capacity(4),
             },
             b"text" => IRNode::Paragraph {
                 style_name,
                 style_override,
-                children: vec![],
+                children: Vec::with_capacity(8),
             },
             // Default to a generic block container
             _ => IRNode::Block {
                 style_name,
                 style_override,
-                children: vec![],
+                children: Vec::with_capacity(8),
             },
         };
         self.node_stack.push(node);

@@ -75,9 +75,9 @@ fn main() -> Result<(), PipelineError> {
 
     let duration = start_time.elapsed();
     println!("\nSuccess! Generated {}", output_path);
-    println!("Total time taken: {:.2} seconds for {} pages.", duration.as_secs_f64(), num_records);
+    println!("Total time taken: {:.2} seconds for {} record.", duration.as_secs_f64(), num_records);
     if num_records > 0 {
-        println!("Average time per page: {:.2} ms.", duration.as_millis() as f64 / num_records as f64);
+        println!("Average time per record: {:.2} ms.", duration.as_millis() as f64 / num_records as f64);
     }
     Ok(())
 }

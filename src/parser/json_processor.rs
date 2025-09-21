@@ -1,4 +1,5 @@
 // src/parser/json_processor.rs
+
 use super::processor::TemplateProcessor;
 use crate::error::PipelineError;
 use crate::idf::{
@@ -272,7 +273,7 @@ impl<'a> Iterator for JsonIterator<'a> {
                 let tree = IRNode::Root(children);
                 LayoutUnit {
                     tree,
-                    context: item_data.clone(),
+                    context: item_data.clone().into(),
                 }
             });
 
@@ -338,6 +339,7 @@ mod tests {
     use crate::stylesheet::{PageSequence, Template};
     use serde_json::json;
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     fn create_test_stylesheet(
         template_name: &str,
@@ -390,8 +392,8 @@ mod tests {
 
         // Consume the iterator and verify its output.
         let mut count = 0;
-        let mut first_context: Option<Value> = None;
-        let mut last_context: Option<Value> = None;
+        let mut first_context: Option<Arc<Value>> = None;
+        let mut last_context: Option<Arc<Value>> = None;
 
         while let Some(item_result) = iterator_result.next() {
             let layout_unit = item_result.expect("LayoutUnit should be generated successfully");
@@ -409,10 +411,7 @@ mod tests {
         );
 
         // Assert the context of the first and last items to ensure correct data processing.
-        assert_eq!(first_context, Some(json!({"id": 0})));
-        assert_eq!(
-            last_context,
-            Some(json!({"id": num_records - 1}))
-        );
+        assert_eq!(*first_context.unwrap(), json!({"id": 0}));
+        assert_eq!(*last_context.unwrap(), json!({"id": num_records - 1}));
     }
 }

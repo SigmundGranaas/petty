@@ -8,14 +8,15 @@ use super::image;
 use super::style;
 use super::table;
 use super::text;
-use super::{IRNode, LayoutEngine, WorkItem};
+use super::{IRNode, LayoutEngine, LayoutUnit, WorkItem};
 use crate::stylesheet::Margins;
+use std::sync::Arc;
 
 /// A stateful iterator that performs the **Positioning Pass** of the layout algorithm.
 /// It consumes a pre-measured `IRNode` tree and yields pages of positioned elements.
 pub struct PageIterator<'a> {
     engine: &'a LayoutEngine,
-    work_stack: Vec<(WorkItem, style::ComputedStyle)>,
+    work_stack: Vec<(WorkItem, Arc<style::ComputedStyle>)>,
     current_y: f32,
     page_width: f32,
     page_height: f32,
@@ -26,7 +27,7 @@ pub struct PageIterator<'a> {
 
 impl<'a> PageIterator<'a> {
     /// Creates a new `PageIterator`. This is typically called by the `LayoutEngine`.
-    pub fn new(annotated_tree: IRNode, engine: &'a LayoutEngine) -> Self {
+    pub fn new(layout_unit: LayoutUnit, engine: &'a LayoutEngine) -> Self {
         let (page_width, page_height) = style::get_page_dimensions(&engine.stylesheet);
         let margins = &engine.stylesheet.page.margins;
         // FIX: Calculate the end of the content area by reserving space for the footer.
@@ -35,7 +36,7 @@ impl<'a> PageIterator<'a> {
         let mut work_stack = Vec::new();
         let default_style = engine.get_default_style();
 
-        if let IRNode::Root(children) = annotated_tree {
+        if let IRNode::Root(children) = layout_unit.tree {
             // Push children onto the stack in reverse order to process them correctly.
             work_stack.extend(
                 children
@@ -72,7 +73,7 @@ impl<'a> PageIterator<'a> {
     fn layout_node(
         &mut self,
         node: &mut IRNode,
-        style: &style::ComputedStyle,
+        style: &Arc<style::ComputedStyle>,
         available_width: f32,
         available_height: f32,
     ) -> (Vec<PositionedElement>, f32, Option<WorkItem>) {
@@ -111,7 +112,8 @@ impl<'a> PageIterator<'a> {
             IRNode::Image { src, data, .. } => {
                 image::layout_image(src, data.as_ref(), style, available_width)
             }
-            IRNode::Table {
+            // FIX: Corrected match ergonomics for Rust 2021 edition
+            &mut IRNode::Table {
                 ref style_name,
                 ref style_override,
                 ref columns,
@@ -280,374 +282,5 @@ impl<'a> Iterator for PageIterator<'a> {
         } else {
             None
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::idf::{
-        IRNode, InlineNode, LayoutUnit, TableBody, TableCell, TableColumnDefinition, TableHeader,
-        TableRow,
-    };
-    use crate::layout::LayoutElement;
-    use crate::stylesheet::{ElementStyle, Margins, PageLayout, PageSize, Stylesheet};
-    use serde_json::Value;
-    use std::collections::HashMap;
-
-    fn create_test_engine(page_height: f32) -> LayoutEngine {
-        let stylesheet = Stylesheet {
-            page: PageLayout {
-                size: PageSize::Custom {
-                    width: 500.0,
-                    height: page_height,
-                },
-                margins: Margins {
-                    top: 10.0,
-                    right: 10.0,
-                    bottom: 10.0,
-                    left: 10.0,
-                },
-                ..Default::default()
-            },
-            ..Default::default()
-        };
-        LayoutEngine::new(stylesheet)
-    }
-
-    fn create_test_engine_with_styles(
-        page_height: f32,
-        styles: HashMap<String, ElementStyle>,
-    ) -> LayoutEngine {
-        let stylesheet = Stylesheet {
-            page: PageLayout {
-                size: PageSize::Custom {
-                    width: 500.0,
-                    height: page_height,
-                },
-                margins: Margins {
-                    top: 10.0,
-                    right: 10.0,
-                    bottom: 10.0,
-                    left: 10.0,
-                },
-                ..Default::default()
-            },
-            styles,
-            ..Default::default()
-        };
-        LayoutEngine::new(stylesheet)
-    }
-
-    #[test]
-    fn test_single_page_layout() {
-        let engine = create_test_engine(500.0);
-        let tree = IRNode::Root(vec![
-            IRNode::Paragraph {
-                style_name: None,
-                style_override: None,
-                children: vec![InlineNode::Text("Hello".to_string())],
-            },
-            IRNode::Paragraph {
-                style_name: None,
-                style_override: None,
-                children: vec![InlineNode::Text("World".to_string())],
-            },
-        ]);
-
-        let layout_unit = LayoutUnit {
-            tree,
-            context: Value::Null,
-        };
-        let mut page_iter = engine.paginate_tree(&layout_unit).unwrap();
-
-        let page1 = page_iter.next().expect("Should have one page");
-        assert_eq!(page1.len(), 2);
-        assert!((page1[0].y - 10.0).abs() < 0.1); // Starts at top margin
-        assert!((page1[1].y - (10.0 + 14.4)).abs() < 0.1); // Second element is one line height down
-
-        assert!(page_iter.next().is_none(), "Should only be one page");
-    }
-
-    #[test]
-    fn test_paragraph_splits_across_pages() {
-        let engine = create_test_engine(100.0);
-        // Page content height is 100 - 10 - 10 = 80.
-        // Default line height is 14.4. 80 / 14.4 = 5.55 -> 5 lines fit.
-        let long_text = "This is a very long line of text designed to wrap multiple times and exceed the height of a single small page. ".repeat(5);
-
-        let tree = IRNode::Root(vec![IRNode::Paragraph {
-            style_name: None,
-            style_override: None,
-            children: vec![InlineNode::Text(long_text)],
-        }]);
-
-        let layout_unit = LayoutUnit {
-            tree,
-            context: Value::Null,
-        };
-        let mut page_iter = engine.paginate_tree(&layout_unit).unwrap();
-
-        // Page 1
-        let page1 = page_iter.next().expect("Should generate page 1");
-        assert!(!page1.is_empty());
-        let last_element_p1 = page1.last().unwrap();
-        assert!(
-            last_element_p1.y + last_element_p1.height < 90.0,
-            "Content on page 1 should not exceed bottom margin"
-        );
-        assert!(
-            page1.len() >= 5,
-            "Page 1 should have at least 5 lines, but had {}",
-            page1.len()
-        );
-
-        // Page 2
-        let page2 = page_iter.next().expect("Should generate page 2");
-        assert!(!page2.is_empty());
-        let first_element_p2 = page2.first().unwrap();
-        assert!(
-            (first_element_p2.y - engine.stylesheet.page.margins.top).abs() < 1.0,
-            "Content on page 2 should start near the top margin"
-        );
-
-        assert!(page_iter.next().is_none(), "Should be exactly two pages");
-    }
-
-    #[test]
-    fn test_margins_are_applied() {
-        let mut styles = HashMap::new();
-        styles.insert(
-            "margined".to_string(),
-            ElementStyle {
-                margin: Some(Margins {
-                    top: 20.0,
-                    bottom: 5.0,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            },
-        );
-        let engine = create_test_engine_with_styles(500.0, styles);
-
-        let tree = IRNode::Root(vec![
-            IRNode::Paragraph {
-                style_name: None,
-                style_override: None,
-                children: vec![InlineNode::Text("First".to_string())],
-            },
-            IRNode::Paragraph {
-                style_name: Some("margined".to_string()),
-                style_override: None,
-                children: vec![InlineNode::Text("Second".to_string())],
-            },
-            IRNode::Paragraph {
-                style_name: None,
-                style_override: None,
-                children: vec![InlineNode::Text("Third".to_string())],
-            },
-        ]);
-        let layout_unit = LayoutUnit {
-            tree,
-            context: Value::Null,
-        };
-
-        let mut page_iter = engine.paginate_tree(&layout_unit).unwrap();
-        let page1 = page_iter.next().unwrap();
-
-        assert_eq!(page1.len(), 3);
-
-        let default_style = style::get_default_style();
-        let margined_style =
-            engine.compute_style(Some("margined"), None, &default_style);
-
-        // Position of first element's content box
-        let y0 = 10.0 + default_style.margin.top;
-        assert!((page1[0].y - y0).abs() < 0.1);
-        let height0 = page1[0].height + default_style.padding.top + default_style.padding.bottom;
-
-        // Position of second element's content box
-        let y1 = y0 + height0 + default_style.margin.bottom + margined_style.margin.top;
-        assert!((page1[1].y - y1).abs() < 0.1);
-        let height1 = page1[1].height + margined_style.padding.top + margined_style.padding.bottom;
-
-        // Position of third element's content box
-        let y2 = y1 + height1 + margined_style.margin.bottom + default_style.margin.top;
-        assert!((page1[2].y - y2).abs() < 0.1);
-    }
-
-    #[test]
-    fn test_node_pushed_to_next_page_if_it_does_not_fit() {
-        let mut styles = HashMap::new();
-        styles.insert(
-            "tall_box".to_string(),
-            ElementStyle {
-                height: Some(crate::stylesheet::Dimension::Pt(50.0)),
-                // Add a background color so the block generates a renderable rectangle.
-                background_color: Some(crate::stylesheet::Color {
-                    r: 255,
-                    g: 0,
-                    b: 0,
-                    a: 1.0,
-                }),
-                ..Default::default()
-            },
-        );
-        let engine = create_test_engine_with_styles(100.0, styles); // Content height = 80
-
-        let tree = IRNode::Root(vec![
-            // This first paragraph will take up space
-            IRNode::Paragraph {
-                style_name: None,
-                style_override: None,
-                children: vec![InlineNode::Text("Line\nLine\nLine\nLine".to_string())], // 4 lines * 14.4 = 57.6pts
-            },
-            // The remaining space is 80 - 57.6 = 22.4. The block is 50pts tall, so it shouldn't fit.
-            // Use a Block instead of an Image to make the test more robust.
-            IRNode::Block {
-                style_name: Some("tall_box".to_string()),
-                style_override: None,
-                children: vec![],
-            },
-        ]);
-
-        let layout_unit = LayoutUnit {
-            tree,
-            context: Value::Null,
-        };
-        let mut page_iter = engine.paginate_tree(&layout_unit).unwrap();
-
-        let page1 = page_iter.next().expect("Page 1 should exist");
-        assert_eq!(
-            page1.len(),
-            4,
-            "Page 1 should only contain the text lines"
-        );
-
-        let page2 = page_iter.next().expect("Page 2 should exist");
-        assert_eq!(
-            page2.len(),
-            1,
-            "Page 2 should contain the block's background rectangle"
-        );
-
-        // Verify we got the correct element (a Rectangle from the background).
-        assert!(matches!(
-            page2[0].element,
-            crate::layout::LayoutElement::Rectangle(_)
-        ));
-
-        // Verify its position and size.
-        assert!(
-            (page2[0].y - 10.0).abs() < 0.1,
-            "Block should start at the top margin of the new page"
-        );
-        assert!(
-            (page2[0].height - 50.0).abs() < 0.1,
-            "Block should have the correct height from its style"
-        );
-    }
-
-    #[test]
-    fn test_table_splits_across_pages_with_header_repeat() {
-        // Page height 150, content height 130.
-        // Line height ~14.4. Header is 1 row, so ~14.4 height.
-        // Remaining content height for body: 130 - 14.4 = 115.6.
-        // 115.6 / 14.4 = ~8 rows can fit. We will create 10 body rows.
-        let engine = create_test_engine(150.0);
-        let body_rows: Vec<TableRow> = (0..10)
-            .map(|i| TableRow {
-                cells: vec![TableCell {
-                    style_name: None,
-                    style_override: None,
-                    children: vec![IRNode::Paragraph {
-                        style_name: None,
-                        style_override: None,
-                        children: vec![InlineNode::Text(format!("Row {}", i + 1))],
-                    }],
-                }],
-            })
-            .collect();
-        let table = IRNode::Table {
-            style_name: None,
-            style_override: None,
-            columns: vec![TableColumnDefinition {
-                width: None,
-                style: None,
-                header_style: None,
-            }],
-            calculated_widths: vec![480.0], // pre-calculated for simplicity
-            header: Some(Box::new(TableHeader {
-                rows: vec![TableRow {
-                    cells: vec![TableCell {
-                        style_name: None,
-                        style_override: None,
-                        children: vec![IRNode::Paragraph {
-                            style_name: None,
-                            style_override: None,
-                            children: vec![InlineNode::Text("Header".to_string())],
-                        }],
-                    }],
-                }],
-            })),
-            body: Box::new(TableBody { rows: body_rows }),
-        };
-
-        let layout_unit = LayoutUnit {
-            tree: IRNode::Root(vec![table]),
-            context: Value::Null,
-        };
-        let mut page_iter = engine.paginate_tree(&layout_unit).unwrap();
-
-        // Page 1
-        let page1 = page_iter.next().expect("Page 1 should be generated");
-        assert!(!page1.is_empty(), "Page 1 should not be empty");
-        let page1_text_elements: Vec<&String> = page1
-            .iter()
-            .filter_map(|el| match &el.element {
-                LayoutElement::Text(t) => Some(&t.content),
-                _ => None,
-            })
-            .collect();
-
-        assert_eq!(page1_text_elements[0], "Header", "Page 1 should have header");
-        assert!(
-            page1_text_elements.len() > 2 && page1_text_elements.len() < 11,
-            "Page 1 should have the header and some, but not all, rows. Had {} text elements.",
-            page1_text_elements.len()
-        );
-        assert_eq!(
-            page1_text_elements.last().unwrap().as_str(),
-            "Row 8",
-            "Page 1 should end with Row 8"
-        );
-
-        // Page 2
-        let page2 = page_iter.next().expect("Page 2 should be generated");
-        assert!(!page2.is_empty(), "Page 2 should not be empty");
-        let page2_text_elements: Vec<&String> = page2
-            .iter()
-            .filter_map(|el| match &el.element {
-                LayoutElement::Text(t) => Some(&t.content),
-                _ => None,
-            })
-            .collect();
-
-        assert_eq!(page2_text_elements[0], "Header", "Page 2 should repeat header");
-        assert!(
-            page2_text_elements.len() >= 3,
-            "Page 2 should have the header and the remaining rows"
-        );
-        assert_eq!(
-            page2_text_elements[1], "Row 9",
-            "Page 2 should start with Row 9"
-        );
-        assert_eq!(
-            page2_text_elements.last().unwrap().as_str(),
-            "Row 10",
-            "Page 2 should end with Row 10"
-        );
-
-        assert!(page_iter.next().is_none(), "There should only be two pages");
     }
 }

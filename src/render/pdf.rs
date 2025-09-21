@@ -9,6 +9,7 @@ use printpdf::image::RawImage;
 use printpdf::ops::Op;
 use printpdf::xobject::XObject;
 use printpdf::{FontId, Layer, Mm, PdfConformance, PdfDocument, PdfPage, PdfSaveOptions, Pt, Rgb, TextItem, TextMatrix, XObjectId};
+use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::io;
@@ -105,6 +106,7 @@ impl DocumentRenderer for PdfDocumentRenderer {
         elements: Vec<PositionedElement>,
         template_engine: &Handlebars,
     ) -> Result<(), RenderError> {
+        // FIX: Clone the page layout to avoid a long-lived immutable borrow of `self`.
         let page_layout = self.stylesheet.page.clone();
         let (width_mm, height_mm) = Self::get_page_dimensions_mm(&page_layout);
         let (_, page_height_pt) = Self::get_page_dimensions_pt(&page_layout);
@@ -137,14 +139,23 @@ impl DocumentRenderer for PdfDocumentRenderer {
         Ok(())
     }
 
-    fn finalize<W: io::Write>(
-        self,
-        mut writer: W,
-    ) -> Result<(), RenderError> {
+    fn finalize(self: Box<Self>, mut writer: Box<dyn io::Write + Send>) -> Result<(), RenderError> {
         let mut warnings = Vec::new();
-        self.document.save_writer(&mut writer, &PdfSaveOptions::default(), &mut warnings);
+        self.document
+            .save_writer(&mut writer, &PdfSaveOptions::default(), &mut warnings);
         Ok(())
     }
+}
+
+// PERF: A lightweight wrapper struct to pass data to the footer template.
+// Using `#[serde(flatten)]` avoids cloning the entire original data context,
+// which was a major source of allocations.
+#[derive(Serialize)]
+struct FooterRenderContext<'a> {
+    #[serde(flatten)]
+    data: &'a Value,
+    page_num: usize,
+    total_pages: &'static str,
 }
 
 impl PdfDocumentRenderer {
@@ -161,12 +172,12 @@ impl PdfDocumentRenderer {
             None => return Ok(None),
         };
 
-        // Create a temporary context to add pagination info for the template.
-        let mut context_with_pagination = context.clone();
-        if let Some(obj) = context_with_pagination.as_object_mut() {
-            obj.insert("page_num".to_string(), page_num.into());
-            obj.insert("total_pages".to_string(), Value::String("?".to_string()));
-        }
+        // PERF: Use the lightweight wrapper context to avoid a deep clone of `context`.
+        let footer_context = FooterRenderContext {
+            data: context,
+            page_num,
+            total_pages: "?", // Total pages is unknown at this stage
+        };
 
         let style = self.layout_engine.compute_style(
             page_layout.footer_style.as_deref(),
@@ -175,7 +186,7 @@ impl PdfDocumentRenderer {
         );
 
         let rendered_text = template_engine
-            .render_template(footer_template, &context_with_pagination)
+            .render_template(footer_template, &footer_context)
             .map_err(|e| RenderError::TemplateError(e.to_string()))?;
 
         // Manual replacement for legacy placeholders for now.
@@ -184,7 +195,7 @@ impl PdfDocumentRenderer {
             .replace("%t", "?");
 
         let (page_width_pt, _) = Self::get_page_dimensions_pt(page_layout);
-        let font_id = self.fonts.get(&style.font_family).unwrap_or(&self.default_font);
+        let font_id = self.fonts.get(style.font_family.as_str()).unwrap_or(&self.default_font);
         let color = Rgb::new(
             style.color.r as f32 / 255.0,
             style.color.g as f32 / 255.0,

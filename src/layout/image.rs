@@ -1,7 +1,3 @@
-// src/layout/image.rs
-
-//! Layout logic for image elements.
-
 use super::elements::{ImageElement, LayoutElement, PositionedElement};
 use super::style::ComputedStyle;
 use crate::stylesheet::Dimension;
@@ -10,7 +6,7 @@ use std::sync::Arc;
 pub fn layout_image(
     src: &str,
     data: Option<&Arc<Vec<u8>>>,
-    style: &ComputedStyle,
+    style: &Arc<ComputedStyle>,
     available_width: f32,
 ) -> (Vec<PositionedElement>, f32, Option<super::WorkItem>) {
     let content_width = available_width - style.padding.left - style.padding.right;

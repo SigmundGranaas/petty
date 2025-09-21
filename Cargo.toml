@@ -5,6 +5,8 @@ edition = "2021"
 
 [dependencies]
 # PDF generation
+lopdf = "0.36.0"
+flate2 = "1.0"
 printpdf = { version = "0.8.2", features = ["png"] }
 
 # Data processing
@@ -20,9 +22,10 @@ quick-xml = { version = "0.37.5", features = ["serialize"] }
 thiserror = "2.0.12"
 rand = "0.9.1"
 log = "0.4"
+num_cpus = "1.16"
 env_logger = "0.11"
 tokio = { version = "1.44.2", features = ["macros", "rt", "sync", "rt-multi-thread"] }
-async-trait = "0.1"
+async-channel = "2.2.0"
 
 [dev-dependencies]
 dhat = { version = "0.3"}

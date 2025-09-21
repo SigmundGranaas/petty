@@ -1,22 +1,26 @@
+// src/layout/table.rs
+
 //! Layout logic for tables, rows, and cells.
 
-use super::flex::layout_subtree; // Re-use the subtree layout for cells
+use super::flex::{layout_subtree, measure_subtree_height};
 use super::style::ComputedStyle;
 use super::{IRNode, LayoutEngine, PositionedElement, WorkItem};
 use crate::idf::{TableBody, TableColumnDefinition, TableHeader, TableRow};
 use crate::stylesheet::{Dimension, ElementStyle};
+use std::sync::Arc;
 
 /// Lays out a single table row and its cells.
 fn layout_table_row(
     engine: &LayoutEngine,
     row: &mut TableRow,
-    parent_style: &ComputedStyle,
+    parent_style: &Arc<ComputedStyle>,
     widths: &[f32],
     start_y: f32,
 ) -> (Vec<PositionedElement>, f32) {
-    let mut all_row_elements = Vec::new();
+    // PERF: Pre-allocate vectors with known sizes.
+    let mut all_row_elements = Vec::with_capacity(row.cells.len() * 4); // Guess: 4 elements per cell
+    let mut cell_layouts = Vec::with_capacity(row.cells.len());
     let mut max_cell_height: f32 = 0.0;
-    let mut cell_layouts = Vec::new();
     let mut current_x = 0.0;
 
     for (i, cell) in row.cells.iter_mut().enumerate() {
@@ -56,11 +60,11 @@ fn layout_table_row(
 fn layout_rows(
     engine: &LayoutEngine,
     rows: &mut [TableRow],
-    parent_style: &ComputedStyle,
+    parent_style: &Arc<ComputedStyle>,
     widths: &[f32],
     start_y: f32,
 ) -> (Vec<PositionedElement>, f32) {
-    let mut all_row_elements = Vec::new();
+    let mut all_row_elements = Vec::with_capacity(rows.len() * widths.len() * 4); // Guess: rows * cells * elements_per_cell
     let mut current_y = start_y;
     for row in rows {
         let (row_els, row_height) = layout_table_row(engine, row, parent_style, widths, current_y);
@@ -75,11 +79,12 @@ pub fn layout_table(
     engine: &LayoutEngine,
     header: Option<&mut TableHeader>,
     body: &mut TableBody,
-    style: &ComputedStyle,
+    style: &Arc<ComputedStyle>,
     widths: &[f32],
     available_height: f32,
 ) -> (Vec<PositionedElement>, f32, Option<Box<TableBody>>) {
-    let mut elements = Vec::new();
+    // PERF: Pre-allocate with a reasonable guess.
+    let mut elements = Vec::with_capacity(body.rows.len() * widths.len());
     let mut total_height = 0.0;
 
     // 1. Layout header
@@ -95,36 +100,39 @@ pub fn layout_table(
         total_height += header_height;
     }
 
-    // 2. Find how many body rows fit on the current page
+    // 2. Perform a cheap measurement pass first.
     let mut all_rows = std::mem::take(&mut body.rows);
-    let mut split_idx = all_rows.len();
+    let mut split_idx = 0;
+    let mut current_measured_height = total_height;
 
     for (i, row) in all_rows.iter_mut().enumerate() {
-        // Measure row height by performing a temporary layout
-        let (_, row_height) = layout_table_row(engine, &mut row.clone(), style, widths, 0.0);
-        if total_height + row_height > available_height {
+        // Use a cheap, non-allocating measurement function.
+        let row_height = measure_table_row(engine, row, style, widths);
+
+        if current_measured_height + row_height > available_height && i > 0 {
             split_idx = i;
             break;
         }
-        // This is just a measurement pass, so we only update total_height.
-        // The real layout happens below on the slice of rows that fit.
-        total_height += row_height;
+        current_measured_height += row_height;
+        split_idx = i + 1;
     }
 
-    // 3. Separate rows for this page from the remaining rows
+    // 3. Separate the processed rows from the remainder.
     let remaining_rows_vec = all_rows.split_off(split_idx);
     let mut rows_for_this_page = all_rows;
 
-    // 4. Perform the final layout for the rows that fit on this page
-    let header_height = elements.iter().map(|el| el.height).sum(); // A rough estimate
-    let (body_elements, _body_height) =
-        layout_rows(engine, &mut rows_for_this_page, style, widths, header_height);
-    elements.extend(body_elements);
+    // 4. Perform the expensive layout ONLY on the rows that fit.
+    if !rows_for_this_page.is_empty() {
+        let (row_elements, rows_height) = layout_rows(engine, &mut rows_for_this_page, style, widths, total_height);
+        elements.extend(row_elements);
+        total_height += rows_height;
+    }
 
-    // The original `body` node is updated to contain only the rows that were laid out.
+
+    // 5. Update the body node with the rows that were laid out on this page.
     body.rows = rows_for_this_page;
 
-    // 5. Package the remaining rows into a new TableBody to be returned
+    // 6. Package the remaining rows into a new TableBody to be returned.
     let remainder = if remaining_rows_vec.is_empty() {
         None
     } else {
@@ -136,6 +144,37 @@ pub fn layout_table(
     (elements, total_height, remainder)
 }
 
+/// A cheap, measurement-only version of layout_table_row.
+fn measure_table_row(
+    engine: &LayoutEngine,
+    row: &mut TableRow,
+    parent_style: &Arc<ComputedStyle>,
+    widths: &[f32],
+) -> f32 {
+    let mut max_cell_height: f32 = 0.0;
+
+    for (i, cell) in row.cells.iter_mut().enumerate() {
+        let cell_width = *widths.get(i).unwrap_or(&0.0);
+        let cell_style = engine.compute_style(
+            cell.style_name.as_deref(),
+            cell.style_override.as_ref(),
+            parent_style,
+        );
+
+        // Create a temporary root node to measure the cell's children without cloning them.
+        let mut cell_root = IRNode::Root(std::mem::take(&mut cell.children));
+        let cell_height = measure_subtree_height(engine, &mut cell_root, &cell_style, cell_width);
+
+        // Restore the children to the cell.
+        if let IRNode::Root(children) = cell_root {
+            cell.children = children;
+        }
+        max_cell_height = max_cell_height.max(cell_height);
+    }
+    max_cell_height
+}
+
+
 /// Lays out a full table node, handling pagination.
 /// This function is the public API for laying out a table, called from the page layout dispatcher.
 pub fn layout_table_node(
@@ -146,7 +185,7 @@ pub fn layout_table_node(
     header: &mut Option<Box<TableHeader>>,
     body: &mut TableBody,
     calculated_widths: &[f32],
-    style: &ComputedStyle,
+    style: &Arc<ComputedStyle>,
     available_height: f32,
 ) -> (Vec<PositionedElement>, f32, Option<WorkItem>) {
     let max_height_for_table =
@@ -185,10 +224,13 @@ pub fn calculate_column_widths(
     columns: &[crate::idf::TableColumnDefinition],
     available_width: f32,
 ) -> Vec<f32> {
+    if columns.is_empty() {
+        return Vec::new();
+    }
     let mut widths = vec![0.0; columns.len()];
     let mut remaining_width = available_width;
     let mut percent_total = 0.0;
-    let mut auto_indices = Vec::new();
+    let mut auto_indices = Vec::with_capacity(columns.len());
     for (i, col) in columns.iter().enumerate() {
         if let Some(dim) = &col.width {
             match dim {

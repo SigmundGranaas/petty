@@ -1,28 +1,33 @@
 // src/parser/xslt/handlers/control_flow.rs
-// src/parser/xslt/handlers/control_flow.rs
+
 use super::super::builder::TreeBuilder;
 use super::super::util::{get_attr_owned_required, OwnedAttributes};
 use crate::error::PipelineError;
 use crate::xpath;
 use quick_xml::events::BytesStart;
-use quick_xml::name::QName;
 use quick_xml::Reader;
 use serde_json::Value;
 
-impl<'a> TreeBuilder<'a> {
+// MODIFIED: Updated impl block and function signatures.
+impl<'h> TreeBuilder<'h> {
     pub(in crate::parser::xslt) fn handle_for_each(
         &mut self,
-        _e: &BytesStart,
+        e: &BytesStart,
         reader: &mut Reader<&[u8]>,
-        context: &'a Value,
+        context: &Value,
         attributes: &OwnedAttributes,
     ) -> Result<(), PipelineError> {
         let path = get_attr_owned_required(attributes, b"select", b"xsl:for-each")?;
         log::debug!("Starting <xsl:for-each select=\"{}\">", path);
-        let inner_xml =
-            super::super::super::xslt::capture_inner_xml(reader, QName(b"xsl:for-each"))?;
+
+        // --- OPTIMIZATION ---
+        // 1. Pre-parse the body of the for-each loop into an executable template AST.
+        //    This is done only ONCE before the loop begins.
+        let template = self.preparse_template(reader, e.name())?;
+
+        // 2. Select the data items to iterate over.
         let selected_values = xpath::select(context, &path);
-        let items: Vec<&'a Value> = if let Some(arr) =
+        let items: Vec<&Value> = if let Some(arr) =
             selected_values.first().and_then(|v| v.as_array())
         {
             arr.iter().collect()
@@ -30,12 +35,14 @@ impl<'a> TreeBuilder<'a> {
             selected_values
         };
         log::debug!("  <xsl:for-each> found {} items to iterate.", items.len());
+
+        // 3. Execute the pre-parsed template for each item.
+        //    This avoids re-parsing the XML string on every iteration.
         for (i, item_context) in items.iter().enumerate() {
-            log::debug!("  <xsl:for-each> processing item {}", i);
-            let mut template_reader = Reader::from_str(&inner_xml);
-            template_reader.config_mut().trim_text(false);
-            self.parse_nodes(&mut template_reader, item_context)?;
+            log::trace!("  <xsl:for-each> processing item {}", i);
+            self.execute_template(&template, item_context)?;
         }
+
         log::debug!("Finished <xsl:for-each select=\"{}\">", path);
         Ok(())
     }
@@ -48,14 +55,21 @@ impl<'a> TreeBuilder<'a> {
         attributes: &OwnedAttributes,
     ) -> Result<(), PipelineError> {
         let test = get_attr_owned_required(attributes, b"test", b"xsl:if")?;
+
+        // --- OPTIMIZATION ---
+        // Pre-parse the body, then execute it conditionally. This avoids needing the reader.
+        let template = self.preparse_template(reader, e.name())?;
+
         let results = xpath::select(context, &test);
         let is_truthy = !results.is_empty()
             && results
             .iter()
             .all(|v| !v.is_null() && v.as_bool() != Some(false));
+
         log::debug!("<xsl:if test=\"{}\"> evaluated to {}", test, is_truthy);
-        if !is_truthy {
-            reader.read_to_end_into(e.name(), &mut vec![])?;
+
+        if is_truthy {
+            self.execute_template(&template, context)?;
         }
         Ok(())
     }

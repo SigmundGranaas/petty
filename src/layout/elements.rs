@@ -2,6 +2,7 @@
 
 //! Defines the concrete, drawable elements that are the output of the layout engine.
 
+use std::sync::Arc;
 use crate::idf::SharedData;
 use crate::layout::style::ComputedStyle;
 
@@ -16,7 +17,7 @@ pub struct PositionedElement {
     pub width: f32,
     pub height: f32,
     pub element: LayoutElement,
-    pub style: ComputedStyle,
+    pub style: Arc<ComputedStyle>,
 }
 
 /// An enum representing the different types of drawable elements.

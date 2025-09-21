@@ -21,8 +21,8 @@ pub type SharedData = Arc<Vec<u8>>;
 pub struct LayoutUnit {
     /// The root of the layout tree for a single `sequence`.
     pub tree: IRNode,
-    /// A reference to the JSON data context for this specific `sequence`.
-    pub context: Value,
+    /// A thread-safe reference to the JSON data context for this specific `sequence`.
+    pub context: Arc<Value>,
 }
 
 /// The primary enum representing all possible block-level elements in a document layout.

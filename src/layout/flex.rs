@@ -2,24 +2,25 @@
 
 //! Layout logic for flexbox containers.
 
-use super::style::ComputedStyle;
-use super::{IRNode, LayoutEngine, PositionedElement};
+use super::style::{ComputedStyle};
+use super::{ IRNode, LayoutEngine, PositionedElement};
 use crate::stylesheet::Dimension;
+use std::sync::Arc;
 
 /// Lays out a flex container's children horizontally.
 /// Note: This is a simplified implementation and does not handle wrapping or complex flex properties.
 pub fn layout_flex_container(
     engine: &LayoutEngine,
     children: &mut [IRNode],
-    style: &ComputedStyle,
+    style: &Arc<ComputedStyle>,
     available_width: f32,
 ) -> (Vec<PositionedElement>, f32, Option<super::WorkItem>) {
     let content_width = available_width - style.padding.left - style.padding.right;
 
     let child_widths = calculate_flex_child_widths(engine, children, content_width);
-    let mut all_elements = Vec::new();
+    let mut all_elements = Vec::with_capacity(children.len() * 4); // Guess: 4 elements per child on average
     let mut max_child_height = 0.0f32;
-    let mut child_layouts = Vec::new();
+    let mut child_layouts = Vec::with_capacity(children.len());
 
     // First pass: lay out all children to determine their actual dimensions.
     for (i, child) in children.iter_mut().enumerate() {
@@ -32,12 +33,11 @@ pub fn layout_flex_container(
     // Second pass: position the elements horizontally.
     let mut current_x = 0.0;
     for (i, mut child_elements) in child_layouts.into_iter().enumerate() {
-        let child_width = child_widths[i];
         for el in &mut child_elements {
             el.x += current_x;
         }
         all_elements.extend(child_elements);
-        current_x += child_width;
+        current_x += child_widths[i];
     }
 
     // The height of the content is the height of the tallest child.
@@ -55,7 +55,7 @@ fn calculate_flex_child_widths(
         return vec![];
     }
     let mut widths = vec![0.0; children.len()];
-    let mut auto_indices = Vec::new();
+    let mut auto_indices = Vec::with_capacity(children.len());
     let mut remaining_width = available_width;
 
     let default_parent_style = engine.get_default_style();
@@ -98,7 +98,7 @@ fn calculate_flex_child_widths(
 pub(super) fn layout_subtree(
     engine: &LayoutEngine,
     node: &mut IRNode,
-    parent_style: &ComputedStyle,
+    parent_style: &Arc<ComputedStyle>,
     available_width: f32,
 ) -> (Vec<PositionedElement>, f32) {
     let style = engine.compute_style(node.style_name(), node.style_override(), parent_style);
@@ -117,7 +117,7 @@ pub(super) fn layout_subtree(
         IRNode::Root(children)
         | IRNode::Block { children, .. }
         | IRNode::List { children, .. } => { // List is also a simple vertical container
-            let mut block_elements = Vec::new();
+            let mut block_elements = Vec::with_capacity(children.len() * 4);
             let mut current_y = style.padding.top;
             for child in children {
                 let (mut child_elements, child_height) =
@@ -145,16 +145,20 @@ pub(super) fn layout_subtree(
                 style: style.clone(),
             };
 
-            let mut all_elements = vec![bullet];
+            // PERF: Pre-allocate vector with a reasonable guess.
+            let mut all_elements = Vec::with_capacity(1 + children.len() * 4);
+            all_elements.push(bullet);
+
             let mut current_y = style.padding.top;
 
-            let mut indented_style = style.clone();
-            indented_style.padding.left += bullet_width + bullet_spacing;
+            let mut indented_style_arc = style.clone();
+            let indented_style_mut = Arc::make_mut(&mut indented_style_arc);
+            indented_style_mut.padding.left += bullet_width + bullet_spacing;
 
             for child in children {
                 // The child's layout will account for its new, larger padding.
                 let (mut child_elements, child_height) =
-                    layout_subtree(engine, child, &indented_style, content_width);
+                    layout_subtree(engine, child, &indented_style_arc, content_width);
 
                 for el in &mut child_elements {
                     el.y += current_y;
@@ -181,7 +185,6 @@ pub(super) fn layout_subtree(
             (els, height + style.padding.top + style.padding.bottom)
         }
         IRNode::Table { header, body, calculated_widths, .. } => {
-            // FIX: Pass f32::MAX for available_height during measurement, just like for paragraphs.
             let (els, height, _remainder) =
                 super::table::layout_table(engine, header.as_deref_mut(), body, &style, calculated_widths, f32::MAX);
             (els, height + style.padding.top + style.padding.bottom)
@@ -196,6 +199,115 @@ pub(super) fn layout_subtree(
     total_height += content_height + style.margin.bottom;
 
     (elements, total_height)
+}
+
+/// A cheap, measurement-only version of `layout_subtree`.
+/// It calculates the height of a node and its children without allocating any `PositionedElement`s.
+pub(super) fn measure_subtree_height(
+    engine: &LayoutEngine,
+    node: &mut IRNode,
+    parent_style: &Arc<ComputedStyle>,
+    available_width: f32,
+) -> f32 {
+    let style = engine.compute_style(node.style_name(), node.style_override(), parent_style);
+    let mut total_height = style.margin.top;
+
+    let content_width = available_width - style.padding.left - style.padding.right;
+
+    let content_height = match node {
+        IRNode::Paragraph { children, .. } => {
+            let height = super::text::measure_paragraph_height(engine, children, &style, content_width);
+            height + style.padding.top + style.padding.bottom
+        }
+        IRNode::Root(children) | IRNode::Block { children, .. } | IRNode::List { children, .. } => {
+            let mut current_y = style.padding.top;
+            for child in children {
+                let child_height =
+                    measure_subtree_height(engine, child, &style, content_width);
+                current_y += child_height;
+            }
+            current_y + style.padding.bottom
+        }
+        IRNode::ListItem { children, .. } => {
+            let bullet_width = style.font_size * 0.6;
+            let bullet_spacing = style.font_size * 0.4;
+            let mut current_y = style.padding.top;
+
+            let mut indented_style_arc = style.clone();
+            let indented_style_mut = Arc::make_mut(&mut indented_style_arc);
+            indented_style_mut.padding.left += bullet_width + bullet_spacing;
+
+
+            for child in children {
+                let child_height =
+                    measure_subtree_height(engine, child, &indented_style_arc, content_width);
+                current_y += child_height;
+            }
+
+            let children_content_height = current_y - style.padding.top;
+            let final_content_height = children_content_height.max(style.line_height);
+
+            final_content_height + style.padding.top + style.padding.bottom
+        }
+        IRNode::FlexContainer { children, .. } => {
+            let child_widths = calculate_flex_child_widths(engine, children, content_width);
+            let mut max_child_height = 0.0f32;
+
+            for (i, child) in children.iter_mut().enumerate() {
+                let child_width = child_widths[i];
+                let child_height = measure_subtree_height(engine, child, &style, child_width);
+                max_child_height = max_child_height.max(child_height);
+            }
+            max_child_height + style.padding.top + style.padding.bottom
+        }
+        IRNode::Image { data, .. } => {
+            let height = if data.is_some() {
+                style.height.unwrap_or(50.0)
+            } else {
+                0.0
+            };
+            height + style.padding.top + style.padding.bottom
+        }
+        IRNode::Table { header, body, calculated_widths, .. } => {
+            let measure_row = |row: &mut crate::idf::TableRow| -> f32 {
+                let mut max_cell_height: f32 = 0.0;
+                for (i, cell) in row.cells.iter_mut().enumerate() {
+                    let cell_width = *calculated_widths.get(i).unwrap_or(&0.0);
+                    let cell_style = engine.compute_style(
+                        cell.style_name.as_deref(),
+                        cell.style_override.as_ref(),
+                        &style,
+                    );
+
+                    let mut cell_root = IRNode::Root(std::mem::take(&mut cell.children));
+                    let cell_height =
+                        measure_subtree_height(engine, &mut cell_root, &cell_style, cell_width);
+
+                    if let IRNode::Root(children) = cell_root {
+                        cell.children = children;
+                    }
+
+                    max_cell_height = max_cell_height.max(cell_height);
+                }
+                max_cell_height
+            };
+
+            let mut table_content_height = 0.0;
+            if let Some(h) = header.as_deref_mut() {
+                for row in &mut h.rows {
+                    table_content_height += measure_row(row);
+                }
+            }
+            for row in &mut body.rows {
+                table_content_height += measure_row(row);
+            }
+
+            table_content_height + style.padding.top + style.padding.bottom
+        }
+    };
+
+    total_height += content_height + style.margin.bottom;
+    total_height
 }
 
 #[cfg(test)]

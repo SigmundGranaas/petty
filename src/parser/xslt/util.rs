@@ -6,9 +6,53 @@ use crate::stylesheet::{
 use quick_xml::events::{BytesStart, Event as XmlEvent};
 use quick_xml::name::QName;
 use quick_xml::Reader;
+use std::io::BufRead;
 use std::str::FromStr;
 
 pub(super) type OwnedAttributes = Vec<(Vec<u8>, Vec<u8>)>;
+
+/// Captures the raw XML content between a start and end tag.
+pub(super) fn capture_inner_xml<B: BufRead>(
+    reader: &mut Reader<B>,
+    tag_name: QName,
+) -> Result<String, PipelineError> {
+    let mut buf = Vec::new();
+    let mut writer_buf = Vec::new();
+    let mut writer = quick_xml::Writer::new(&mut writer_buf);
+    let mut depth = 0;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(XmlEvent::Start(e)) => {
+                if e.name() == tag_name {
+                    depth += 1;
+                }
+                writer.write_event(XmlEvent::Start(e))?;
+            }
+            Ok(XmlEvent::End(e)) => {
+                if e.name() == tag_name {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth -= 1;
+                }
+                writer.write_event(XmlEvent::End(e))?;
+            }
+            Ok(XmlEvent::Eof) => {
+                return Err(PipelineError::TemplateParseError(
+                    "Unclosed tag while capturing inner XML".into(),
+                ))
+            }
+            Ok(event) => {
+                writer.write_event(event)?;
+            }
+            Err(e) => return Err(e.into()),
+        }
+        buf.clear();
+    }
+    drop(writer);
+    Ok(String::from_utf8(writer_buf)?)
+}
 
 /// Parses a string like "50%" or "120pt" into a Dimension enum.
 pub(super) fn parse_dimension(s: &str) -> Option<Dimension> {
@@ -204,6 +248,48 @@ pub(super) fn parse_fo_attributes_to_element_style(
     } else {
         Ok(None)
     }
+}
+
+pub(super) fn capture_inner_xml_including_tag<B: BufRead>(
+    reader: &mut Reader<B>,
+    tag_name: QName,
+) -> Result<String, PipelineError> {
+    let mut buf = Vec::new();
+    let mut writer_buf = Vec::new();
+    let mut writer = quick_xml::Writer::new(&mut writer_buf);
+    let mut depth = 0;
+
+    loop {
+        match reader.read_event_into(&mut buf) {
+            Ok(XmlEvent::Start(e)) => {
+                if e.name() == tag_name {
+                    depth += 1;
+                }
+                writer.write_event(XmlEvent::Start(e))?;
+            }
+            Ok(XmlEvent::End(e)) => {
+                writer.write_event(XmlEvent::End(e.clone()))?;
+                if e.name() == tag_name {
+                    if depth == 0 {
+                        break;
+                    }
+                    depth -= 1;
+                }
+            }
+            Ok(XmlEvent::Eof) => {
+                return Err(PipelineError::TemplateParseError(
+                    "Unclosed tag while capturing inner XML".into(),
+                ))
+            }
+            Ok(event) => {
+                writer.write_event(event)?;
+            }
+            Err(e) => return Err(e.into()),
+        }
+        buf.clear();
+    }
+    drop(writer);
+    Ok(String::from_utf8(writer_buf)?)
 }
 
 // --- Attribute Getter Utilities ---

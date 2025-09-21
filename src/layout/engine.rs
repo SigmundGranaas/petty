@@ -1,13 +1,12 @@
 // src/layout/engine.rs
 
-//! The main layout engine struct and entry point.
-
 use super::page::PageIterator;
 use super::style::{self, ComputedStyle};
 use super::table;
 use super::text;
 use super::{IRNode, LayoutUnit, PipelineError, Stylesheet};
 use crate::stylesheet::ElementStyle;
+use std::sync::Arc;
 
 /// The main layout engine. It is responsible for orchestrating the multi-pass
 /// layout algorithm on a single `IRNode` tree.
@@ -28,12 +27,11 @@ impl LayoutEngine {
     /// that will perform the positioning pass lazily.
     pub fn paginate_tree<'a>(
         &'a self,
-        layout_unit: &'a LayoutUnit,
+        mut layout_unit: LayoutUnit,
     ) -> Result<PageIterator<'a>, PipelineError> {
         // The measurement pass is a prerequisite for layout.
-        let mut annotated_tree = layout_unit.tree.clone();
-        self.measurement_pass(&mut annotated_tree)?;
-        Ok(PageIterator::new(annotated_tree, self))
+        self.measurement_pass(&mut layout_unit.tree)?;
+        Ok(PageIterator::new(layout_unit, self))
     }
 
     /// **Pass 1: Measurement & Annotation**
@@ -89,16 +87,16 @@ impl LayoutEngine {
         &self,
         style_name: Option<&str>,
         style_override: Option<&ElementStyle>,
-        parent_style: &ComputedStyle,
-    ) -> ComputedStyle {
+        parent_style: &Arc<ComputedStyle>,
+    ) -> Arc<ComputedStyle> {
         style::compute_style(&self.stylesheet, style_name, style_override, parent_style)
     }
 
-    pub fn get_default_style(&self) -> ComputedStyle {
+    pub fn get_default_style(&self) -> Arc<ComputedStyle> {
         style::get_default_style()
     }
 
-    pub fn measure_text_width(&self, text: &str, style: &ComputedStyle) -> f32 {
+    pub fn measure_text_width(&self, text: &str, style: &Arc<ComputedStyle>) -> f32 {
         text::measure_text_width(self, text, style)
     }
 }
@@ -140,10 +138,10 @@ mod tests {
         }]);
         let layout_unit = LayoutUnit {
             tree,
-            context: Value::Null,
+            context: Value::Null.into(),
         };
 
-        let mut page_iter = engine.paginate_tree(&layout_unit).unwrap();
+        let mut page_iter = engine.paginate_tree(layout_unit).unwrap();
         let page1 = page_iter.next().unwrap();
 
         assert!(!page1.is_empty(), "Page should have elements");

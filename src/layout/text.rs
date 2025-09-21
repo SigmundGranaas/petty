@@ -7,6 +7,7 @@ use super::style::ComputedStyle;
 use super::{InlineNode, LayoutEngine, WorkItem};
 use crate::idf::{IRNode, SharedData};
 use crate::stylesheet::{Color, Dimension, ElementStyle, TextAlign};
+use std::sync::Arc;
 
 /// Represents a piece of content that can be placed on a line (text or image).
 #[derive(Debug, Clone)]
@@ -25,7 +26,7 @@ enum LineContent {
 struct LineItem {
     content: LineContent,
     width: f32,
-    style: ComputedStyle,
+    style: Arc<ComputedStyle>,
     href: Option<String>,
 }
 
@@ -56,16 +57,17 @@ fn convert_items_to_inlines(items: Vec<LineItem>) -> Vec<InlineNode> {
 pub fn layout_paragraph(
     engine: &LayoutEngine,
     inlines: &[InlineNode],
-    style: &ComputedStyle,
+    style: &Arc<ComputedStyle>,
     available_width: f32,
     max_height: f32,
 ) -> (Vec<PositionedElement>, f32, Option<Vec<InlineNode>>) {
-    let mut elements = Vec::new();
     let line_items = flatten_inlines(engine, inlines, style, None);
+    // PERF: Pre-allocate vectors with a reasonable guess to avoid reallocations.
+    let mut elements = Vec::with_capacity(line_items.len() / 5); // Guess: 5 items form a single rendered line
+    let mut line_buffer = Vec::with_capacity(20); // Guess: 20 items (words, images) per line
 
     let box_width = available_width;
     let mut current_y = 0.0;
-    let mut line_buffer = Vec::new();
     let mut current_line_width = 0.0;
 
     let mut all_items = line_items;
@@ -110,12 +112,14 @@ pub fn layout_paragraph(
                     if !line_buffer.is_empty() && (current_line_width + word_width) > box_width {
                         if current_y + style.line_height > max_height {
                             let remaining_text_in_item = words[word_idx..].join("");
-                            let mut pending_items = vec![LineItem {
+                            // PERF: Pre-allocate pending_items vector.
+                            let mut pending_items = Vec::with_capacity(1 + all_items.len().saturating_sub(item_idx + 1));
+                            pending_items.push(LineItem {
                                 content: LineContent::Text(remaining_text_in_item),
                                 width: 0.0, // Recalculated later
                                 style: item.style.clone(),
                                 href: item.href.clone(),
-                            }];
+                            });
                             if item_idx + 1 < all_items.len() {
                                 pending_items.extend(all_items[(item_idx + 1)..].iter().cloned());
                             }
@@ -181,11 +185,66 @@ pub fn layout_paragraph(
     (elements, current_y, None)
 }
 
+/// A cheap, measurement-only version of layout_paragraph. It calculates the final
+/// height of the paragraph without allocating any `PositionedElement`s.
+pub fn measure_paragraph_height(
+    engine: &LayoutEngine,
+    inlines: &[InlineNode],
+    style: &Arc<ComputedStyle>,
+    available_width: f32,
+) -> f32 {
+    let line_items = flatten_inlines(engine, inlines, style, None);
+    if line_items.is_empty() {
+        return 0.0;
+    }
+
+    let box_width = available_width;
+    let mut line_count = 1;
+    let mut current_line_width = 0.0;
+
+    for item in &line_items {
+        // Handle explicit line breaks
+        if let LineContent::Text(text) = &item.content {
+            if text == "\n" {
+                line_count += 1;
+                current_line_width = 0.0;
+                continue;
+            }
+        }
+
+        // Word-wrapping logic
+        if let LineContent::Text(text) = &item.content {
+            let words = text.split_inclusive(' ').collect::<Vec<_>>();
+            for word_str in words {
+                if word_str.trim().is_empty() && current_line_width == 0.0 {
+                    continue; // Skip leading whitespace on a new line
+                }
+                let word_width = engine.measure_text_width(word_str, &item.style);
+
+                if current_line_width > 0.0 && (current_line_width + word_width) > box_width {
+                    line_count += 1;
+                    current_line_width = 0.0;
+                }
+                current_line_width += word_width;
+            }
+        } else {
+            // Treat image as a single, unbreakable word
+            if current_line_width > 0.0 && (current_line_width + item.width) > box_width {
+                line_count += 1;
+                current_line_width = 0.0;
+            }
+            current_line_width += item.width;
+        }
+    }
+
+    line_count as f32 * style.line_height
+}
+
 /// Helper to position and generate elements for a single line of content.
 /// Returns the height consumed by the line.
 fn commit_line(
     elements: &mut Vec<PositionedElement>,
-    parent_style: &ComputedStyle,
+    parent_style: &Arc<ComputedStyle>,
     line_items: Vec<LineItem>,
     box_width: f32,
     start_y: f32,
@@ -216,7 +275,7 @@ fn commit_line(
                 // Peek ahead to see if we can merge consecutive text items
                 while let Some(next_item) = items_iter.peek() {
                     if let LineContent::Text(next_text) = &next_item.content {
-                        if next_item.style == style && next_item.href == href {
+                        if Arc::ptr_eq(&next_item.style, &style) && next_item.href == href {
                             // It's a match, so consume it from the iterator and append
                             text_run.push_str(next_text);
                             run_width += next_item.width;
@@ -279,10 +338,11 @@ fn commit_line(
 fn flatten_inlines(
     engine: &LayoutEngine,
     inlines: &[InlineNode],
-    parent_style: &ComputedStyle,
+    parent_style: &Arc<ComputedStyle>,
     parent_href: Option<&String>,
 ) -> Vec<LineItem> {
-    let mut items = Vec::new();
+    // PERF: Pre-allocate with capacity. The length of inlines is a good lower bound.
+    let mut items = Vec::with_capacity(inlines.len());
     for inline in inlines {
         match inline {
             InlineNode::Text(text) => {
@@ -325,15 +385,19 @@ fn flatten_inlines(
                 style_override,
                 children,
             } => {
-                let mut style =
-                    engine.compute_style(style_name.as_deref(), style_override.as_ref(), parent_style);
-                style.color = Color {
+                let mut style_arc = engine.compute_style(
+                    style_name.as_deref(),
+                    style_override.as_ref(),
+                    parent_style,
+                );
+                let style_mut = Arc::make_mut(&mut style_arc);
+                style_mut.color = Color {
                     r: 0,
                     g: 0,
                     b: 255,
                     a: 1.0,
                 }; // Simple link styling
-                items.extend(flatten_inlines(engine, children, &style, Some(href)));
+                items.extend(flatten_inlines(engine, children, &style_arc, Some(href)));
             }
             InlineNode::Image {
                 src,
@@ -381,7 +445,7 @@ pub fn layout_paragraph_node(
     children: &[InlineNode],
     style_name: &Option<String>,
     style_override: &Option<ElementStyle>,
-    style: &ComputedStyle,
+    style: &Arc<ComputedStyle>,
     available_width: f32,
     available_height: f32,
 ) -> (Vec<PositionedElement>, f32, Option<WorkItem>) {
@@ -409,7 +473,7 @@ pub fn layout_paragraph_node(
 }
 
 /// Measures the width of a text string based on its style.
-pub fn measure_text_width(_engine: &LayoutEngine, text: &str, style: &ComputedStyle) -> f32 {
+pub fn measure_text_width(_engine: &LayoutEngine, text: &str, style: &Arc<ComputedStyle>) -> f32 {
     let char_width = style.font_size * 0.6; // Approximation
     text.chars().count() as f32 * char_width
 }
@@ -471,8 +535,10 @@ mod tests {
     #[test]
     fn test_text_alignment() {
         let engine = create_test_engine();
-        let mut style = style::get_default_style();
-        style.text_align = TextAlign::Center;
+        let mut style_arc = style::get_default_style();
+        let style_mut = Arc::make_mut(&mut style_arc);
+        style_mut.text_align = TextAlign::Center;
+        let style = style_arc;
         let inlines = vec![InlineNode::Text("Centered".to_string())];
 
         let available_width = 500.0;

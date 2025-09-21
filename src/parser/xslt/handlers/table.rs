@@ -1,5 +1,4 @@
-// src/parser/xslt/handlers/table.rs
-// src/parser/xslt/handlers/table.rs
+use crate::parser::xslt::util::capture_inner_xml;
 use super::super::builder::TreeBuilder;
 use super::super::util::{
     get_attr_owned_optional, parse_fo_attributes_to_element_style, parse_table_columns,
@@ -14,12 +13,13 @@ use quick_xml::name::QName;
 use quick_xml::Reader;
 use serde_json::Value;
 
-impl<'a> TreeBuilder<'a> {
+// MODIFIED: Updated impl block and function signatures.
+impl<'h> TreeBuilder<'h> {
     pub(in crate::parser::xslt) fn handle_table_start(
         &mut self,
         attributes: &OwnedAttributes,
         reader: &mut Reader<&[u8]>,
-        context: &'a Value,
+        context: &Value,
     ) -> Result<(), PipelineError> {
         let style_name = get_attr_owned_optional(attributes, b"style")?;
         let style_override = parse_fo_attributes_to_element_style(attributes)?;
@@ -27,19 +27,20 @@ impl<'a> TreeBuilder<'a> {
         // The entire table content is captured, then parsed in stages.
         // This is necessary to find the <columns> definition first.
         let inner_xml =
-            super::super::super::xslt::capture_inner_xml(reader, QName(b"table"))?;
+            capture_inner_xml(reader, QName(b"table"))?;
 
         // Stage 1: Find and parse <columns>
         let col_defs = self.parse_columns_from_inner_xml(&inner_xml)?;
 
         // Stage 2: Create the table node and push it onto the stack.
+        // PERF: Pre-allocate table body rows with a reasonable capacity.
         let table_node = IRNode::Table {
             style_name,
             style_override,
             columns: col_defs,
             calculated_widths: Vec::new(),
             header: None,
-            body: Box::new(TableBody { rows: Vec::new() }),
+            body: Box::new(TableBody { rows: Vec::with_capacity(16) }),
         };
         self.node_stack.push(table_node);
 
@@ -84,7 +85,8 @@ impl<'a> TreeBuilder<'a> {
 
     pub(in crate::parser::xslt) fn handle_header_start(&mut self) -> Result<(), PipelineError> {
         if let Some(IRNode::Table { header, .. }) = self.node_stack.last_mut() {
-            *header = Some(Box::new(TableHeader { rows: Vec::new() }));
+            // PERF: Pre-allocate header rows. Headers are usually short.
+            *header = Some(Box::new(TableHeader { rows: Vec::with_capacity(2) }));
             self.is_in_table_header = true;
         }
         Ok(())
@@ -92,7 +94,8 @@ impl<'a> TreeBuilder<'a> {
 
     pub(in crate::parser::xslt) fn handle_row_start(&mut self) -> Result<(), PipelineError> {
         self.row_column_index_stack.push(0);
-        let new_row = TableRow { cells: Vec::new() };
+        // PERF: Pre-allocate cells vector with a reasonable capacity.
+        let new_row = TableRow { cells: Vec::with_capacity(8) };
 
         match self.node_stack.last_mut() {
             Some(IRNode::Table { header, body, .. }) => {
@@ -123,10 +126,11 @@ impl<'a> TreeBuilder<'a> {
             PipelineError::TemplateParseError("<cell> outside of <row>".into())
         })?;
 
+        // PERF: Pre-allocate children vector for cell content.
         let new_cell = TableCell {
             style_name,
             style_override,
-            children: Vec::new(),
+            children: Vec::with_capacity(2),
         };
 
         match self.node_stack.last_mut() {

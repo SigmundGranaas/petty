@@ -1,5 +1,3 @@
-// src/layout/mod.rs
-
 //! The tree-based, multi-pass layout engine.
 
 // Re-export the main entry point and key types for external use.
@@ -8,7 +6,7 @@ pub use self::engine::LayoutEngine;
 // Declare the modules that make up the layout engine.
 mod engine;
 mod page;
-mod style;
+pub(crate) mod style;
 
 // Sub-modules for laying out specific element types.
 mod block;
@@ -28,6 +26,7 @@ pub use self::elements::{
     ImageElement, LayoutElement, PositionedElement, TextElement,
 };
 pub use crate::stylesheet::Stylesheet;
+use std::sync::Arc;
 
 /// A work item for the layout stack in the positioning pass.
 /// It represents either a node to be laid out or a marker to end a node's context
@@ -35,5 +34,5 @@ pub use crate::stylesheet::Stylesheet;
 #[derive(Clone)]
 pub(crate) enum WorkItem {
     Node(IRNode),
-    EndNode(style::ComputedStyle),
+    EndNode(Arc<style::ComputedStyle>),
 }

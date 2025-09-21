@@ -1,5 +1,4 @@
 // src/parser/xslt/handlers/mod.rs
-// src/parser/xslt/handlers/mod.rs
 pub(super) mod block;
 pub(super) mod control_flow;
 pub(super) mod inline;
@@ -15,7 +14,6 @@ pub(super) mod test_helpers {
     use serde_json::Value;
 
     /// A helper that fully processes an XML fragment and returns the resulting nodes.
-    /// This is the primary tool for testing handlers, as it checks their final output.
     pub fn build_fragment(xml: &str, context: &Value) -> Result<Vec<IRNode>, PipelineError> {
         let handlebars = Handlebars::new();
         let mut builder = TreeBuilder::new(&handlebars);

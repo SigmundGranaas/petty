@@ -1,5 +1,4 @@
 // src/render/mod.rs
-// src/render/mod.rs
 use crate::error::RenderError;
 use crate::layout::PositionedElement;
 use handlebars::Handlebars;
@@ -8,6 +7,7 @@ use std::io;
 
 pub mod pdf;
 mod drawing;
+pub(crate) mod lopdf;
 
 /// A trait defining the API for a document renderer.
 /// The pipeline uses this trait to draw pages of elements, making it possible
@@ -26,10 +26,6 @@ pub trait DocumentRenderer {
         template_engine: &Handlebars,
     ) -> Result<(), RenderError>;
 
-    /// Finalizes the document and writes it to the provided output stream.
-    /// This is where tasks like adding page numbers to footers are performed.
-    fn finalize<W: io::Write>(
-        self,
-        writer: W,
-    ) -> Result<(), RenderError>;
+    /// Finalizes the document and writes it to the provided stream.
+    fn finalize(self: Box<Self>, writer: Box<dyn io::Write + Send>) -> Result<(), RenderError>;
 }

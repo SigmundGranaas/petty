@@ -5,7 +5,7 @@ use std::fs;
 
 fn main() -> Result<(), PipelineError> {
     if env::var("RUST_LOG").is_err() {
-        env::set_var("RUST_LOG", "petty=info");
+        unsafe { env::set_var("RUST_LOG", "petty=info"); }
     }
     env_logger::init();
 

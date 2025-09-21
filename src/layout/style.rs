@@ -6,11 +6,12 @@ use crate::stylesheet::{
     Border, Color, Dimension, ElementStyle, FontStyle, FontWeight, Margins, PageSize, Stylesheet,
     TextAlign,
 };
+use std::sync::Arc;
 
 /// A fully resolved style with no optional values, ready for layout.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ComputedStyle {
-    pub font_family: String,
+    pub font_family: Arc<String>,
     pub font_size: f32,
     pub font_weight: FontWeight,
     pub font_style: FontStyle,
@@ -32,30 +33,41 @@ pub fn compute_style(
     stylesheet: &Stylesheet,
     style_name: Option<&str>,
     style_override: Option<&ElementStyle>,
-    parent_style: &ComputedStyle,
-) -> ComputedStyle {
+    parent_style: &Arc<ComputedStyle>, // MODIFIED: Takes Arc
+) -> Arc<ComputedStyle> {
+    // MODIFIED: Returns Arc
+    // If no changes will be made, return a clone of the original Arc to avoid allocation.
+    let has_named_style = style_name.is_some() && style_name.and_then(|s| stylesheet.styles.get(s)).is_some();
+    if !has_named_style && style_override.is_none() {
+        return parent_style.clone();
+    }
+
     // 1. Start with the inherited style from the parent.
-    let mut computed = parent_style.clone();
+    // Use Arc::make_mut to get a mutable reference, cloning only if necessary (CoW).
+    let mut style_arc = parent_style.clone();
+    let computed = Arc::make_mut(&mut style_arc);
 
     // 2. Apply the named style from the central stylesheet, if it exists.
     if let Some(name) = style_name {
         if let Some(named_style_def) = stylesheet.styles.get(name) {
-            apply_element_style(&mut computed, named_style_def);
+            apply_element_style(computed, named_style_def);
         }
     }
 
     // 3. Apply the inline style override, which has the highest precedence.
     if let Some(override_style_def) = style_override {
-        apply_element_style(&mut computed, override_style_def);
+        apply_element_style(computed, override_style_def);
     }
 
-    computed
+    // style_arc now holds the potentially modified style.
+    style_arc
 }
 
 /// Returns the default style for the document root.
-pub fn get_default_style() -> ComputedStyle {
-    ComputedStyle {
-        font_family: "Helvetica".to_string(),
+pub fn get_default_style() -> Arc<ComputedStyle> {
+    // MODIFIED: Returns Arc
+    Arc::new(ComputedStyle {
+        font_family: Arc::new("Helvetica".to_string()),
         font_size: 12.0,
         font_weight: FontWeight::Regular,
         font_style: FontStyle::Normal,
@@ -74,7 +86,7 @@ pub fn get_default_style() -> ComputedStyle {
         background_color: None,
         border: None,
         border_bottom: None,
-    }
+    })
 }
 
 /// Returns the page dimensions in points based on the stylesheet.
@@ -90,7 +102,7 @@ pub fn get_page_dimensions(stylesheet: &Stylesheet) -> (f32, f32) {
 /// Applies style rules from an `ElementStyle` definition to a `ComputedStyle`.
 fn apply_element_style(computed: &mut ComputedStyle, style_def: &ElementStyle) {
     if let Some(ff) = &style_def.font_family {
-        computed.font_family = ff.clone();
+        computed.font_family = Arc::new(ff.clone());
     }
     if let Some(fs) = style_def.font_size {
         computed.font_size = fs;
@@ -183,7 +195,7 @@ mod tests {
         assert_eq!(computed.font_size, 20.0);
         assert_eq!(computed.line_height, 24.0); // 20.0 * 1.2
         assert_eq!(computed.color.r, 255);
-        assert_eq!(computed.font_family, "Helvetica"); // Inherited
+        assert_eq!(*computed.font_family, "Helvetica"); // Inherited
     }
 
     #[test]
@@ -193,7 +205,7 @@ mod tests {
         let computed = compute_style(&stylesheet, None, None, &parent_style);
 
         // Should be identical to the parent style
-        assert_eq!(computed, parent_style);
+        assert!(Arc::ptr_eq(&computed, &parent_style));
     }
 
     #[test]

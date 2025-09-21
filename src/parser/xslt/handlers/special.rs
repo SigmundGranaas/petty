@@ -1,25 +1,24 @@
 // src/parser/xslt/handlers/special.rs
-// src/parser/xslt/handlers/special.rs
+
 use super::super::builder::TreeBuilder;
 use super::super::util::{
-    get_attr_owned_optional, get_attr_required, parse_fo_attributes_to_element_style,
+    get_attr_owned_optional, get_attr_owned_required, parse_fo_attributes_to_element_style,
     OwnedAttributes,
 };
 use crate::error::PipelineError;
 use crate::idf::{IRNode, InlineNode};
 use crate::xpath;
-use quick_xml::events::BytesStart;
 use serde_json::Value;
 
-impl<'a> TreeBuilder<'a> {
+impl<'h> TreeBuilder<'h> {
     pub(in crate::parser::xslt) fn handle_value_of(
         &mut self,
-        e: &BytesStart,
+        attributes: &OwnedAttributes,
         context: &Value,
     ) -> Result<(), PipelineError> {
-        let path = get_attr_required(e, b"select")?;
+        let path = get_attr_owned_required(attributes, b"select", b"xsl:value-of")?;
         let content = xpath::select_as_string(context, &path);
-        log::debug!("  <xsl:value-of select=\"{}\"> -> \"{}\"", path, content);
+        log::trace!("  <xsl:value-of select=\"{}\"> -> \"{}\"", path, content);
         if !content.is_empty() {
             self.push_inline_to_parent(InlineNode::Text(content));
         }
@@ -28,22 +27,14 @@ impl<'a> TreeBuilder<'a> {
 
     pub(in crate::parser::xslt) fn handle_image(
         &mut self,
-        e: &BytesStart,
+        attributes: &OwnedAttributes,
         context: &Value,
     ) -> Result<(), PipelineError> {
-        let src_template = get_attr_required(e, b"src")?;
-        let attributes = e
-            .attributes()
-            .map(|a| a.map(|attr| (attr.key.as_ref().to_vec(), attr.value.into_owned())))
-            .collect::<Result<OwnedAttributes, _>>()?;
+        let src_template = get_attr_owned_required(attributes, b"src", b"image")?;
+        let style_name = get_attr_owned_optional(attributes, b"style")?;
+        let style_override = parse_fo_attributes_to_element_style(attributes)?;
 
-        let style_name = get_attr_owned_optional(&attributes, b"style")?;
-        let style_override = parse_fo_attributes_to_element_style(&attributes)?;
-
-        let src = self
-            .template_engine
-            .render_template(&src_template, context)
-            .map_err(|err| PipelineError::TemplateParseError(err.to_string()))?;
+        let src = self.render_text(&src_template, context)?;
 
         // An image is inline if it's inside a <text> (Paragraph) node.
         let in_paragraph = matches!(self.node_stack.last(), Some(IRNode::Paragraph { .. }));

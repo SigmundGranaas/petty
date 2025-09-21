@@ -256,30 +256,58 @@ impl Stylesheet {
         serde_json::from_str(json)
     }
 
-    /// Pre-parses an XSLT file to extract `<fo:simple-page-master>` and `<xsl:attribute-set>` blocks.
+    /// Pre-parses an XSLT file to extract global style and layout information.
     pub fn from_xslt(xslt_content: &str) -> Result<Self, PipelineError> {
         let mut reader = Reader::from_str(xslt_content);
         reader.config_mut().trim_text(true);
 
         let mut page_layout: Option<PageLayout> = None;
         let mut styles = HashMap::new();
+        let mut page_sequences = HashMap::new();
         let mut buf = Vec::new();
         let mut style_buf = Vec::new();
+        let mut in_root_template = false;
 
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(XmlEvent::Start(e)) | Ok(XmlEvent::Empty(e)) => {
-                    match e.name().as_ref() {
-                        b"fo:simple-page-master" => {
+                Ok(XmlEvent::Start(e)) | Ok(XmlEvent::Empty(e)) => match e.name().as_ref() {
+                    b"fo:simple-page-master" => {
+                        if page_layout.is_none() {
                             page_layout = Some(parse_simple_page_master(e.attributes())?);
                         }
-                        b"xsl:attribute-set" => {
-                            let (name, style) =
-                                parse_attribute_set(&mut reader, e.attributes(), &mut style_buf)?;
-                            styles.insert(name, style);
-                        }
-                        _ => {}
                     }
+                    b"xsl:attribute-set" => {
+                        let (name, style) =
+                            parse_attribute_set(&mut reader, e.attributes(), &mut style_buf)?;
+                        styles.insert(name, style);
+                    }
+                    b"xsl:template" => {
+                        if e.attributes().flatten().any(|a| {
+                            a.key.as_ref() == b"match" && a.value.as_ref() == b"/"
+                        }) {
+                            in_root_template = true;
+                        }
+                    }
+                    b"page-sequence" if in_root_template && page_sequences.is_empty() => {
+                        let select_path = get_attr_val(e.attributes(), b"select")?.ok_or_else(
+                            || {
+                                PipelineError::TemplateParseError(
+                                    "<page-sequence> is missing 'select' attribute".into(),
+                                )
+                            },
+                        )?;
+                        page_sequences.insert(
+                            "main".to_string(), // Use a default name for the single sequence
+                            PageSequence {
+                                template: "main".to_string(), // Not used by XSLT engine
+                                data_source: select_path,
+                            },
+                        );
+                    }
+                    _ => {}
+                },
+                Ok(XmlEvent::End(e)) if e.name().as_ref() == b"xsl:template" => {
+                    in_root_template = false;
                 }
                 Ok(XmlEvent::Eof) => break,
                 Err(e) => return Err(e.into()),
@@ -295,7 +323,8 @@ impl Stylesheet {
                 )
             })?,
             styles,
-            ..Default::default()
+            page_sequences,
+            templates: HashMap::new(),
         })
     }
 }

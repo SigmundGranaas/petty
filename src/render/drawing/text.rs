@@ -1,3 +1,4 @@
+// src/render/drawing/text.rs
 use super::super::pdf::PageRenderer;
 use crate::error::RenderError;
 use crate::layout::{PositionedElement, TextElement};
@@ -18,7 +19,7 @@ pub(super) fn draw_text(
     let font_id = page
         .doc_renderer
         .fonts
-        .get(&style.font_family)
+        .get(style.font_family.as_str())
         .unwrap_or(&page.doc_renderer.default_font);
     let fill_color = printpdf::color::Color::Rgb(Rgb::new(
         style.color.r as f32 / 255.0,
