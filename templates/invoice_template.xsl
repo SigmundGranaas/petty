@@ -1,72 +1,99 @@
-<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:fo="http://www.w3.org/1999/XSL/Format">
-    <!-- Page Layout Definition -->
-    <fo:simple-page-master page-width="8.5in" page-height="11in" margin="40pt"/>
+<xsl:stylesheet version="1.0"
+                xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+                xmlns:fo="http://www.w3.org/1999/XSL/Format">
 
-    <!-- Reusable Style Definitions -->
+    <fo:layout-master-set>
+        <fo:simple-page-master master-name="A4"
+                               page-width="210mm" page-height="297mm"
+                               margin="20mm">
+        </fo:simple-page-master>
+    </fo:layout-master-set>
+
+    <!--
+      This named template defines the body for a single invoice.
+      It can be reused or called from different places.
+    -->
+    <xsl:template name="invoice-body">
+        <text style="h1">Invoice <xsl:value-of select="invoiceNumber"/></text>
+        <text style="h2"><xsl:value-of select="name"/></text>
+        <text><xsl:value-of select="address"/></text>
+
+        <table style="invoice-table">
+            <columns>
+                <column width="50%" header-style="th" style="td"/>
+                <column width="25%" header-style="th-right" style="td-right"/>
+                <column width="25%" header-style="th-right" style="td-right"/>
+            </columns>
+            <header>
+                <row>
+                    <cell><text>Product</text></cell>
+                    <cell><text>Quantity</text></cell>
+                    <cell><text>Price</text></cell>
+                </row>
+            </header>
+            <tbody>
+                <xsl:for-each select="items">
+                    <row>
+                        <cell><text><xsl:value-of select="product"/></text></cell>
+                        <cell><text><xsl:value-of select="quantity"/></text></cell>
+                        <cell><text>{{formatCurrency price}}</text></cell>
+                    </row>
+                </xsl:for-each>
+            </tbody>
+        </table>
+    </xsl:template>
+
+    <!--
+      The root template defines the document structure.
+      The <page-sequence> tag indicates that a new document sequence
+      should be created for each item in `customers`.
+    -->
+    <xsl:template match="/">
+        <page-sequence select="customers">
+            <!--
+              For each customer, we call the named template to render the invoice body.
+              The context (.) inside the called template will be the customer object.
+            -->
+            <xsl:call-template name="invoice-body"/>
+        </page-sequence>
+    </xsl:template>
+
+    <!-- Styles -->
+    <xsl:attribute-set name="h1">
+        <xsl:attribute name="font-size">24pt</xsl:attribute>
+        <xsl:attribute name="font-weight">bold</xsl:attribute>
+        <xsl:attribute name="margin-bottom">12pt</xsl:attribute>
+    </xsl:attribute-set>
+
+    <xsl:attribute-set name="h2">
+        <xsl:attribute name="font-size">16pt</xsl:attribute>
+        <xsl:attribute name="font-weight">bold</xsl:attribute>
+        <xsl:attribute name="margin-bottom">4pt</xsl:attribute>
+    </xsl:attribute-set>
+
+    <xsl:attribute-set name="invoice-table">
+        <xsl:attribute name="margin-top">20pt</xsl:attribute>
+    </xsl:attribute-set>
+
     <xsl:attribute-set name="th">
         <xsl:attribute name="font-weight">bold</xsl:attribute>
-        <xsl:attribute name="text-align">left</xsl:attribute>
-        <xsl:attribute name="color">#ffffff</xsl:attribute>
-        <xsl:attribute name="background-color">#465569</xsl:attribute>
-        <xsl:attribute name="padding">8pt 5pt</xsl:attribute>
+        <xsl:attribute name="padding">4pt</xsl:attribute>
+        <xsl:attribute name="background-color">#EEEEEE</xsl:attribute>
+    </xsl:attribute-set>
+
+    <xsl:attribute-set name="th-right">
+        <xsl:attribute name="use-attribute-sets">th</xsl:attribute>
+        <xsl:attribute name="text-align">right</xsl:attribute>
     </xsl:attribute-set>
 
     <xsl:attribute-set name="td">
-        <xsl:attribute name="padding">8pt 5pt</xsl:attribute>
-        <xsl:attribute name="border-bottom">0.5pt solid #dddddd</xsl:attribute>
+        <xsl:attribute name="padding">4pt</xsl:attribute>
+        <xsl:attribute name="border-bottom">1pt solid #CCCCCC</xsl:attribute>
     </xsl:attribute-set>
 
     <xsl:attribute-set name="td-right">
-        <xsl:attribute name="padding">8pt 5pt</xsl:attribute>
+        <xsl:attribute name="use-attribute-sets">td</xsl:attribute>
         <xsl:attribute name="text-align">right</xsl:attribute>
-        <xsl:attribute name="border-bottom">0.5pt solid #dddddd</xsl:attribute>
     </xsl:attribute-set>
 
-    <!-- Main Template -->
-    <xsl:template match="/">
-        <page-sequence select="customers">
-            <!-- Header Section -->
-            <flex-container margin-bottom="20pt">
-                <container width="50%">
-                    <text font-size="28pt" font-weight="bold" color="#003366">INVOICE</text>
-                </container>
-                <container width="50%" text-align="right" font-size="10pt" color="#666666">
-                    <text>Invoice #: <xsl:value-of select="invoiceNumber"/></text>
-                    <text>Date: October 27, 2023</text>
-                </container>
-            </flex-container>
-
-            <!-- Bill To Section -->
-            <container margin-bottom="30pt">
-                <text font-size="10pt" font-weight="bold" color="#666666" margin-bottom="5pt">BILL TO</text>
-                <text font-size="11pt"><xsl:value-of select="name"/></text>
-                <text font-size="11pt"><xsl:value-of select="address"/></text>
-            </container>
-
-            <!-- Items Table -->
-            <table width="100%">
-                <columns>
-                    <column width="50%"/>
-                    <column width="25%"/>
-                    <column width="25%"/>
-                </columns>
-                <header>
-                    <row>
-                        <cell style="th">Product / Service</cell>
-                        <cell style="th" text-align="right">Quantity</cell>
-                        <cell style="th" text-align="right">Price</cell>
-                    </row>
-                </header>
-                <tbody>
-                    <xsl:for-each select="items">
-                        <row font-size="10pt">
-                            <cell style="td"><xsl:value-of select="product"/></cell>
-                            <cell style="td-right"><xsl:value-of select="quantity"/></cell>
-                            <cell style="td-right"><xsl:value-of select="price"/></cell>
-                        </row>
-                    </xsl:for-each>
-                </tbody>
-            </table>
-        </page-sequence>
-    </xsl:template>
 </xsl:stylesheet>

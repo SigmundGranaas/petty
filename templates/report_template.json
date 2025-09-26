@@ -1,0 +1,82 @@
+{
+  "_stylesheet": {
+    "page": {
+      "size": "Letter",
+      "margins": "20mm",
+      "footer_text": "{{companyName}} - {{reportTitle}} | Page {{page_num}}"
+    },
+    "styles": {
+      "header": { "font-size": "24pt", "color": "#2a4d69" },
+      "report-title": { "font-size": "16pt", "color": "#4b86b4", "margin-bottom": "15pt" },
+      "section-title": {
+        "font-size": "14pt", "font-weight": "bold", "color": "#2a4d69",
+        "margin-top": "10pt", "margin-bottom": "5pt",
+        "padding-bottom": "2pt",
+        "border-bottom": "1pt solid #adcbe3"
+      },
+      "p": { "font-size": "11pt", "line-height": "15pt" },
+      "th": { "font-weight": "bold", "text-align": "right" },
+      "td": { "padding": "2pt 5pt" },
+      "td-numeric": { "text-align": "right" },
+      "td-subtotal": { "font-weight": "bold", "border-top": "0.5pt solid #cccccc" },
+      "td-total": { "font-weight": "bold", "border-top": "0.5pt solid #2a4d69", "border-bottom": "2pt double #2a4d69" }
+    }
+  },
+  "_template": {
+    "type": "Block",
+    "children": [
+      {
+        "type": "Paragraph", "styleNames": ["header"], "children": [{ "type": "Text", "content": "{{companyName}}" }]
+      },
+      {
+        "type": "Paragraph", "styleNames": ["report-title"], "children": [{ "type": "Text", "content": "{{reportTitle}} | {{reportDate}}" }]
+      },
+      {
+        "each": "sections",
+        "template": {
+          "type": "Block",
+          "children": [
+            { "type": "Paragraph", "styleNames": ["section-title"], "children": [{ "type": "Text", "content": "{{title}}" }] },
+            {
+              "each": "tables",
+              "template": {
+                "type": "Table",
+                "columns": [
+                  { "width": "75%", "style": "td" },
+                  { "width": "25%", "style": "td td-numeric" }
+                ],
+                "body": {
+                  "rows": [
+                    {
+                      "each": "data",
+                      "template": {
+                        "type": "Block",
+                        "comment": "This block implicitly becomes a TableRow",
+                        "children": [
+                          {
+                            "type": "Block",
+                            "comment": "This block implicitly becomes a TableCell",
+                            "children": [{ "type": "Paragraph", "children": [{ "type": "Text", "content": "{{label}}" }] }]
+                          },
+                          {
+                            "type": "Block",
+                            "comment": "This block becomes the second TableCell",
+                            "styleNames": [
+                              "{{#if (eq type 'subtotal')}}td-subtotal{{/if}}",
+                              "{{#if (eq type 'total')}}td-total{{/if}}"
+                            ],
+                            "children": [{ "type": "Paragraph", "children": [{ "type": "Text", "content": "{{formatCurrency value}}" }] }]
+                          }
+                        ]
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

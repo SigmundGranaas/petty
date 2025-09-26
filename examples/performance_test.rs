@@ -1,10 +1,10 @@
-use petty::{PipelineBuilder, PipelineError};
+use petty::{PdfBackend, PipelineBuilder, PipelineError};
 use rand::prelude::*;
+use rand::rngs::StdRng;
+use rand::SeedableRng;
 use serde_json::{json, Value};
 use std::env;
-use std::fs;
 use std::time::Instant;
-use rand::rng;
 
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]
@@ -22,14 +22,14 @@ fn generate_perf_test_data_iter(
     max_items_per_record: usize,
 ) -> impl Iterator<Item = Value> {
     println!("Generating {} records via an iterator...", num_records);
-    let mut rng = rng();
+    let mut rng = StdRng::from_seed(Default::default());
     (0..num_records).map(move |i| {
-        let num_items = rng.gen_range(2..=max_items_per_record);
+        let num_items = rng.random_range(2..=max_items_per_record);
         let mut total = 0.0;
         let items: Vec<Value> = (0..num_items)
             .map(|_| {
-                let quantity = rng.gen_range(1..=10);
-                let price: f64 = rng.gen_range(10.0..500.0);
+                let quantity = rng.random_range(1..=10);
+                let price: f64 = rng.random_range(10.0..500.0);
                 let line_total = quantity as f64 * price;
                 total += line_total;
                 json!({
@@ -40,7 +40,7 @@ fn generate_perf_test_data_iter(
             .collect();
         json!({
             "id": 10000 + i,
-            "user": { "name": MOCK_USERS.choose(&mut rng).unwrap_or(&""), "account": format!("ACC-{}", rng.gen_range(100000..999999)) },
+            "user": { "name": MOCK_USERS.choose(&mut rng).unwrap_or(&""), "account": format!("ACC-{}", rng.random_range(100000..999999)) },
             "items": items,
             "summary": { "total": total, "tax": total * 0.08, "grand_total": total * 1.08 }
         })
@@ -51,35 +51,43 @@ fn main() -> Result<(), PipelineError> {
     #[cfg(feature = "dhat-heap")]
     let _profiler = dhat::Profiler::new_heap();
 
+    // Initialize the logger to enable debug messages.
+    if env::var("RUST_LOG").is_err() {
+        unsafe { env::set_var("RUST_LOG", "petty=info"); }
+    }
+    env_logger::init();
+
     if cfg!(debug_assertions) {
         println!("\nWARNING: Running in debug build. For accurate results, run with `--release`.\n");
     }
-    println!("Running Advanced Performance Test Example (JSON)...");
+    println!("Running XSLT-based Performance Test Example...");
 
     let args: Vec<String> = env::args().collect();
     let num_records = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(500);
     let max_items = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
     println!("Configuration: {} pages, up to {} table rows per page.", num_records, max_items);
 
-    let stylesheet_json = fs::read_to_string("templates/perf_test_stylesheet.json")?;
-    println!("✓ Stylesheet loaded.");
+    let template_path = "templates/perf_test_template.xsl";
+    println!("✓ Using template: {}", template_path);
     let data_iterator = generate_perf_test_data_iter(num_records, max_items);
     println!("✓ Data iterator created.");
 
+    // The builder now receives a guaranteed valid path.
     let pipeline = PipelineBuilder::new()
-        .with_stylesheet_json(&stylesheet_json)?
+        .with_xslt_template_file(template_path)?
+        .with_pdf_backend(PdfBackend::LopdfParallel)
         .build()?;
-    println!("✓ Pipeline built.");
+    println!("✓ Pipeline built with XSLT engine.");
 
     let output_path = "performance_test_output.pdf";
-    println!("Starting PDF generation for {} records...", num_records);
+    println!("Starting PDF generation for {} records to {}...", num_records, output_path);
     let start_time = Instant::now();
 
     pipeline.generate_to_file(data_iterator, output_path)?;
 
     let duration = start_time.elapsed();
     println!("\nSuccess! Generated {}", output_path);
-    println!("Total time taken: {:.2} seconds for {} record.", duration.as_secs_f64(), num_records);
+    println!("Total time taken: {:.2} seconds for {} records.", duration.as_secs_f64(), num_records);
     if num_records > 0 {
         println!("Average time per record: {:.2} ms.", duration.as_millis() as f64 / num_records as f64);
     }

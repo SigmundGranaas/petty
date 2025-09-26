@@ -5,8 +5,8 @@ Petty is a high-performance document generation engine designed to transform str
 ## Key Concepts
 
 - **Sequence**: A logical, self-contained part of a document (like an invoice or a chapter) that is processed in memory as a single unit. This gives the user explicit control over the memory-for-features trade-off.
-- **Templates**: Document structure can be defined using a simple JSON format or a more powerful XSLT-like syntax.
-- **Styling**: A simple, CSS-like styling model is used to control the appearance of elements. Styles can be defined in a JSON stylesheet or extracted from an XSLT file.
+- **Templates**: Document structure is defined using a powerful XSLT-like syntax that supports Handlebars for data binding.
+- **Styling**: A simple, CSS-like styling model is used to control the appearance of elements. Styles are extracted from an XSLT file's `<xsl:attribute-set>` definitions.
 - **Intermediate Representation (IR)**: The engine uses a rich, semantic tree (`IRNode`) as its canonical representation, decoupling input syntax from layout logic.
 
 ## How to Run
@@ -20,4 +20,4 @@ The main binary acts as a simple CLI tool for PDF generation using the XSLT engi
 cargo run --release -- \
   templates/invoice_template.xsl \
   data/invoice_data.json \
-  output/xslt_invoices.pdf
+  xslt_invoices.pdf

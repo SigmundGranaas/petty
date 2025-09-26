@@ -29,24 +29,9 @@
           "data": [
             { "type": "item", "label": "Cash & Equivalents", "value": 150000.00 },
             { "type": "item", "label": "Accounts Receivable", "value": 75000.00 },
-            { "type": "item", "label": "Inventory", "value": 95000.00 },
             { "type": "subtotal", "label": "Total Current Assets", "value": 320000.00 },
             { "type": "item", "label": "Property, Plant & Equipment", "value": 450000.00 },
-            { "type": "item", "label": "Goodwill", "value": 80000.00 },
             { "type": "total", "label": "Total Assets", "value": 850000.00 }
-          ]
-        },
-        {
-          "title": "Liabilities & Equity",
-          "data": [
-            { "type": "item", "label": "Accounts Payable", "value": 60000.00 },
-            { "type": "item", "label": "Accrued Expenses", "value": 25000.00 },
-            { "type": "subtotal", "label": "Total Current Liabilities", "value": 85000.00 },
-            { "type": "item", "label": "Long-term Debt", "value": 250000.00 },
-            { "type": "total", "label": "Total Liabilities", "value": 335000.00 },
-            { "type": "item", "label": "Common Stock", "value": 15000.00 },
-            { "type": "item", "label": "Retained Earnings", "value": 500000.00 },
-            { "type": "total", "label": "Total Equity", "value": 515000.00 }
           ]
         }
       ]

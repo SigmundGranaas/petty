@@ -1,121 +1,150 @@
-<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform" xmlns:fo="http://www.w3.org/1999/XSL/Format">
-    <!-- Page Layout Definition -->
+<xsl:stylesheet version="1.0"
+                xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+                xmlns:fo="http://www.w3.org/1999/XSL/Format">
+
+    <!-- Page Layout & Metadata -->
     <fo:simple-page-master page-width="8.5in" page-height="11in" margin="0.75in"/>
 
-    <!-- Reusable Style Definitions -->
-    <xsl:attribute-set name="h1">
-        <xsl:attribute name="font-size">24pt</xsl:attribute>
+    <!-- ========================= -->
+    <!-- ==== Style Library ==== -->
+    <!-- ========================= -->
+    <xsl:attribute-set name="header">
+        <xsl:attribute name="padding-bottom">12pt</xsl:attribute>
+        <xsl:attribute name="border-bottom">1pt solid #ddd</xsl:attribute>
+        <xsl:attribute name="margin-bottom">16pt</xsl:attribute>
+    </xsl:attribute-set>
+
+    <xsl:attribute-set name="name">
+        <xsl:attribute name="font-size">28pt</xsl:attribute>
         <xsl:attribute name="font-weight">bold</xsl:attribute>
-        <xsl:attribute name="color">#2c3e50</xsl:attribute>
-        <xsl:attribute name="margin-bottom">4pt</xsl:attribute>
+        <xsl:attribute name="color">#111</xsl:attribute>
+    </xsl:attribute-set>
+
+    <xsl:attribute-set name="title">
+        <xsl:attribute name="font-size">14pt</xsl:attribute>
+        <xsl:attribute name="color">#555</xsl:attribute>
+        <xsl:attribute name="margin-top">4pt</xsl:attribute>
+    </xsl:attribute-set>
+
+    <xsl:attribute-set name="contact-info">
+        <xsl:attribute name="text-align">right</xsl:attribute>
+        <xsl:attribute name="color">#444</xsl:attribute>
+        <xsl:attribute name="font-size">10pt</xsl:attribute>
+        <xsl:attribute name="line-height">14pt</xsl:attribute>
+    </xsl:attribute-set>
+
+    <xsl:attribute-set name="link-color">
+        <xsl:attribute name="color">#0066cc</xsl:attribute>
     </xsl:attribute-set>
 
     <xsl:attribute-set name="h2">
         <xsl:attribute name="font-size">14pt</xsl:attribute>
         <xsl:attribute name="font-weight">bold</xsl:attribute>
-        <xsl:attribute name="color">#2c3e50</xsl:attribute>
+        <xsl:attribute name="color">#333</xsl:attribute>
         <xsl:attribute name="margin-top">12pt</xsl:attribute>
-        <xsl:attribute name="margin-bottom">8pt</xsl:attribute>
         <xsl:attribute name="padding-bottom">4pt</xsl:attribute>
-        <xsl:attribute name="border-bottom">1pt solid #bdc3c7</xsl:attribute>
+        <xsl:attribute name="border-bottom">1px solid #eee</xsl:attribute>
     </xsl:attribute-set>
 
-    <xsl:attribute-set name="h3">
+    <xsl:attribute-set name="job-header">
         <xsl:attribute name="font-size">11pt</xsl:attribute>
+        <xsl:attribute name="margin-top">10pt</xsl:attribute>
+    </xsl:attribute-set>
+
+    <xsl:attribute-set name="job-title">
         <xsl:attribute name="font-weight">bold</xsl:attribute>
     </xsl:attribute-set>
 
-    <xsl:attribute-set name="italic">
-        <xsl:attribute name="font-style">italic</xsl:attribute>
+    <xsl:attribute-set name="job-dates">
+        <xsl:attribute name="text-align">right</xsl:attribute>
+        <xsl:attribute name="color">#666</xsl:attribute>
     </xsl:attribute-set>
 
-    <xsl:attribute-set name="subtle">
-        <xsl:attribute name="color">#7f8c8d</xsl:attribute>
+    <xsl:attribute-set name="list">
+        <xsl:attribute name="margin-left">15pt</xsl:attribute>
+        <xsl:attribute name="margin-top">6pt</xsl:attribute>
     </xsl:attribute-set>
 
-    <!-- Main Template -->
+    <xsl:attribute-set name="skill-category">
+        <xsl:attribute name="font-weight">bold</xsl:attribute>
+        <xsl:attribute name="width">120pt</xsl:attribute>
+    </xsl:attribute-set>
+
+    <xsl:attribute-set name="project-name">
+        <xsl:attribute name="font-weight">bold</xsl:attribute>
+        <xsl:attribute name="font-size">11pt</xsl:attribute>
+    </xsl:attribute-set>
+
+
+    <!-- ===================== -->
+    <!-- ==== Main Template ==== -->
+    <!-- ===================== -->
     <xsl:template match="/">
-        <page-sequence select=".">
+        <page-sequence>
             <!-- Header Section -->
-            <container>
-                <text style="h1"><xsl:value-of select="name"/></text>
-                <text font-size="12pt" color="#34495e" margin-bottom="8pt"><xsl:value-of select="title"/></text>
-                <flex-container font-size="9pt" color="#34495e">
-                    <container width="33%"><text><xsl:value-of select="email"/></text></container>
-                    <container width="33%"><text text-align="center"><xsl:value-of select="phone"/></text></container>
-                    <container width="33%"><text text-align="right"><xsl:value-of select="location"/></text></container>
-                </flex-container>
-                <flex-container font-size="9pt">
-                    <container width="50%"><text>
-                        <link href="https://{linkedin}"><xsl:value-of select="linkedin"/></link>
-                    </text></container>
-                    <container width="50%"><text text-align="right">
-                        <link href="https://{github}"><xsl:value-of select="github"/></link>
-                    </text></container>
-                </flex-container>
-            </container>
+            <flex-container style="header">
+                <block width="65%">
+                    <block style="name"><xsl:value-of select="name"/></block>
+                    <block style="title"><xsl:value-of select="title"/></block>
+                </block>
+                <block style="contact-info" width="35%">
+                    <text><xsl:value-of select="email"/></text><br/>
+                    <text><xsl:value-of select="phone"/></text><br/>
+                    <text><xsl:value-of select="location"/></text><br/>
+                    <link href="{{linkedin}}" style="link-color"><xsl:value-of select="linkedin"/></link><br/>
+                    <link href="{{github}}" style="link-color"><xsl:value-of select="github"/></link>
+                </block>
+            </flex-container>
 
             <!-- Summary Section -->
-            <container margin-top="16pt">
-                <text style="h2">Summary</text>
-                <text font-size="10pt" line-height="14pt"><xsl:value-of select="summary"/></text>
-            </container>
+            <block style="h2">Summary</block>
+            <text><xsl:value-of select="summary"/></text>
 
             <!-- Experience Section -->
-            <container>
-                <text style="h2">Experience</text>
-                <xsl:for-each select="experience">
-                    <container margin-bottom="12pt">
-                        <flex-container>
-                            <container width="75%"><text style="h3"><xsl:value-of select="title"/> @ <xsl:value-of select="company"/></text></container>
-                            <container width="25%"><text font-size="10pt" text-align="right" style="subtle"><xsl:value-of select="dates"/></text></container>
-                        </flex-container>
-                        <text font-size="10pt" style="subtle" margin-bottom="4pt"><xsl:value-of select="location"/></text>
-                        <list font-size="10pt" line-height="14pt" padding-left="15pt">
-                            <xsl:for-each select="responsibilities">
-                                <list-item><text><xsl:value-of select="."/></text></list-item>
-                            </xsl:for-each>
-                        </list>
-                    </container>
-                </xsl:for-each>
-            </container>
+            <block style="h2">Experience</block>
+            <xsl:for-each select="experience">
+                <flex-container style="job-header">
+                    <block width="70%"><strong style="job-title"><xsl:value-of select="title"/></strong> at <xsl:value-of select="company"/></block>
+                    <block style="job-dates" width="30%"><xsl:value-of select="dates"/></block>
+                </flex-container>
+                <list style="list">
+                    <xsl:for-each select="responsibilities">
+                        <list-item><text><xsl:value-of select="."/></text></list-item>
+                    </xsl:for-each>
+                </list>
+            </xsl:for-each>
 
             <!-- Skills Section -->
-            <container>
-                <text style="h2">Skills</text>
-                <xsl:for-each select="skills">
-                    <text font-size="10pt" line-height="14pt">
-                        <strong font-weight="bold"><xsl:value-of select="category"/>: </strong>
-                        <xsl:value-of select="list"/>
-                    </text>
-                </xsl:for-each>
-            </container>
+            <block style="h2">Skills</block>
+            <xsl:for-each select="skills">
+                <flex-container margin-top="4pt">
+                    <block style="skill-category"><xsl:value-of select="category"/>:</block>
+                    <block><xsl:value-of select="list"/></block>
+                </flex-container>
+            </xsl:for-each>
 
             <!-- Projects Section -->
-            <container>
-                <text style="h2">Projects</text>
-                <xsl:for-each select="projects">
-                    <container margin-bottom="8pt">
-                        <text font-size="10pt">
-                            <strong font-weight="bold"><xsl:value-of select="name"/></strong> -
-                            <em style="italic" color="#3498db"><xsl:value-of select="url"/></em>
-                        </text>
-                        <text font-size="10pt"><xsl:value-of select="description"/></text>
-                    </container>
-                </xsl:for-each>
-            </container>
+            <block style="h2">Projects</block>
+            <xsl:for-each select="projects">
+                <block margin-top="8pt">
+                    <flex-container>
+                        <block style="project-name" width="70%"><xsl:value-of select="name"/></block>
+                        <block style="job-dates" width="30%"><link href="{{url}}" style="link-color"><xsl:value-of select="url"/></link></block>
+                    </flex-container>
+                    <text margin-top="2pt"><xsl:value-of select="description"/></text>
+                </block>
+            </xsl:for-each>
 
             <!-- Education Section -->
-            <container>
-                <text style="h2">Education</text>
-                <xsl:for-each select="education">
-                    <flex-container margin-bottom="4pt">
-                        <container width="75%"><text style="h3"><xsl:value-of select="institution"/></text></container>
-                        <container width="25%"><text font-size="10pt" text-align="right" style="subtle"><xsl:value-of select="dates"/></text></container>
-                    </flex-container>
-                    <text font-size="10pt" margin-bottom="8pt"><xsl:value-of select="degree"/></text>
-                </xsl:for-each>
-            </container>
+            <block style="h2">Education</block>
+            <xsl:for-each select="education">
+                <flex-container style="job-header">
+                    <block width="70%"><strong style="job-title"><xsl:value-of select="degree"/></strong></block>
+                    <block style="job-dates" width="30%"><xsl:value-of select="dates"/></block>
+                </flex-container>
+                <text margin-left="2pt"><xsl:value-of select="institution"/></text>
+            </xsl:for-each>
         </page-sequence>
     </xsl:template>
+
 </xsl:stylesheet>

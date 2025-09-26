@@ -1,3 +1,4 @@
+// FILE: /home/sigmund/RustroverProjects/petty/src/render/streaming_writer.rs
 // src/render/streaming_writer.rs
 
 use lopdf::content::Content;
@@ -12,7 +13,7 @@ pub struct StreamingPdfWriter<W: Write> {
     max_id: u32,
     pub page_ids: Vec<ObjectId>,
     catalog_id: ObjectId,
-    pages_id: ObjectId,
+    pub pages_id: ObjectId,
     pub resources_id: ObjectId,
 }
 
@@ -76,9 +77,17 @@ impl<W: Write> StreamingPdfWriter<W> {
     }
 
     /// Generates a new unique object ID for the document.
-    fn new_object_id(&mut self) -> ObjectId {
+    pub fn new_object_id(&mut self) -> ObjectId {
         self.max_id += 1;
         (self.max_id, 0)
+    }
+
+    pub fn add_page_ids(&mut self, ids: impl Iterator<Item = ObjectId>) {
+        self.page_ids.extend(ids);
+    }
+
+    pub fn write_pre_rendered_objects(&mut self, bytes: Vec<u8>) -> io::Result<()> {
+        self.writer.write_all(&bytes)
     }
 
     /// Renders a single page and writes its objects directly to the output stream.
@@ -136,7 +145,7 @@ impl<W: Write> StreamingPdfWriter<W> {
 
 /// This internal module replicates the necessary functions from `lopdf::writer`
 /// to avoid needing to fork the library.
-mod internal_writer {
+pub(crate) mod internal_writer {
     use super::*;
     use lopdf::StringFormat;
 
