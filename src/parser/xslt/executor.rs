@@ -264,7 +264,8 @@ impl<'h> TemplateExecutor<'h> {
                 style_override,
                 children: vec![],
             }),
-            "fo:block" | "text" | "p" => self.node_stack.push(IRNode::Paragraph {
+            // FIX: Map <text> and <p> to Paragraph, but treat <block> as a generic container.
+            "text" | "p" => self.node_stack.push(IRNode::Paragraph {
                 style_sets,
                 style_override,
                 children: vec![],
@@ -315,6 +316,7 @@ impl<'h> TemplateExecutor<'h> {
                     }
                 }
             }
+            // Default to a generic block container.
             _ => self.node_stack.push(IRNode::Block {
                 style_sets,
                 style_override,
@@ -463,16 +465,126 @@ impl<'h> TemplateExecutor<'h> {
             _ => {
                 if let Some(IRNode::Paragraph { children, .. }) = self.node_stack.last_mut() {
                     children.push(node);
-                } else if let Some(IRNode::Table { .. }) = self.node_stack.last_mut() {
-                    self.node_stack.push(IRNode::Paragraph {
-                        style_sets: vec![],
-                        style_override: None,
-                        children: vec![node],
-                    });
-                    let p_node = self.node_stack.pop().unwrap();
-                    self.push_block_to_parent(p_node);
+                } else {
+                    // FIX: If the parent is a generic container (Block, Flex, etc.),
+                    // we must implicitly create a new Paragraph to hold this inline content.
+                    let can_parent_hold_paragraph = matches!(
+                        self.node_stack.last(),
+                        Some(IRNode::Root(_))
+                            | Some(IRNode::Block { .. })
+                            | Some(IRNode::FlexContainer { .. })
+                            | Some(IRNode::ListItem { .. })
+                            | Some(IRNode::Table { .. })
+                    );
+
+                    if can_parent_hold_paragraph {
+                        // Create a new paragraph just for this content.
+                        let paragraph = IRNode::Paragraph {
+                            style_sets: vec![],
+                            style_override: None,
+                            children: vec![node],
+                        };
+                        // Use the existing helper to add this new block to its parent.
+                        self.push_block_to_parent(paragraph);
+                    } else {
+                        log::warn!(
+                            "Could not place inline content; parent node does not support it."
+                        );
+                    }
                 }
             }
+        }
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::xslt::compiler::Compiler;
+    use serde_json::json;
+
+    fn run_test(xslt: &str, data: &Value) -> Result<Vec<IRNode>, ParseError> {
+        let compiled_stylesheet = Compiler::compile(xslt).unwrap();
+        let handlebars = Handlebars::new();
+        let mut executor = TemplateExecutor::new(&handlebars, &compiled_stylesheet);
+        executor.build_tree(data)
+    }
+
+    #[test]
+    fn test_implicit_paragraph_creation_in_block() {
+        let xslt = r#"
+            <xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+                <xsl:template match="/">
+                    <page-sequence>
+                        <block>Some loose text.</block>
+                    </page-sequence>
+                </xsl:template>
+            </xsl:stylesheet>
+        "#;
+        let result = run_test(xslt, &json!({})).unwrap();
+
+        assert_eq!(result.len(), 1, "Expected one top-level node (page-sequence)");
+
+        let page_sequence_children = match &result[0] {
+            IRNode::Block { children, .. } => children, // page-sequence becomes a block
+            _ => panic!("Expected page-sequence to be parsed as a Block"),
+        };
+        assert_eq!(page_sequence_children.len(), 1, "Expected one child in page-sequence");
+
+        let block = &page_sequence_children[0];
+        match block {
+            IRNode::Block { children, .. } => {
+                assert_eq!(children.len(), 1, "Block should contain one child");
+                let paragraph = &children[0];
+                match paragraph {
+                    IRNode::Paragraph { children, .. } => {
+                        assert_eq!(children.len(), 1, "Paragraph should contain one child");
+                        let text = &children[0];
+                        match text {
+                            InlineNode::Text(s) => assert_eq!(s, "Some loose text."),
+                            _ => panic!("Expected InlineNode::Text"),
+                        }
+                    }
+                    _ => panic!("Expected child of Block to be an implicit Paragraph"),
+                }
+            }
+            _ => panic!("Expected a Block node"),
+        }
+    }
+
+    #[test]
+    fn test_value_of_in_strong_tag_in_block() {
+        let xslt = r#"
+            <xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
+                <xsl:template match="/">
+                    <block><strong><xsl:value-of select="name"/></strong></block>
+                </xsl:template>
+            </xsl:stylesheet>
+        "#;
+        let result = run_test(xslt, &json!({ "name": "John Doe" })).unwrap();
+
+        let block_children = match &result[0] {
+            IRNode::Block { children, .. } => children,
+            _ => panic!("Expected root node to be a Block"),
+        };
+        assert_eq!(block_children.len(), 1, "Block should contain one implicit paragraph");
+
+        let paragraph_children = match &block_children[0] {
+            IRNode::Paragraph { children, .. } => children,
+            _ => panic!("Expected implicit paragraph"),
+        };
+        assert_eq!(paragraph_children.len(), 1, "Paragraph should contain one span");
+
+        let span_children = match &paragraph_children[0] {
+            InlineNode::StyledSpan { children, .. } => children,
+            _ => panic!("Expected StyledSpan for <strong>"),
+        };
+        assert_eq!(span_children.len(), 1, "Span should contain one text node");
+
+        match &span_children[0] {
+            InlineNode::Text(s) => assert_eq!(s, "John Doe"),
+            _ => panic!("Expected Text node with content"),
         }
     }
 }

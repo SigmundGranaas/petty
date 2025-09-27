@@ -87,3 +87,49 @@ fn calculate_image_dimensions(style: &Arc<ComputedStyle>, content_width: f32) ->
     };
     (width, height)
 }
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::layout::style::ComputedStyle;
+
+    #[test]
+    fn test_layout_empty_src_image() {
+        let style = Arc::new(ComputedStyle::default());
+        let (elements, height, _pending) = layout_image("", &style, 500.0);
+
+        assert!(elements.is_empty(), "No elements should be produced for an empty src");
+        assert_eq!(height, 0.0, "Height should be zero for an empty src");
+    }
+
+    #[test]
+    fn test_calculate_image_dimensions() {
+        let container_width = 200.0;
+
+        // Case 1: No width or height specified (defaults)
+        let style1 = ComputedStyle::default();
+        let (w1, h1) = calculate_image_dimensions(&Arc::new(style1), container_width);
+        assert_eq!(w1, container_width); // Defaults to fill container
+        assert_eq!(h1, 50.0); // Defaults to 50pt height
+
+        // Case 2: Fixed point width and height
+        let style2 = ComputedStyle {
+            width: Some(Dimension::Pt(80.0)),
+            height: Some(60.0),
+            ..ComputedStyle::default()
+        };
+        let (w2, h2) = calculate_image_dimensions(&Arc::new(style2), container_width);
+        assert_eq!(w2, 80.0);
+        assert_eq!(h2, 60.0);
+
+        // Case 3: Percentage width
+        let style3 = ComputedStyle {
+            width: Some(Dimension::Percent(75.0)), // 75% of 200 = 150
+            ..ComputedStyle::default()
+        };
+        let (w3, h3) = calculate_image_dimensions(&Arc::new(style3), container_width);
+        assert_eq!(w3, 150.0);
+        assert_eq!(h3, 50.0); // Default height
+    }
+}

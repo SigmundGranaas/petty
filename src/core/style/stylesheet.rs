@@ -1,10 +1,11 @@
 use crate::parser::json::ast::StylesheetDef;
-use crate::parser::style::{parse_length, parse_shorthand_margins};
+use crate::parser::style::{parse_border, parse_color, parse_dimension, parse_length, parse_shorthand_margins};
 use crate::parser::ParseError;
 use quick_xml::events::{attributes::Attributes, Event as XmlEvent};
 use quick_xml::Reader;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 use crate::core::style::border::Border;
 use crate::core::style::color::Color;
@@ -81,7 +82,7 @@ pub struct PageSequence {
     pub data_source: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+#[derive(Clone, Serialize, Deserialize, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ElementStyle {
     #[serde(default)]
@@ -116,6 +117,28 @@ pub struct ElementStyle {
     pub border_bottom: Option<Border>,
 }
 
+impl fmt::Debug for ElementStyle {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut dbg = f.debug_struct("ElementStyle");
+        if let Some(v) = &self.font_family { dbg.field("font_family", v); }
+        if let Some(v) = self.font_size { dbg.field("font_size", &v); }
+        if let Some(v) = &self.font_weight { dbg.field("font_weight", v); }
+        if let Some(v) = &self.font_style { dbg.field("font_style", v); }
+        if let Some(v) = self.line_height { dbg.field("line_height", &v); }
+        if let Some(v) = &self.text_align { dbg.field("text_align", v); }
+        if let Some(v) = &self.color { dbg.field("color", v); }
+        if let Some(v) = &self.margin { dbg.field("margin", v); }
+        if let Some(v) = &self.padding { dbg.field("padding", v); }
+        if let Some(v) = &self.width { dbg.field("width", v); }
+        if let Some(v) = &self.height { dbg.field("height", v); }
+        if let Some(v) = &self.background_color { dbg.field("background_color", v); }
+        if let Some(v) = &self.border { dbg.field("border", v); }
+        if let Some(v) = &self.border_top { dbg.field("border_top", v); }
+        if let Some(v) = &self.border_bottom { dbg.field("border_bottom", v); }
+        dbg.finish()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
 pub struct TableColumn {
     pub header: String,
@@ -128,19 +151,24 @@ pub struct TableColumn {
 
 impl Stylesheet {
     /// Pre-parses an XSLT file to extract global style and layout information.
-    /// NOTE: This no longer parses `xsl:attribute-set`. That is now handled by the Compiler.
     pub fn from_xslt(xslt_content: &str) -> Result<Self, ParseError> {
         let mut reader = Reader::from_str(xslt_content);
         reader.config_mut().trim_text(true);
 
         let mut page_layout: Option<PageLayout> = None;
+        let mut styles = HashMap::new();
         let mut page_sequences = HashMap::new();
         let mut buf = Vec::new();
         let mut in_root_template = false;
 
+        // State for parsing attribute-sets
+        let mut current_style_name: Option<String> = None;
+        let mut current_style: Option<ElementStyle> = None;
+        let mut current_attr_name: Option<String> = None;
+
         loop {
             match reader.read_event_into(&mut buf) {
-                Ok(XmlEvent::Start(e)) | Ok(XmlEvent::Empty(e)) => match e.name().as_ref() {
+                Ok(XmlEvent::Start(e)) => match e.name().as_ref() {
                     b"fo:simple-page-master" => {
                         if page_layout.is_none() {
                             page_layout = Some(parse_simple_page_master(e.attributes())?);
@@ -158,18 +186,57 @@ impl Stylesheet {
                         let select_path = get_attr_val(e.attributes(), b"select")?
                             .unwrap_or_else(|| ".".to_string());
                         page_sequences.insert(
-                            "main".to_string(), // Use a default name for the single sequence
+                            "main".to_string(),
                             PageSequence {
-                                template: "main".to_string(), // Not used by XSLT engine
+                                template: "main".to_string(),
                                 data_source: select_path,
                             },
                         );
                     }
+                    b"xsl:attribute-set" => {
+                        if let Some(name) = get_attr_val(e.attributes(), b"name")? {
+                            current_style_name = Some(name);
+                            current_style = Some(ElementStyle::default());
+                        }
+                    }
+                    b"xsl:attribute" => {
+                        if current_style.is_some() {
+                            if let Some(name) = get_attr_val(e.attributes(), b"name")? {
+                                current_attr_name = Some(name);
+                            }
+                        }
+                    }
                     _ => {}
                 },
-                Ok(XmlEvent::End(e)) if e.name().as_ref() == b"xsl:template" => {
-                    in_root_template = false;
-                }
+                Ok(XmlEvent::Empty(e)) => match e.name().as_ref() {
+                    b"fo:simple-page-master" => {
+                        if page_layout.is_none() {
+                            page_layout = Some(parse_simple_page_master(e.attributes())?);
+                        }
+                    }
+                    _ => {}
+                },
+                Ok(XmlEvent::Text(e)) => {
+                    if let (Some(style), Some(attr_name)) = (current_style.as_mut(), current_attr_name.take()) {
+                        let value = e.unescape()?.to_string();
+                        parse_and_apply_style_attribute(style, &attr_name, &value)
+                            .map_err(|err| ParseError::TemplateParse(format!("Failed to parse style attribute '{}: {}': {}", attr_name, value, err)))?;
+                    }
+                },
+                Ok(XmlEvent::End(e)) => match e.name().as_ref() {
+                    b"xsl:template" => {
+                        in_root_template = false;
+                    }
+                    b"xsl:attribute-set" => {
+                        if let (Some(name), Some(style)) = (current_style_name.take(), current_style.take()) {
+                            styles.insert(name, Arc::new(style));
+                        }
+                    }
+                    b"xsl:attribute" => {
+                        current_attr_name = None;
+                    }
+                    _ => (),
+                },
                 Ok(XmlEvent::Eof) => break,
                 Err(e) => return Err(e.into()),
                 _ => (),
@@ -181,7 +248,7 @@ impl Stylesheet {
             page: page_layout.ok_or_else(|| {
                 ParseError::TemplateParse("Missing <fo:simple-page-master> tag in XSLT.".to_string())
             })?,
-            styles: HashMap::new(), // Styles are now handled by the compiler.
+            styles, // Use the newly parsed styles
             page_sequences,
         })
     }
@@ -230,4 +297,54 @@ fn parse_simple_page_master(attrs: Attributes) -> Result<PageLayout, ParseError>
     }
 
     Ok(layout)
+}
+
+/// Helper to parse a single XSLT style attribute and apply it to an ElementStyle.
+fn parse_and_apply_style_attribute(style: &mut ElementStyle, name: &str, value: &str) -> Result<(), ParseError> {
+    match name {
+        "font-family" => style.font_family = Some(value.to_string()),
+        "font-size" => style.font_size = Some(parse_length(value)?),
+        "font-weight" => style.font_weight = Some(match value.to_lowercase().as_str() {
+            "bold" => FontWeight::Bold,
+            "normal" | "regular" => FontWeight::Regular,
+            "light" => FontWeight::Light,
+            "thin" => FontWeight::Thin,
+            "medium" => FontWeight::Medium,
+            "black" => FontWeight::Black,
+            _ => return Err(ParseError::TemplateParse(format!("Unknown font-weight: {}", value))),
+        }),
+        "font-style" => style.font_style = Some(match value.to_lowercase().as_str() {
+            "normal" => FontStyle::Normal,
+            "italic" => FontStyle::Italic,
+            "oblique" => FontStyle::Oblique,
+            _ => return Err(ParseError::TemplateParse(format!("Unknown font-style: {}", value))),
+        }),
+        "line-height" => style.line_height = Some(parse_length(value)?),
+        "color" => style.color = Some(parse_color(value)?),
+        "background-color" => style.background_color = Some(parse_color(value)?),
+        "text-align" => style.text_align = Some(match value.to_lowercase().as_str() {
+            "left" => TextAlign::Left,
+            "right" => TextAlign::Right,
+            "center" => TextAlign::Center,
+            "justify" => TextAlign::Justify,
+            _ => return Err(ParseError::TemplateParse(format!("Unknown text-align: {}", value))),
+        }),
+        "width" => style.width = Some(parse_dimension(value)?),
+        "height" => style.height = Some(parse_dimension(value)?),
+        "margin" => style.margin = Some(parse_shorthand_margins(value)?),
+        "margin-top" => style.margin.get_or_insert_with(Default::default).top = parse_length(value)?,
+        "margin-right" => style.margin.get_or_insert_with(Default::default).right = parse_length(value)?,
+        "margin-bottom" => style.margin.get_or_insert_with(Default::default).bottom = parse_length(value)?,
+        "margin-left" => style.margin.get_or_insert_with(Default::default).left = parse_length(value)?,
+        "padding" => style.padding = Some(parse_shorthand_margins(value)?),
+        "padding-top" => style.padding.get_or_insert_with(Default::default).top = parse_length(value)?,
+        "padding-right" => style.padding.get_or_insert_with(Default::default).right = parse_length(value)?,
+        "padding-bottom" => style.padding.get_or_insert_with(Default::default).bottom = parse_length(value)?,
+        "padding-left" => style.padding.get_or_insert_with(Default::default).left = parse_length(value)?,
+        "border" => style.border = Some(parse_border(value)?),
+        "border-top" => style.border_top = Some(parse_border(value)?),
+        "border-bottom" => style.border_bottom = Some(parse_border(value)?),
+        _ => log::warn!("Unsupported XSLT style attribute: '{}'", name),
+    }
+    Ok(())
 }

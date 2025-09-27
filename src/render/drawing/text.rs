@@ -1,4 +1,6 @@
 use super::super::pdf::{PageRenderState, PageRenderer, RenderContext};
+// Add this use statement to bring the helper into scope
+use crate::render::pdf::get_styled_font_name;
 use printpdf::ops::Op;
 use printpdf::{Pt, Rgb, TextItem, TextMatrix};
 use std::io;
@@ -16,11 +18,28 @@ pub(super) fn draw_text<W: io::Write + Send>(
     }
 
     let style = &positioned.style;
-    let font_id = page
-        .doc_renderer
-        .fonts
-        .get(style.font_family.as_str())
-        .unwrap_or(&page.doc_renderer.default_font);
+
+    // --- START FIX: Style-aware font selection ---
+    let styled_font_name = get_styled_font_name(style);
+    let font_id = match page.doc_renderer.fonts.get(&styled_font_name) {
+        Some(font) => font,
+        None => {
+            // If the specific styled font (e.g., "Helvetica-Bold") is not found,
+            // log a warning and fall back to the base family font (e.g., "Helvetica").
+            if styled_font_name != style.font_family.as_str() {
+                log::warn!(
+                    "Font style '{}' not found for rendering, falling back to base font '{}'.",
+                    styled_font_name, style.font_family
+                );
+            }
+            page.doc_renderer
+                .fonts
+                .get(style.font_family.as_str())
+                .unwrap_or(&page.doc_renderer.default_font)
+        }
+    };
+    // --- END FIX ---
+
     let fill_color = printpdf::color::Color::Rgb(Rgb::new(
         style.color.r as f32 / 255.0,
         style.color.g as f32 / 255.0,
@@ -29,19 +48,14 @@ pub(super) fn draw_text<W: io::Write + Send>(
     ));
 
     // --- State Management ---
-    // Ensure we are inside a text section.
     if !page.state.is_text_section_open {
         page.ops.push(Op::StartTextSection);
         page.state.is_text_section_open = true;
     }
-
-    // Set fill color if it has changed.
     if page.state.current_fill_color.as_ref() != Some(&fill_color) {
         page.ops.push(Op::SetFillColor { col: fill_color.clone() });
         page.state.current_fill_color = Some(fill_color);
     }
-
-    // Set font and size if they have changed.
     if page.state.current_font_id.as_ref() != Some(font_id)
         || page.state.current_font_size != Some(style.font_size)
     {
@@ -49,7 +63,6 @@ pub(super) fn draw_text<W: io::Write + Send>(
             size: Pt(style.font_size),
             font: font_id.clone(),
         });
-        // Store a clone of the FontId, not a reference.
         page.state.current_font_id = Some(font_id.clone());
         page.state.current_font_size = Some(style.font_size);
     }
@@ -57,7 +70,6 @@ pub(super) fn draw_text<W: io::Write + Send>(
     // --- Drawing Operations ---
     let baseline_y = positioned.y + style.font_size * 0.8;
     let pdf_y = page.page_height_pt - baseline_y;
-
     let matrix = TextMatrix::Translate(Pt(positioned.x), Pt(pdf_y));
     page.ops.push(Op::SetTextMatrix { matrix });
     page.ops.push(Op::WriteText {
@@ -81,10 +93,23 @@ pub(super) fn draw_text_stateless(
     }
 
     let style = &positioned.style;
-    let font_id = ctx
-        .fonts
-        .get(style.font_family.as_str())
-        .unwrap_or(ctx.default_font);
+
+    // --- START FIX: Style-aware font selection ---
+    let styled_font_name = get_styled_font_name(style);
+    let font_id = match ctx.fonts.get(&styled_font_name) {
+        Some(font) => font,
+        None => {
+            if styled_font_name != style.font_family.as_str() {
+                log::warn!(
+                    "Font style '{}' not found for rendering, falling back to base font '{}'.",
+                    styled_font_name, style.font_family
+                );
+            }
+            ctx.fonts.get(style.font_family.as_str()).unwrap_or(ctx.default_font)
+        }
+    };
+    // --- END FIX ---
+
     let fill_color = printpdf::color::Color::Rgb(Rgb::new(
         style.color.r as f32 / 255.0,
         style.color.g as f32 / 255.0,
@@ -96,12 +121,10 @@ pub(super) fn draw_text_stateless(
         ops.push(Op::StartTextSection);
         state.is_text_section_open = true;
     }
-
     if state.current_fill_color.as_ref() != Some(&fill_color) {
         ops.push(Op::SetFillColor { col: fill_color.clone() });
         state.current_fill_color = Some(fill_color);
     }
-
     if state.current_font_id.as_ref() != Some(font_id)
         || state.current_font_size != Some(style.font_size)
     {
@@ -115,7 +138,6 @@ pub(super) fn draw_text_stateless(
 
     let baseline_y = positioned.y + style.font_size * 0.8;
     let pdf_y = ctx.page_height_pt - baseline_y;
-
     let matrix = TextMatrix::Translate(Pt(positioned.x), Pt(pdf_y));
     ops.push(Op::SetTextMatrix { matrix });
     ops.push(Op::WriteText {

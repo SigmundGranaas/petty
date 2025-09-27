@@ -53,5 +53,13 @@ pub(crate) enum WorkItem {
 }
 
 
-#[cfg(test)] // This should apply to the module itself, not just its declaration.
+#[cfg(test)]
 mod integration_test;
+
+// Add declarations for the new test modules
+#[cfg(test)]
+mod test_utils;
+#[cfg(test)]
+mod page_test;
+#[cfg(test)]
+mod text_test;

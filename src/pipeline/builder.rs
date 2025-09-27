@@ -18,6 +18,7 @@ pub struct PipelineBuilder {
     template: Option<Template>,
     pdf_backend: PdfBackend,
     font_manager: Option<Arc<FontManager>>,
+    debug: bool,
 }
 
 impl PipelineBuilder {
@@ -141,11 +142,17 @@ impl PipelineBuilder {
         }
     }
 
+    /// Enables debug features, such as dumping the layout IR tree.
+    pub fn with_debug(self, debug: bool) -> Self {
+        Self { debug, ..self }
+    }
+
     /// Consumes the builder and creates the `DocumentPipeline`.
     pub fn build(mut self) -> Result<DocumentPipeline, PipelineError> {
         let stylesheet = self.stylesheet.ok_or_else(|| {
             PipelineError::StylesheetError("No stylesheet or template provided".to_string())
         })?;
+
         let template = self.template.ok_or_else(|| {
             PipelineError::StylesheetError("Template language could not be determined".to_string())
         })?;
@@ -156,7 +163,13 @@ impl PipelineBuilder {
             Arc::new(fm)
         });
 
-        let generator = DocumentPipeline::new(stylesheet, template, self.pdf_backend, font_manager);
+        let generator = DocumentPipeline::new(
+            stylesheet,
+            template,
+            self.pdf_backend,
+            font_manager,
+            self.debug,
+        );
         Ok(generator)
     }
 

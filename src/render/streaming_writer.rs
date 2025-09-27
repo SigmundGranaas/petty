@@ -20,7 +20,7 @@ pub struct StreamingPdfWriter<W: Write> {
 impl<W: Write> StreamingPdfWriter<W> {
     /// Creates a new streaming writer and immediately writes the PDF header and
     /// essential document scaffolding (Catalog, Pages, Resources) to the output stream.
-    pub fn new(writer: W, version: &str) -> io::Result<Self> {
+    pub fn new(writer: W, version: &str, font_dict: Dictionary) -> io::Result<Self> { // <-- MODIFIED
         let mut writer = internal_writer::CountingWrite::new(writer);
 
         writeln!(writer, "%PDF-{}", version)?;
@@ -28,29 +28,19 @@ impl<W: Write> StreamingPdfWriter<W> {
 
         let mut xref = Xref::new(0, XrefType::CrossReferenceTable);
 
-        // Reserve Object IDs for root objects that will be referenced before they are fully defined.
+        // Reserve Object IDs
         let catalog_id = (1, 0);
         let pages_id = (2, 0);
         let resources_id = (3, 0);
-        let font_id = (4, 0);
-        let max_id = 4;
-
-        // --- Font Object ---
-        let font_dict = dictionary! {
-            "Type" => "Font",
-            "Subtype" => "Type1",
-            "BaseFont" => "Helvetica",
-        };
-        internal_writer::write_indirect_object(&mut writer, font_id.0, font_id.1, &font_dict.into(), &mut xref)?;
+        let max_id = 3;
 
         // --- Resources Object ---
         let resources_dict = dictionary! {
-            "Font" => dictionary! { "F1" => font_id },
+            "Font" => font_dict, // <-- USE THE PASSED-IN DICTIONARY
         };
         internal_writer::write_indirect_object(&mut writer, resources_id.0, resources_id.1, &resources_dict.into(), &mut xref)?;
 
         // --- Initial (empty) Pages Object ---
-        // This will be overwritten at the end with the complete list of pages.
         let pages_dict = dictionary! {
             "Type" => "Pages",
             "Kids" => vec![],

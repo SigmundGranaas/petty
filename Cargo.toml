@@ -31,6 +31,7 @@ tokio = { version = "1.44.2", features = ["macros", "rt", "sync", "rt-multi-thre
 async-channel = "2.2.0"
 itoa = "1.0.15"
 itertools = "0.10.5"
+once_cell = "1.21.3"
 
 [dev-dependencies]
 dhat = { version = "0.3"}

@@ -102,8 +102,7 @@ impl LayoutEngine {
     }
 
     pub fn measure_text_width(&self, text: &str, style: &Arc<ComputedStyle>) -> f32 {
-        self.font_manager
-            .measure_text(text, &style.font_family, style.font_size)
+        self.font_manager.measure_text(text, style)
     }
 }
 

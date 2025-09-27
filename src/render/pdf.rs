@@ -15,8 +15,9 @@ use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
 use crate::core::idf::SharedData;
-use crate::core::layout::{LayoutEngine, PositionedElement};
+use crate::core::layout::{ComputedStyle, LayoutEngine, PositionedElement};
 use crate::core::style::dimension::PageSize;
+use crate::core::style::font::FontWeight;
 use crate::core::style::stylesheet::{PageLayout, Stylesheet};
 use crate::core::style::text::TextAlign;
 
@@ -335,6 +336,15 @@ pub(crate) struct RenderContext<'a> {
     pub(crate) fonts: &'a HashMap<String, FontId>,
     pub(crate) default_font: &'a FontId,
     pub(crate) page_height_pt: f32,
+}
+
+pub(crate) fn get_styled_font_name(style: &Arc<ComputedStyle>) -> String {
+    let family = &style.font_family;
+    match style.font_weight {
+        FontWeight::Bold | FontWeight::Black => format!("{}-Bold", family),
+        // This can be expanded to handle other styles like Italic if you add the fonts
+        _ => family.to_string(),
+    }
 }
 
 /// Renders a vector of `PositionedElement`s into a vector of PDF `Op`s.

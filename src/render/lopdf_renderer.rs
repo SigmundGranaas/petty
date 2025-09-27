@@ -2,10 +2,12 @@ use super::renderer::DocumentRenderer;
 use super::streaming_writer::internal_writer::write_object;
 use super::streaming_writer::StreamingPdfWriter;
 
+use crate::core::style::font::FontWeight;
 use crate::render::RenderError;
 use handlebars::Handlebars;
 use lopdf::content::{Content, Operation};
-use lopdf::{dictionary, Object, ObjectId, Stream};
+use lopdf::{dictionary, Dictionary, Object, ObjectId, Stream};
+use once_cell::sync::Lazy;
 use serde::Serialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -18,6 +20,9 @@ use crate::core::style::dimension::PageSize;
 use crate::core::style::stylesheet::{PageLayout, Stylesheet};
 use crate::core::style::text::TextAlign;
 
+static DEFAULT_LOPDF_FONT_NAME: Lazy<String> = Lazy::new(|| "F1".to_string());
+
+
 /// A streaming PDF renderer using the `lopdf` library.
 /// It writes the document's objects to the output stream as they are generated,
 /// minimizing peak memory usage.
@@ -25,15 +30,35 @@ pub struct LopdfDocumentRenderer<W: Write + Send> {
     pub writer: Option<StreamingPdfWriter<W>>,
     pub stylesheet: Arc<Stylesheet>,
     pub layout_engine: LayoutEngine,
+    // NEW: Map from descriptive name ("Helvetica-Bold") to internal PDF name ("F2")
+    font_map: HashMap<String, String>,
+}
+
+/// Generates the specific font family name based on style (e.g., "Helvetica-Bold").
+/// This logic MUST mirror the logic in `FontManager`.
+fn get_styled_font_name(style: &Arc<ComputedStyle>) -> String {
+    let family = &style.font_family;
+    match style.font_weight {
+        FontWeight::Bold | FontWeight::Black => format!("{}-Bold", family),
+        _ => family.to_string(),
+    }
 }
 
 impl<W: Write + Send> LopdfDocumentRenderer<W> {
     pub fn new(layout_engine: LayoutEngine) -> Result<Self, RenderError> {
         let stylesheet = Arc::new(layout_engine.stylesheet.clone());
+        let mut font_map = HashMap::new();
+
+        // Build the map of descriptive font names to internal PDF font names (F1, F2, etc.)
+        for (i, family_name) in layout_engine.font_manager.font_data.keys().enumerate() {
+            font_map.insert(family_name.clone(), format!("F{}", i + 1));
+        }
+
         Ok(Self {
             writer: None,
             stylesheet,
             layout_engine,
+            font_map,
         })
     }
 
@@ -49,7 +74,24 @@ impl<W: Write + Send> LopdfDocumentRenderer<W> {
 
 impl<W: Write + Send> DocumentRenderer<W> for LopdfDocumentRenderer<W> {
     fn begin_document(&mut self, writer: W) -> Result<(), RenderError> {
-        self.writer = Some(StreamingPdfWriter::new(writer, "1.7")?);
+        // Build the font dictionary for the PDF Resources object
+        let mut font_dict = Dictionary::new();
+        for (family_name, _font_data) in self.layout_engine.font_manager.font_data.iter() {
+            if let Some(internal_name) = self.font_map.get(family_name) {
+                // For simplicity, we'll assume all are Type1 Helvetica for now.
+                // A full implementation would parse the TTF to get the correct subtype.
+                let single_font_dict = dictionary! {
+                    "Type" => "Font",
+                    "Subtype" => "Type1",
+                    "BaseFont" => family_name.clone(),
+                };
+                // NOTE: A full implementation would require embedding the font program stream.
+                // This will work for standard fonts like Helvetica.
+                font_dict.set(internal_name.as_bytes(), Object::Dictionary(single_font_dict));
+            }
+        }
+
+        self.writer = Some(StreamingPdfWriter::new(writer, "1.7", font_dict)?);
         Ok(())
     }
 
@@ -71,7 +113,7 @@ impl<W: Write + Send> DocumentRenderer<W> for LopdfDocumentRenderer<W> {
         let page_layout = self.stylesheet.page.clone();
         let (page_width, page_height) = Self::get_page_dimensions_pt(&page_layout);
 
-        let mut page_ctx = PageContext::new(&self.layout_engine, page_height);
+        let mut page_ctx = PageContext::new(&self.layout_engine, page_height, &self.font_map);
 
         for element in elements {
             page_ctx.draw_element(&element)?;
@@ -134,9 +176,12 @@ pub fn render_lopdf_page_to_bytes(
 
     // Create a temporary PageContext to generate the content stream.
     // The writer is a dummy, as we only need the generated operations.
+    // In a full implementation, we would need to create a font map here too.
+    let font_map = HashMap::new(); // Dummy for now.
     let mut page_ctx = PageContext::new(
         layout_engine, // We only need the layout engine for footer text measurement
         page_height,
+        &font_map,
     );
 
     // Render main elements
@@ -194,23 +239,25 @@ struct PageContext<'a> {
     layout_engine: &'a LayoutEngine,
     page_height: f32,
     content: Content,
-    state: PageRenderState,
+    state: LopdfPageRenderState,
+    font_map: &'a HashMap<String, String>,
 }
 
 #[derive(Default, Clone)]
-struct PageRenderState {
+struct LopdfPageRenderState {
     font_name: String,
     font_size: f32,
     fill_color: Color,
 }
 
 impl<'a> PageContext<'a> {
-    fn new(layout_engine: &'a LayoutEngine, page_height: f32) -> Self {
+    fn new(layout_engine: &'a LayoutEngine, page_height: f32, font_map: &'a HashMap<String, String>) -> Self {
         Self {
             layout_engine,
             page_height,
             content: Content { operations: vec![] },
-            state: PageRenderState::default(),
+            state: LopdfPageRenderState::default(),
+            font_map,
         }
     }
 
@@ -273,13 +320,28 @@ impl<'a> PageContext<'a> {
     }
 
     fn set_font(&mut self, style: &Arc<ComputedStyle>) {
-        let font_name = "F1";
-        if self.state.font_name != font_name || self.state.font_size != style.font_size {
+        let styled_font_name = get_styled_font_name(style);
+        let internal_font_name = match self.font_map.get(&styled_font_name) {
+            Some(name) => name,
+            None => {
+                // Fallback logic
+                if styled_font_name != style.font_family.as_str() {
+                    log::warn!(
+                        "Lopdf: Font style '{}' not found, falling back to base '{}'",
+                        styled_font_name, style.font_family
+                    );
+                }
+                // --- FIX: Borrow the static string ---
+                self.font_map.get(style.font_family.as_str()).unwrap_or(&DEFAULT_LOPDF_FONT_NAME)
+            }
+        };
+
+        if self.state.font_name != *internal_font_name || self.state.font_size != style.font_size {
             self.content.operations.push(Operation::new(
                 "Tf",
-                vec![font_name.into(), style.font_size.into()],
+                vec![Object::Name(internal_font_name.as_bytes().to_vec()), style.font_size.into()],
             ));
-            self.state.font_name = font_name.to_string();
+            self.state.font_name = internal_font_name.to_string();
             self.state.font_size = style.font_size;
         }
     }

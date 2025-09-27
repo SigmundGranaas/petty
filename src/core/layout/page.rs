@@ -6,6 +6,7 @@ use super::elements::PositionedElement;
 use super::flex;
 use super::image;
 use super::style;
+use super::subtree;
 use super::table;
 use super::text;
 use super::{IRNode, LayoutEngine, WorkItem};
@@ -25,19 +26,26 @@ pub struct PageIterator<'a> {
     margins: &'a Margins,
     is_finished: bool,
     flex_stack: Vec<FlexContext>,
+    block_stack: Vec<BlockContext>,
 }
 
 /// State for an active flex container being laid out.
 #[derive(Clone)]
 struct FlexContext {
-    /// The pre-calculated widths of all children in this container.
     child_widths: Vec<f32>,
-    /// The final calculated heights of children that have been laid out.
     child_heights: Vec<f32>,
-    /// The index of the *next* child to be processed.
     next_child_index: usize,
-    /// The Y coordinate where the flex container's content box starts.
     start_y: f32,
+}
+
+#[derive(Clone)]
+struct BlockContext {
+    /// The absolute horizontal starting position for content in this block.
+    x_offset: f32,
+    /// The available width for content inside this block.
+    content_width: f32,
+    /// The style of the node that created this context, needed for popping.
+    style: Arc<style::ComputedStyle>,
 }
 
 impl<'a> PageIterator<'a> {
@@ -58,6 +66,12 @@ impl<'a> PageIterator<'a> {
             );
         }
 
+        let root_context = BlockContext {
+            x_offset: margins.left,
+            content_width: page_width - margins.left - margins.right,
+            style: default_style.clone(),
+        };
+
         Self {
             engine,
             work_stack,
@@ -68,15 +82,8 @@ impl<'a> PageIterator<'a> {
             margins,
             is_finished: false,
             flex_stack: Vec::new(),
+            block_stack: vec![root_context],
         }
-    }
-
-    fn content_width(&self) -> f32 {
-        self.page_width - self.margins.left - self.margins.right
-    }
-
-    fn content_left(&self) -> f32 {
-        self.margins.left
     }
 
     fn layout_node(
@@ -101,7 +108,6 @@ impl<'a> PageIterator<'a> {
         };
         let child_content_width = node_own_width - style.padding.left - style.padding.right;
 
-        // Add diagnostic warning for squished content.
         if child_content_width <= 1.0 && !matches!(node, IRNode::Image { .. }) {
             log::warn!(
                 "Node content width is near-zero or negative ({:.2}pt) due to padding/width constraints. Content may be invisible. Node type: {:?}",
@@ -122,19 +128,36 @@ impl<'a> PageIterator<'a> {
                     inner_available_height,
                 )
             }
-            // A container node pushes its children onto the stack and does not produce
-            // elements directly. It consumes its top margin/padding here, and the
-            // EndNode marker will consume the bottom margin/padding.
             IRNode::Block { children, .. }
             | IRNode::List { children, .. }
             | IRNode::ListItem { children, .. } => {
-                let (els, _, _) = block::layout_block(&mut self.work_stack, children, style);
+                let parent_ctx = self.block_stack.last().unwrap();
+                let new_x_offset = parent_ctx.x_offset + style.margin.left + style.padding.left;
+
+                let new_content_width = style.width.as_ref().map_or_else(
+                    || parent_ctx.content_width - style.margin.left - style.margin.right,
+                    |dim| match dim {
+                        Dimension::Pt(w) => *w,
+                        Dimension::Percent(p) => parent_ctx.content_width * (p / 100.0),
+                        _ => parent_ctx.content_width - style.margin.left - style.margin.right,
+                    },
+                );
+
+                self.block_stack.push(BlockContext {
+                    x_offset: new_x_offset,
+                    content_width: new_content_width - style.padding.left - style.padding.right,
+                    style: style.clone(),
+                });
+
+                self.work_stack.push((WorkItem::EndNode(style.clone()), style.clone()));
+                for child in children.iter().rev() {
+                    self.work_stack.push((WorkItem::Node(child.clone()), style.clone()));
+                }
+
                 let consumed_height = style.margin.top + style.padding.top;
-                return (els, consumed_height, None);
+                return (vec![], consumed_height, None);
             }
             IRNode::FlexContainer { children, .. } => {
-                // This is a container. Like Block, it pushes work to the stack
-                // and consumes its top margin/padding. It doesn't produce elements directly.
                 flex::layout_flex_container(
                     &mut self.work_stack,
                     children,
@@ -142,8 +165,6 @@ impl<'a> PageIterator<'a> {
                     self.engine,
                     child_content_width,
                 );
-                // Return early, consuming only top margin and padding for now.
-                // The EndFlex/EndNode markers will handle the rest.
                 let consumed_height = style.margin.top + style.padding.top;
                 return (vec![], consumed_height, None);
             }
@@ -151,7 +172,7 @@ impl<'a> PageIterator<'a> {
             IRNode::Table { .. } => {
                 table::layout_table_node(self.engine, node, style, inner_available_height)
             }
-            IRNode::Root(_) => (vec![], 0.0, None), // Root is handled by the iterator constructor
+            IRNode::Root(_) => (vec![], 0.0, None),
         };
 
         if let Some(h) = style.height {
@@ -167,7 +188,6 @@ impl<'a> PageIterator<'a> {
         let total_node_height = margin_top + height_with_padding + style.margin.bottom;
 
         if pending_content.is_none() {
-            // For atomic nodes (not paginated), check if they fit.
             if total_node_height > available_height {
                 let fresh_page_content_height =
                     self.page_height - self.margins.top - self.content_bottom;
@@ -223,69 +243,91 @@ impl<'a> Iterator for PageIterator<'a> {
 
             let (elements, consumed_height, pending_work) = match work_item {
                 WorkItem::Node(mut node) => {
-                    let style = self
-                        .engine
-                        .compute_style(node.style_sets(), node.style_override(), &parent_style);
+                    let style =
+                        self.engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
 
-                    // A node that pushes its own end marker (like containers) doesn't need one added after.
-                    let pushes_own_end_node = matches!(
-                        node,
-                        IRNode::FlexContainer { .. }
-                            | IRNode::Block { .. }
-                            | IRNode::List { .. }
-                            | IRNode::ListItem { .. }
-                    );
+                    if self.flex_stack.last().is_some() {
+                        let flex_ctx = self.flex_stack.pop().unwrap();
+                        let child_idx = flex_ctx.next_child_index;
+                        let child_width = flex_ctx.child_widths.get(child_idx).cloned().unwrap_or(0.0);
+                        let child_start_x = self.block_stack.last().unwrap().x_offset
+                            + flex_ctx.child_widths.iter().take(child_idx).sum::<f32>();
 
-                    let (x_offset, available_width) =
-                        if let Some(flex_ctx) = self.flex_stack.last() {
-                            let child_idx = flex_ctx.next_child_index;
-                            let child_width =
-                                flex_ctx.child_widths.get(child_idx).cloned().unwrap_or(0.0);
-                            let child_start_x = self.content_left()
-                                + flex_ctx.child_widths.iter().take(child_idx).sum::<f32>();
-                            (child_start_x, child_width)
+                        let item_height = subtree::measure_subtree_height(self.engine, &mut node, &style, child_width);
+                        self.flex_stack.push(flex_ctx);
+
+                        if item_height > remaining_height && !page_elements.is_empty() {
+                            self.work_stack.push((WorkItem::Node(node), parent_style));
+                            return Some(page_elements);
+                        }
+
+                        let fresh_page_content_height = self.page_height - self.margins.top - self.content_bottom;
+                        if item_height > fresh_page_content_height {
+                            log::error!( "Flex item is taller ({:.2}pt) than available page height ({:.2}pt) and will be skipped.", item_height, fresh_page_content_height);
+                            if let Some(ctx) = self.flex_stack.last_mut() {
+                                ctx.child_heights.push(0.0);
+                                ctx.next_child_index += 1;
+                            }
+                            (vec![], 0.0, None)
+                        } else if item_height > remaining_height {
+                            self.work_stack.push((WorkItem::Node(node), parent_style));
+                            return Some(page_elements);
                         } else {
-                            (self.content_left(), self.content_width())
+                            let (mut els, actual_height) = subtree::layout_subtree(self.engine, &mut node, &style, child_width);
+                            if let Some(ctx) = self.flex_stack.last_mut() {
+                                for el in &mut els {
+                                    el.x += child_start_x;
+                                    el.y += ctx.start_y;
+                                }
+                                ctx.child_heights.push(actual_height);
+                                ctx.next_child_index += 1;
+                            }
+                            (els, 0.0, None)
+                        }
+                    } else {
+                        // FIX: Distinguish between container nodes and atomic nodes.
+                        let is_container_node = matches!(
+                            node,
+                            IRNode::Block { .. } | IRNode::List { .. } | IRNode::ListItem { .. }
+                        );
+
+                        let (current_content_width, current_x_offset) = {
+                            let ctx = self.block_stack.last().unwrap();
+                            (ctx.content_width, ctx.x_offset)
                         };
 
-                    let (mut els, consumed, pending) = self.layout_node(
-                        &mut node,
-                        &style,
-                        available_width,
-                        remaining_height,
-                    );
+                        let (mut els, consumed, pending) =
+                            self.layout_node(&mut node, &style, current_content_width, remaining_height);
 
-                    // If the node was atomic (no pending work) and doesn't manage its own end marker,
-                    // we need to push one to account for its bottom margin.
-                    if pending.is_none() && !pushes_own_end_node {
-                        self.work_stack
-                            .push((WorkItem::EndNode(style.clone()), parent_style.clone()));
-                    }
-
-                    if let Some(flex_ctx) = self.flex_stack.last_mut() {
-                        // All direct children of a flex container are flex items.
-                        flex_ctx.child_heights.push(consumed);
-                        flex_ctx.next_child_index += 1;
-                        // Position elements relative to the flex container's start.
-                        for el in &mut els {
-                            el.x += x_offset;
-                            el.y += flex_ctx.start_y;
+                        // Only push an EndNode for atomic nodes that don't manage their own context.
+                        if pending.is_none() && !is_container_node {
+                            self.work_stack.push((WorkItem::EndNode(style.clone()), parent_style.clone()));
                         }
-                        (els, 0.0, pending) // Height is handled by EndFlex
-                    } else {
-                        // Position elements relative to the current page flow.
+
                         for el in &mut els {
-                            el.x += x_offset;
+                            el.x += current_x_offset;
                             el.y += self.current_y;
                         }
                         (els, consumed, pending)
                     }
                 }
                 WorkItem::EndNode(style) => {
-                    // This now handles bottom margin AND padding for containers. For atomic nodes,
-                    // their padding was already included, so this just adds their bottom margin.
-                    let bottom_space = style.margin.bottom + style.padding.bottom;
-                    (vec![], bottom_space, None)
+                    // This `EndNode` could be from a container OR an atomic node.
+                    // Only pop the block_stack if the style of the context matches
+                    // the style of the EndNode marker.
+                    if let Some(ctx) = self.block_stack.last() {
+                        if Arc::ptr_eq(&ctx.style, &style) {
+                            let ended_ctx = self.block_stack.pop().unwrap();
+                            let bottom_space = ended_ctx.style.margin.bottom + ended_ctx.style.padding.bottom;
+                            (vec![], bottom_space, None)
+                        } else {
+                            // This EndNode is for an atomic node. Just add its bottom margin.
+                            (vec![], style.margin.bottom, None)
+                        }
+                    } else {
+                        // Should not be reached, but as a fallback, just use margin.
+                        (vec![], style.margin.bottom, None)
+                    }
                 }
                 WorkItem::StartFlex(widths) => {
                     self.flex_stack.push(FlexContext {
@@ -310,7 +352,6 @@ impl<'a> Iterator for PageIterator<'a> {
             if let Some(pending) = pending_work {
                 self.work_stack.push((pending, parent_style));
                 page_elements.extend(elements);
-                // The page is full, return it.
                 return Some(page_elements);
             }
 

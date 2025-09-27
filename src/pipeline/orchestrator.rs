@@ -1,3 +1,4 @@
+// FILE: /home/sigmund/RustroverProjects/petty/src/pipeline/orchestrator.rs
 use super::config::{PdfBackend, Template};
 use super::worker::{finish_layout_and_resource_loading, LaidOutSequence};
 use crate::error::PipelineError;
@@ -37,6 +38,7 @@ pub struct DocumentPipeline {
     template: Template,
     pdf_backend: PdfBackend,
     font_manager: Arc<FontManager>,
+    debug: bool,
 }
 
 fn format_currency_helper(
@@ -58,6 +60,7 @@ impl DocumentPipeline {
         template: Template,
         pdf_backend: PdfBackend,
         font_manager: Arc<FontManager>,
+        debug: bool,
     ) -> Self {
         let mut template_engine = Handlebars::new();
         template_engine.set_strict_mode(false);
@@ -71,6 +74,7 @@ impl DocumentPipeline {
             template,
             pdf_backend,
             font_manager,
+            debug,
         }
     }
 
@@ -123,6 +127,7 @@ impl DocumentPipeline {
             let layout_engine_clone = layout_engine.clone();
             let template_engine_clone = Arc::clone(&shared_template_engine);
             let template_clone = self.template.clone();
+            let debug_mode = self.debug;
 
             let worker_handle = task::spawn_blocking(move || {
                 info!("[WORKER-{}] Started.", worker_id);
@@ -161,6 +166,7 @@ impl DocumentPipeline {
                                     context_arc.clone(),
                                     base_path,
                                     &layout_engine_clone,
+                                    debug_mode,
                                 )
                             });
                             (index, layout_result)

@@ -1,5 +1,5 @@
 // FILE: examples/cv.rs
-use petty::{PipelineBuilder, PipelineError};
+use petty::{PdfBackend, PipelineBuilder, PipelineError};
 use serde_json::{from_str, Value};
 use std::env;
 use std::fs;
@@ -22,6 +22,8 @@ fn main() -> Result<(), PipelineError> {
     // Build the pipeline from the XSLT template file.
     let pipeline = PipelineBuilder::new()
         .with_xslt_template_file(template_path)?
+        .with_pdf_backend(PdfBackend::Lopdf)
+        .with_debug(true)
         .build()?;
     println!("✓ Pipeline built with XSLT engine.");
 

@@ -25,9 +25,21 @@ pub(super) fn finish_layout_and_resource_loading(
     context_arc: Arc<Value>,
     resource_base_path: &Path,
     layout_engine: &LayoutEngine,
+    debug_mode: bool,
 ) -> Result<LaidOutSequence, PipelineError> {
     let total_start = Instant::now();
     let tree = IRNode::Root(ir_nodes);
+
+    if debug_mode {
+        // When debug mode is enabled, dump the full IR tree to the debug logs.
+        // This allows developers to inspect the exact structure the layout engine
+        // will be operating on.
+        log::debug!(
+            "[WORKER-{}] Intermediate Representation (IR) tree dump:\n{:#?}",
+            worker_id,
+            &tree
+        );
+    }
 
     let resource_start = Instant::now();
     debug!(

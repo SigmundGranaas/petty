@@ -25,6 +25,28 @@ pub struct ComputedStyle {
     pub border_bottom: Option<Border>,
 }
 
+impl Default for ComputedStyle {
+    fn default() -> Self {
+        Self {
+            font_family: Arc::new("Helvetica".to_string()),
+            font_size: 12.0,
+            font_weight: FontWeight::Regular,
+            font_style: FontStyle::Normal,
+            line_height: 14.4, // 12.0 * 1.2
+            text_align: TextAlign::Left,
+            color: Color { r: 0, g: 0, b: 0, a: 1.0 },
+            margin: Margins::default(),
+            padding: Margins::default(),
+            width: None,
+            height: None,
+            background_color: None,
+            border: None,
+            border_bottom: None,
+        }
+    }
+}
+
+
 /// Computes the style for a node by inheriting from its parent, applying any named
 /// style from the stylesheet, and finally applying any inline style overrides.
 pub fn compute_style(
@@ -60,27 +82,7 @@ pub fn compute_style(
 
 /// Returns the default style for the document root.
 pub fn get_default_style() -> Arc<ComputedStyle> {
-    Arc::new(ComputedStyle {
-        font_family: Arc::new("Helvetica".to_string()),
-        font_size: 12.0,
-        font_weight: FontWeight::Regular,
-        font_style: FontStyle::Normal,
-        line_height: 14.4, // 12.0 * 1.2
-        text_align: TextAlign::Left,
-        color: Color {
-            r: 0,
-            g: 0,
-            b: 0,
-            a: 1.0,
-        },
-        margin: Margins::default(),
-        padding: Margins::default(),
-        width: None,
-        height: None,
-        background_color: None,
-        border: None,
-        border_bottom: None,
-    })
+    Arc::new(ComputedStyle::default())
 }
 
 /// Returns the page dimensions in points based on the stylesheet.
@@ -147,8 +149,8 @@ fn apply_element_style(computed: &mut ComputedStyle, style_def: &ElementStyle) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Color;
-    use crate::stylesheet::ElementStyle;
+    use crate::core::style::color::Color;
+    use crate::core::style::stylesheet::ElementStyle;
 
     #[test]
     fn test_default_style() {
