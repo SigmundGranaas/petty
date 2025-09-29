@@ -1,14 +1,12 @@
-// FILE: src/layout/engine.rs
-// src/layout/engine.rs
-
 use super::fonts::FontManager;
-use super::PageIterator;
+use super::page::PageIterator;
 use super::style::{self, ComputedStyle};
 use super::table;
-use super::{IRNode, PipelineError};
-use std::sync::Arc;
+use super::{block, flex, image, text, IRNode, LayoutBox, PipelineError};
 use crate::core::idf::LayoutUnit;
+use crate::core::style::dimension::Dimension;
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
+use std::sync::Arc;
 
 /// The main layout engine. It is responsible for orchestrating the multi-pass
 /// layout algorithm on a single `IRNode` tree.
@@ -28,15 +26,29 @@ impl LayoutEngine {
     }
 
     /// The main entry point into the layout process for a single `sequence`.
-    /// It performs the measurement pass and returns a stateful `PageIterator`
-    /// that will perform the positioning pass lazily.
+    /// It performs all layout passes and returns a stateful `PageIterator`
+    /// that will paginate the final geometry tree.
     pub fn paginate_tree<'a>(
         &'a self,
         mut layout_unit: LayoutUnit,
     ) -> Result<PageIterator<'a>, PipelineError> {
-        // The measurement pass is a prerequisite for layout.
+        // Pass 1: Measurement & Annotation (e.g., table columns)
         self.measurement_pass(&mut layout_unit.tree)?;
-        Ok(PageIterator::new(layout_unit, self))
+
+        // Pass 2: Build Geometry Tree (Sizing and Relative Positioning)
+        let (page_width, page_height) = style::get_page_dimensions(&self.stylesheet);
+        let margins = &self.stylesheet.page.margins;
+        let available_width = page_width - margins.left - margins.right;
+        let available_height = page_height - margins.top - margins.bottom;
+
+        let layout_tree = self.build_layout_tree(
+            &mut layout_unit.tree,
+            self.get_default_style(),
+            (available_width, available_height),
+        );
+
+        // Pass 3: Pagination
+        Ok(PageIterator::new(layout_tree, self))
     }
 
     /// **Pass 1: Measurement & Annotation**
@@ -86,6 +98,74 @@ impl LayoutEngine {
             _ => {} // Other nodes don't need pre-measurement in this version.
         }
         Ok(())
+    }
+
+    /// **Pass 2: Build LayoutBox Tree (Sizing & Relative Positioning)**
+    /// This is a recursive, top-down pass that consumes the `IRNode` tree and produces
+    /// a geometry-aware `LayoutBox` tree where every element has a computed size and
+    /// a position relative to its parent.
+    pub(crate) fn build_layout_tree(
+        &self,
+        node: &mut IRNode,
+        parent_style: Arc<ComputedStyle>,
+        available_size: (f32, f32),
+    ) -> LayoutBox {
+        let style = self.compute_style(node.style_sets(), node.style_override(), &parent_style);
+
+        // Resolve this node's own width based on available space.
+        let width = match &style.width {
+            Some(Dimension::Pt(w)) => *w,
+            Some(Dimension::Percent(p)) => available_size.0 * (p / 100.0),
+            // `Auto` or `None` means the width is determined by the container (block) or content (flex/inline).
+            // For block, it fills available space. For others, it's determined by the specific layout logic.
+            _ => available_size.0,
+        };
+
+        // Note: Height resolution must happen *after* children are laid out for `auto` height.
+        // We pass the parent's available height down for percentage calculations.
+        let child_available_width = width - style.padding.left - style.padding.right;
+        let child_available_height = available_size.1 - style.padding.top - style.padding.bottom;
+        let child_available_size = (child_available_width, child_available_height);
+
+        // Dispatch to the appropriate layout function to get the box's CONTENT and CONTENT_HEIGHT.
+        let mut layout_box = match node {
+            IRNode::Root(..) | IRNode::Block { .. } | IRNode::List { .. } => {
+                block::layout_block(self, node, style.clone(), child_available_size)
+            }
+            IRNode::ListItem { .. } => {
+                block::layout_list_item(self, node, style.clone(), child_available_size)
+            }
+            IRNode::Paragraph { .. } => {
+                text::layout_paragraph(self, node, style.clone(), child_available_size)
+            }
+            IRNode::Image { .. } => image::layout_image(node, style.clone(), child_available_size),
+            IRNode::FlexContainer { .. } => {
+                flex::layout_flex_container(self, node, style.clone(), child_available_size)
+            }
+            IRNode::Table { .. } => table::layout_table(self, node, style.clone(), child_available_size),
+        };
+
+        // The height of the content area.
+        let content_height = layout_box.rect.height;
+
+        // Finalize height calculation based on the style.
+        let final_height = match &style.height {
+            Some(Dimension::Pt(h)) => content_height.max(*h),
+            Some(Dimension::Percent(p)) => available_size.1 * (p / 100.0),
+            _ => content_height, // Auto height
+        };
+
+        // The final box for this node has its own position (margins) and size (including padding and margins).
+        layout_box.rect.x = style.margin.left;
+        layout_box.rect.y = style.margin.top;
+        layout_box.rect.width = width;
+        layout_box.rect.height = final_height
+            + style.padding.top
+            + style.padding.bottom
+            + style.margin.top
+            + style.margin.bottom;
+
+        layout_box
     }
 
     pub fn compute_style(
@@ -140,8 +220,9 @@ mod tests {
 
         assert!(!page1.is_empty(), "Page should have elements");
         let text_element = &page1[0];
-        // Default page top margin is now 10 (from PageLayout::default()).
-        // Element's own margin/padding is 0.0 (from ComputedStyle::default()).
+        // Default page top margin is 10.
+        // Root block has 0 margin/padding.
+        // Paragraph has 0 margin/padding.
         // So, the text should start at y=10.0.
         assert_eq!(text_element.y, 10.0);
         // Default top margin is 10

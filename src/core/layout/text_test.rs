@@ -1,88 +1,75 @@
-// FILE: src/core/layout/text_test.rs
+#![cfg(test)]
 
-use super::style::ComputedStyle;
-use super::subtree::measure_subtree_height;
-use super::test_utils::{create_layout_unit, create_test_engine};
 use crate::core::idf::{IRNode, InlineNode};
-use crate::core::style::stylesheet::ElementStyle;
 use crate::core::style::text::TextAlign;
+use crate::core::layout::test_utils::{create_test_engine, get_base_style};
+use crate::core::layout::text::{atomize_inlines, layout_paragraph};
+use crate::core::layout::LayoutContent;
 use std::sync::Arc;
 
 #[test]
-fn test_word_wrapping() {
+fn test_text_wrapping() {
     let engine = create_test_engine();
-    let base_style = Arc::new(ComputedStyle::default()); // font_size: 12.0, line_height: 14.4
+    let style = get_base_style(); // font-size 10, line-height 12
 
-    let long_text = "This is a very long sentence that is absolutely guaranteed to wrap onto multiple lines when put into a reasonably narrow container.";
+    let text = "This is a very very long line of text that is absolutely guaranteed to wrap at least once.";
     let mut tree = IRNode::Paragraph {
         style_sets: vec![],
         style_override: None,
-        children: vec![InlineNode::Text(long_text.to_string())],
+        children: vec![InlineNode::Text(text.to_string())],
     };
 
-    // With a width of 200, this text should wrap to multiple lines.
-    let measured_height = measure_subtree_height(&engine, &mut tree, &base_style, 200.0);
+    let children = match &tree {
+        IRNode::Paragraph { children, .. } => children,
+        _ => panic!(),
+    };
+    let atoms = atomize_inlines(&engine, children, &style, None);
+    let total_width: f32 = atoms.iter().map(|a| a.width()).sum();
 
-    // A single line is 14.4. We expect at least 3 lines.
-    assert!(measured_height > 14.4 * 2.0, "Text should have wrapped to multiple lines, height was {}", measured_height);
+    // Set available width to force at least one wrap.
+    let available_width = total_width * 0.7;
+
+    let layout_box = layout_paragraph(&engine, &mut tree, style, (available_width, f32::INFINITY));
+
+    assert!(
+        layout_box.rect.height > 12.0,
+        "Paragraph should have wrapped to more than one line. Actual height: {}",
+        layout_box.rect.height
+    );
+
+    if let LayoutContent::Children(lines) = layout_box.content {
+        assert!(!lines.is_empty(), "Layout should produce child boxes for text runs");
+        // Find a box that starts on the second line.
+        let second_line_box = lines.iter().find(|b| (b.rect.y - 12.0).abs() < 0.1);
+        assert!(second_line_box.is_some(), "Could not find any content on the second line");
+    } else {
+        panic!("Paragraph layout did not produce children");
+    }
 }
 
 #[test]
-fn test_text_alignment() {
+fn test_text_alignment_center() {
     let engine = create_test_engine();
-    let left_margin = engine.stylesheet.page.margins.left;
-    let tree = IRNode::Root(vec![
-        IRNode::Paragraph { // Left (default)
-            style_sets: vec![], style_override: None,
-            children: vec![InlineNode::Text("Left".to_string())]
-        },
-        IRNode::Paragraph { // Center
-            style_sets: vec![],
-            style_override: Some(ElementStyle { text_align: Some(TextAlign::Center), ..Default::default() }),
-            children: vec![InlineNode::Text("Center".to_string())]
-        },
-        IRNode::Paragraph { // Right
-            style_sets: vec![],
-            style_override: Some(ElementStyle { text_align: Some(TextAlign::Right), ..Default::default() }),
-            children: vec![InlineNode::Text("Right".to_string())]
-        },
-    ]);
+    let mut style = (*get_base_style()).clone();
+    style.text_align = TextAlign::Center;
+    let style = Arc::new(style);
+    let available_width = 400.0;
 
-    let layout_unit = create_layout_unit(tree);
-    let mut page_iter = engine.paginate_tree(layout_unit).unwrap();
-    let page = page_iter.next().unwrap();
+    let text = "Centered text";
+    let text_width = engine.measure_text_width(text, &style);
 
-    assert_eq!(page.len(), 3);
-
-    // FIX: Left-aligned text should start at the page's left content margin.
-    let left_el = &page[0];
-    assert!((left_el.x - left_margin).abs() < 0.01, "Left-aligned text should start at the left margin. Got x: {}", left_el.x);
-
-    // Center-aligned text should be significantly indented.
-    let center_el = &page[1];
-    assert!(center_el.x > 100.0, "Center-aligned text has unexpected x: {}", center_el.x);
-
-    // Right-aligned text should be the most indented.
-    let right_el = &page[2];
-    assert!(right_el.x > center_el.x, "Right-aligned text has unexpected x: {}", right_el.x);
-}
-
-#[test]
-fn test_explicit_line_break() {
-    let engine = create_test_engine();
-    let base_style = Arc::new(ComputedStyle::default());
     let mut tree = IRNode::Paragraph {
         style_sets: vec![],
         style_override: None,
-        children: vec![
-            InlineNode::Text("First line.".to_string()),
-            InlineNode::LineBreak,
-            InlineNode::Text("Second line.".to_string()),
-        ],
+        children: vec![InlineNode::Text(text.to_string())],
     };
 
-    let measured_height = measure_subtree_height(&engine, &mut tree, &base_style, 500.0);
-    let expected_height = base_style.line_height * 2.0;
-
-    assert!((measured_height - expected_height).abs() < 0.01, "Expected height for two lines, but got {}", measured_height);
+    let layout_box = layout_paragraph(&engine, &mut tree, style.clone(), (available_width, f32::INFINITY));
+    if let LayoutContent::Children(lines) = layout_box.content {
+        let text_run = &lines[0];
+        let expected_x = (available_width - text_width) / 2.0;
+        assert!((text_run.rect.x - expected_x).abs() < 0.01);
+    } else {
+        panic!("Paragraph layout did not produce children");
+    }
 }

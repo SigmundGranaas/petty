@@ -1,5 +1,13 @@
+use crate::core::style::border::Border;
+use crate::core::style::color::Color;
+use crate::core::style::dimension::{Dimension, Margins, PageSize};
+use crate::core::style::flex::{AlignItems, AlignSelf, FlexDirection, FlexWrap, JustifyContent};
+use crate::core::style::font::{FontStyle, FontWeight};
+use crate::core::style::text::TextAlign;
 use crate::parser::json::ast::StylesheetDef;
-use crate::parser::style::{parse_border, parse_color, parse_dimension, parse_length, parse_shorthand_margins};
+use crate::parser::style::{
+    parse_border, parse_color, parse_dimension, parse_length, parse_shorthand_margins,
+};
 use crate::parser::ParseError;
 use quick_xml::events::{attributes::Attributes, Event as XmlEvent};
 use quick_xml::Reader;
@@ -7,11 +15,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
-use crate::core::style::border::Border;
-use crate::core::style::color::Color;
-use crate::core::style::dimension::{Dimension, Margins, PageSize};
-use crate::core::style::font::{FontStyle, FontWeight};
-use crate::core::style::text::TextAlign;
 
 // Main struct representing all style and layout information.
 #[derive(Debug, Clone)]
@@ -115,6 +118,26 @@ pub struct ElementStyle {
     pub border_top: Option<Border>,
     #[serde(default)]
     pub border_bottom: Option<Border>,
+
+    // Flexbox container properties
+    #[serde(default)]
+    pub flex_direction: Option<FlexDirection>,
+    #[serde(default)]
+    pub flex_wrap: Option<FlexWrap>,
+    #[serde(default)]
+    pub justify_content: Option<JustifyContent>,
+    #[serde(default)]
+    pub align_items: Option<AlignItems>,
+
+    // Flexbox item properties
+    #[serde(default)]
+    pub flex_grow: Option<f32>,
+    #[serde(default)]
+    pub flex_shrink: Option<f32>,
+    #[serde(default)]
+    pub flex_basis: Option<Dimension>,
+    #[serde(default)]
+    pub align_self: Option<AlignSelf>,
 }
 
 impl fmt::Debug for ElementStyle {
@@ -135,6 +158,14 @@ impl fmt::Debug for ElementStyle {
         if let Some(v) = &self.border { dbg.field("border", v); }
         if let Some(v) = &self.border_top { dbg.field("border_top", v); }
         if let Some(v) = &self.border_bottom { dbg.field("border_bottom", v); }
+        if let Some(v) = &self.flex_direction { dbg.field("flex_direction", v); }
+        if let Some(v) = &self.flex_wrap { dbg.field("flex_wrap", v); }
+        if let Some(v) = &self.justify_content { dbg.field("justify_content", v); }
+        if let Some(v) = &self.align_items { dbg.field("align_items", v); }
+        if let Some(v) = &self.flex_grow { dbg.field("flex_grow", v); }
+        if let Some(v) = &self.flex_shrink { dbg.field("flex_shrink", v); }
+        if let Some(v) = &self.flex_basis { dbg.field("flex_basis", v); }
+        if let Some(v) = &self.align_self { dbg.field("align_self", v); }
         dbg.finish()
     }
 }
@@ -220,7 +251,7 @@ impl Stylesheet {
                     if let (Some(style), Some(attr_name)) = (current_style.as_mut(), current_attr_name.take()) {
                         let value = e.unescape()?.to_string();
                         parse_and_apply_style_attribute(style, &attr_name, &value)
-                            .map_err(|err| ParseError::TemplateParse(format!("Failed to parse style attribute '{}: {}': {}", attr_name, value, err)))?;
+                            .map_err(|err| ParseError::TemplateParse(format!("Failed to parse style attribute '{}: {}' in style '{}': {}", attr_name, value, current_style_name.as_deref().unwrap_or("unknown"), err)))?;
                     }
                 },
                 Ok(XmlEvent::End(e)) => match e.name().as_ref() {
@@ -299,35 +330,32 @@ fn parse_simple_page_master(attrs: Attributes) -> Result<PageLayout, ParseError>
     Ok(layout)
 }
 
+fn err_unknown(prop: &str, value: &str) -> ParseError {
+    ParseError::TemplateParse(format!("Unknown value for {}: {}", prop, value))
+}
+
 /// Helper to parse a single XSLT style attribute and apply it to an ElementStyle.
 fn parse_and_apply_style_attribute(style: &mut ElementStyle, name: &str, value: &str) -> Result<(), ParseError> {
     match name {
         "font-family" => style.font_family = Some(value.to_string()),
         "font-size" => style.font_size = Some(parse_length(value)?),
         "font-weight" => style.font_weight = Some(match value.to_lowercase().as_str() {
-            "bold" => FontWeight::Bold,
-            "normal" | "regular" => FontWeight::Regular,
-            "light" => FontWeight::Light,
-            "thin" => FontWeight::Thin,
-            "medium" => FontWeight::Medium,
-            "black" => FontWeight::Black,
-            _ => return Err(ParseError::TemplateParse(format!("Unknown font-weight: {}", value))),
+            "bold" => FontWeight::Bold, "normal" | "regular" => FontWeight::Regular,
+            "light" => FontWeight::Light, "thin" => FontWeight::Thin,
+            "medium" => FontWeight::Medium, "black" => FontWeight::Black,
+            _ => return Err(err_unknown(name, value)),
         }),
         "font-style" => style.font_style = Some(match value.to_lowercase().as_str() {
-            "normal" => FontStyle::Normal,
-            "italic" => FontStyle::Italic,
-            "oblique" => FontStyle::Oblique,
-            _ => return Err(ParseError::TemplateParse(format!("Unknown font-style: {}", value))),
+            "normal" => FontStyle::Normal, "italic" => FontStyle::Italic, "oblique" => FontStyle::Oblique,
+            _ => return Err(err_unknown(name, value)),
         }),
         "line-height" => style.line_height = Some(parse_length(value)?),
         "color" => style.color = Some(parse_color(value)?),
         "background-color" => style.background_color = Some(parse_color(value)?),
         "text-align" => style.text_align = Some(match value.to_lowercase().as_str() {
-            "left" => TextAlign::Left,
-            "right" => TextAlign::Right,
-            "center" => TextAlign::Center,
-            "justify" => TextAlign::Justify,
-            _ => return Err(ParseError::TemplateParse(format!("Unknown text-align: {}", value))),
+            "left" => TextAlign::Left, "right" => TextAlign::Right,
+            "center" => TextAlign::Center, "justify" => TextAlign::Justify,
+            _ => return Err(err_unknown(name, value)),
         }),
         "width" => style.width = Some(parse_dimension(value)?),
         "height" => style.height = Some(parse_dimension(value)?),
@@ -344,6 +372,27 @@ fn parse_and_apply_style_attribute(style: &mut ElementStyle, name: &str, value: 
         "border" => style.border = Some(parse_border(value)?),
         "border-top" => style.border_top = Some(parse_border(value)?),
         "border-bottom" => style.border_bottom = Some(parse_border(value)?),
+        "flex-direction" => style.flex_direction = Some(match value {
+            "row" => FlexDirection::Row, "row-reverse" => FlexDirection::RowReverse,
+            "column" => FlexDirection::Column, "column-reverse" => FlexDirection::ColumnReverse,
+            _ => return Err(err_unknown(name, value)),
+        }),
+        "flex-wrap" => style.flex_wrap = Some(match value {
+            "nowrap" => FlexWrap::NoWrap, "wrap" => FlexWrap::Wrap, "wrap-reverse" => FlexWrap::WrapReverse,
+            _ => return Err(err_unknown(name, value)),
+        }),
+        "justify-content" => style.justify_content = Some(match value {
+            "flex-start" => JustifyContent::FlexStart, "flex-end" => JustifyContent::FlexEnd,
+            "center" => JustifyContent::Center, "space-between" => JustifyContent::SpaceBetween,
+            "space-around" => JustifyContent::SpaceAround, "space-evenly" => JustifyContent::SpaceEvenly,
+            _ => return Err(err_unknown(name, value)),
+        }),
+        "align-items" => style.align_items = Some(match value {
+            "stretch" => AlignItems::Stretch, "flex-start" => AlignItems::FlexStart,
+            "flex-end" => AlignItems::FlexEnd, "center" => AlignItems::Center, "baseline" => AlignItems::Baseline,
+            _ => return Err(err_unknown(name, value)),
+        }),
+        "flex-grow" => style.flex_grow = value.parse().ok(),
         _ => log::warn!("Unsupported XSLT style attribute: '{}'", name),
     }
     Ok(())

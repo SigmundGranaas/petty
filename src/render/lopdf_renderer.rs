@@ -30,7 +30,6 @@ pub struct LopdfDocumentRenderer<W: Write + Send> {
     pub writer: Option<StreamingPdfWriter<W>>,
     pub stylesheet: Arc<Stylesheet>,
     pub layout_engine: LayoutEngine,
-    // NEW: Map from descriptive name ("Helvetica-Bold") to internal PDF name ("F2")
     font_map: HashMap<String, String>,
 }
 

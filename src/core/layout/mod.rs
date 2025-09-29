@@ -19,7 +19,7 @@ mod engine;
 mod fonts;
 mod page;
 pub mod style;
-mod subtree; // Only one declaration
+mod fragment;
 
 // Sub-modules for laying out specific element types.
 mod block;
@@ -36,21 +36,9 @@ pub use self::elements::{
     ImageElement, LayoutElement, PositionedElement, TextElement,
 };
 pub use self::fonts::FontManager;
+pub use self::fragment::{LayoutBox, LayoutContent, Rect};
 pub use self::style::ComputedStyle;
-use std::sync::Arc;
 use crate::core::idf::IRNode;
-
-/// A work item for the layout stack in the positioning pass.
-/// It represents either a node to be laid out or a marker to end a node's context
-/// (e.g., to apply bottom margin).
-#[derive(Clone)]
-pub(crate) enum WorkItem {
-    Node(IRNode),
-    EndNode(Arc<ComputedStyle>),
-    // NEW: Flexbox control items
-    StartFlex(Vec<f32>), // Contains calculated widths of children
-    EndFlex,
-}
 
 
 #[cfg(test)]
@@ -62,4 +50,9 @@ mod test_utils;
 #[cfg(test)]
 mod page_test;
 #[cfg(test)]
+mod flex_test;
+#[cfg(test)]
+mod table_test;
+#[cfg(test)]
 mod text_test;
+

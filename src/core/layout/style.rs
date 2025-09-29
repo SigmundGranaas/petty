@@ -1,10 +1,11 @@
-use std::sync::Arc;
 use crate::core::style::border::Border;
 use crate::core::style::color::Color;
 use crate::core::style::dimension::{Dimension, Margins, PageSize};
+use crate::core::style::flex::{AlignItems, AlignSelf, FlexDirection, FlexWrap, JustifyContent};
 use crate::core::style::font::{FontStyle, FontWeight};
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
 use crate::core::style::text::TextAlign;
+use std::sync::Arc;
 
 /// A fully resolved style with no optional values, ready for layout.
 #[derive(Debug, Clone, PartialEq)]
@@ -19,10 +20,22 @@ pub struct ComputedStyle {
     pub margin: Margins,
     pub padding: Margins,
     pub width: Option<Dimension>,
-    pub height: Option<f32>,
+    pub height: Option<Dimension>,
     pub background_color: Option<Color>,
     pub border: Option<Border>,
     pub border_bottom: Option<Border>,
+
+    // Flexbox container properties
+    pub flex_direction: FlexDirection,
+    pub flex_wrap: FlexWrap,
+    pub justify_content: JustifyContent,
+    pub align_items: AlignItems,
+
+    // Flexbox item properties
+    pub flex_grow: f32,
+    pub flex_shrink: f32,
+    pub flex_basis: Dimension,
+    pub align_self: AlignSelf,
 }
 
 impl Default for ComputedStyle {
@@ -42,10 +55,17 @@ impl Default for ComputedStyle {
             background_color: None,
             border: None,
             border_bottom: None,
+            flex_direction: FlexDirection::default(),
+            flex_wrap: FlexWrap::default(),
+            justify_content: JustifyContent::default(),
+            align_items: AlignItems::default(),
+            flex_grow: 0.0,
+            flex_shrink: 1.0,
+            flex_basis: Dimension::Auto,
+            align_self: AlignSelf::default(),
         }
     }
 }
-
 
 /// Computes the style for a node by inheriting from its parent, applying any named
 /// style from the stylesheet, and finally applying any inline style overrides.
@@ -66,6 +86,10 @@ pub fn compute_style(
     computed.background_color = None;
     computed.border = None;
     computed.border_bottom = None;
+    computed.flex_grow = 0.0;
+    computed.flex_shrink = 1.0;
+    computed.flex_basis = Dimension::Auto;
+    computed.align_self = AlignSelf::Auto;
 
     // 3. Apply all pre-resolved named styles in order.
     for style_def in style_sets {
@@ -131,9 +155,7 @@ fn apply_element_style(computed: &mut ComputedStyle, style_def: &ElementStyle) {
         computed.width = Some(w.clone())
     }
     if let Some(h) = &style_def.height {
-        if let Dimension::Pt(h_pt) = h {
-            computed.height = Some(*h_pt)
-        }
+        computed.height = Some(h.clone());
     }
     if let Some(bg) = &style_def.background_color {
         computed.background_color = Some(bg.clone());
@@ -143,6 +165,30 @@ fn apply_element_style(computed: &mut ComputedStyle, style_def: &ElementStyle) {
     }
     if let Some(b) = &style_def.border_bottom {
         computed.border_bottom = Some(b.clone());
+    }
+    if let Some(d) = &style_def.flex_direction {
+        computed.flex_direction = d.clone();
+    }
+    if let Some(w) = &style_def.flex_wrap {
+        computed.flex_wrap = w.clone();
+    }
+    if let Some(jc) = &style_def.justify_content {
+        computed.justify_content = jc.clone();
+    }
+    if let Some(ai) = &style_def.align_items {
+        computed.align_items = ai.clone();
+    }
+    if let Some(g) = style_def.flex_grow {
+        computed.flex_grow = g;
+    }
+    if let Some(s) = style_def.flex_shrink {
+        computed.flex_shrink = s;
+    }
+    if let Some(b) = &style_def.flex_basis {
+        computed.flex_basis = b.clone();
+    }
+    if let Some(s) = &style_def.align_self {
+        computed.align_self = s.clone();
     }
 }
 

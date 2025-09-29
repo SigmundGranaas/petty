@@ -1,10 +1,9 @@
-// FILE: src/core/layout/test_utils.rs
-
 #![cfg(test)]
 
 use crate::core::idf::{IRNode, InlineNode, LayoutUnit};
 use crate::core::layout::engine::LayoutEngine;
 use crate::core::layout::fonts::FontManager;
+use crate::core::layout::style::ComputedStyle;
 use crate::core::style::dimension::{Margins, PageSize};
 use crate::core::style::stylesheet::{PageLayout, Stylesheet};
 use serde_json::Value;
@@ -53,4 +52,13 @@ pub fn create_layout_unit(tree: IRNode) -> LayoutUnit {
         tree,
         context: Arc::new(Value::Null),
     }
+}
+
+/// Creates a base computed style for use in tests.
+pub fn get_base_style() -> Arc<ComputedStyle> {
+    let engine = create_test_engine();
+    let mut style = (*engine.get_default_style()).clone();
+    style.font_size = 10.0;
+    style.line_height = 12.0;
+    Arc::new(style)
 }

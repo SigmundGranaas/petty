@@ -24,6 +24,34 @@ pub struct LayoutUnit {
     pub context: Arc<Value>,
 }
 
+/// Helper macro to generate repetitive style accessor methods.
+macro_rules! impl_style_accessors {
+    (for $T:ty, $($variant:path),*) => {
+        impl $T {
+            /// Returns the pre-resolved, shared pointers to named styles.
+            pub(crate) fn style_sets(&self) -> &[Arc<ElementStyle>] {
+                match self {
+                    $(
+                        $variant { style_sets, .. } => style_sets,
+                    )*
+                    _ => &[],
+                }
+            }
+
+            /// Returns the parsed inline style override of the node, if it has one.
+            pub(crate) fn style_override(&self) -> Option<&ElementStyle> {
+                match self {
+                    $(
+                        $variant { style_override, .. } => style_override.as_ref(),
+                    )*
+                    _ => None,
+                }
+            }
+        }
+    };
+}
+
+
 /// The primary enum representing all possible block-level elements in a document layout.
 /// This forms the backbone of the `IRNode` tree.
 #[derive(Debug, Clone)]
@@ -88,35 +116,17 @@ pub enum IRNode {
     },
 }
 
-impl IRNode {
-    /// Returns the pre-resolved, shared pointers to named styles.
-    pub(crate) fn style_sets(&self) -> &[Arc<ElementStyle>] {
-        match self {
-            IRNode::Block { style_sets, .. }
-            | IRNode::FlexContainer { style_sets, .. }
-            | IRNode::Paragraph { style_sets, .. }
-            | IRNode::Image { style_sets, .. }
-            | IRNode::List { style_sets, .. }
-            | IRNode::ListItem { style_sets, .. }
-            | IRNode::Table { style_sets, .. } => style_sets,
-            IRNode::Root(_) => &[],
-        }
-    }
+impl_style_accessors!(
+    for IRNode,
+    IRNode::Block,
+    IRNode::FlexContainer,
+    IRNode::Paragraph,
+    IRNode::Image,
+    IRNode::List,
+    IRNode::ListItem,
+    IRNode::Table
+);
 
-    /// Returns the parsed inline style override of the node, if it has one.
-    pub(crate) fn style_override(&self) -> Option<&ElementStyle> {
-        match self {
-            IRNode::Block { style_override, .. }
-            | IRNode::FlexContainer { style_override, .. }
-            | IRNode::Paragraph { style_override, .. }
-            | IRNode::Image { style_override, .. }
-            | IRNode::List { style_override, .. }
-            | IRNode::ListItem { style_override, .. }
-            | IRNode::Table { style_override, .. } => style_override.as_ref(),
-            IRNode::Root(_) => None,
-        }
-    }
-}
 
 // --- Table Component Structs ---
 
@@ -192,24 +202,9 @@ pub enum InlineNode {
     LineBreak,
 }
 
-impl InlineNode {
-    /// Returns the pre-resolved, shared pointers to named styles.
-    pub(crate) fn style_sets(&self) -> &[Arc<ElementStyle>] {
-        match self {
-            InlineNode::StyledSpan { style_sets, .. }
-            | InlineNode::Hyperlink { style_sets, .. }
-            | InlineNode::Image { style_sets, .. } => style_sets,
-            _ => &[],
-        }
-    }
-
-    /// Returns the parsed inline style override of the inline node, if it has one.
-    pub(crate) fn style_override(&self) -> Option<&ElementStyle> {
-        match self {
-            InlineNode::StyledSpan { style_override, .. }
-            | InlineNode::Hyperlink { style_override, .. }
-            | InlineNode::Image { style_override, .. } => style_override.as_ref(),
-            _ => None,
-        }
-    }
-}
+impl_style_accessors!(
+    for InlineNode,
+    InlineNode::StyledSpan,
+    InlineNode::Hyperlink,
+    InlineNode::Image
+);

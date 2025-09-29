@@ -5,6 +5,7 @@
 pub mod border;
 pub mod color;
 pub mod dimension;
+pub mod flex;
 pub mod font;
-pub mod text;
 pub mod stylesheet;
+pub mod text;
