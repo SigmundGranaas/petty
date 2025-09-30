@@ -190,6 +190,19 @@ impl<'h, 's> TemplateExecutor<'h, 's> {
                 self.push_inline_to_parent(InlineNode::Text(content));
             }
             JsonInstruction::LineBreak => self.push_inline_to_parent(InlineNode::LineBreak),
+            JsonInstruction::InlineImage {
+                styles,
+                src_template,
+            } => {
+                let src = self.render_text(src_template, context)?;
+                let style_sets = self.gather_styles(styles, context)?;
+                let node = InlineNode::Image {
+                    src,
+                    style_sets,
+                    style_override: styles.style_override.clone(),
+                };
+                self.push_inline_to_parent(node);
+            }
             JsonInstruction::StyledSpan { styles, children } => {
                 let style_sets = self.gather_styles(styles, context)?;
                 let node = InlineNode::StyledSpan {
@@ -435,15 +448,6 @@ impl TryFrom<IRNode> for InlineNode {
                     ))
                 }
             }
-            IRNode::Image {
-                src,
-                style_sets,
-                style_override,
-            } => Ok(InlineNode::Image {
-                src,
-                style_sets,
-                style_override,
-            }),
             _ => Err(ParseError::TemplateParse(
                 "Node cannot be converted to an InlineNode".into(),
             )),

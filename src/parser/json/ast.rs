@@ -58,6 +58,7 @@ pub enum JsonNode {
     },
     StyledSpan(JsonInlineContainer),
     Hyperlink(JsonHyperlink),
+    InlineImage(JsonImage),
     LineBreak,
 }
 

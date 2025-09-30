@@ -160,7 +160,7 @@ pub struct TableRow {
 
 /// Represents a single cell within a `TableRow`. A cell can contain any
 /// block-level `IRNode` elements, allowing for nested structures.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TableCell {
     pub style_sets: Vec<Arc<ElementStyle>>,
     pub style_override: Option<ElementStyle>,

@@ -1,6 +1,6 @@
-
 use super::style::ComputedStyle;
 use super::{IRNode, LayoutBox, LayoutContent, LayoutEngine, Rect};
+use crate::core::style::list::ListStyleType;
 use std::sync::Arc;
 
 /// Lays out a standard block container by recursively laying out its children
@@ -12,9 +12,7 @@ pub fn layout_block(
     available_size: (f32, f32),
 ) -> LayoutBox {
     let children = match node {
-        IRNode::Root(children) | IRNode::Block { children, .. } | IRNode::List { children, .. } => {
-            children
-        }
+        IRNode::Root(children) | IRNode::Block { children, .. } => children,
         _ => {
             return LayoutBox {
                 rect: Rect::default(),
@@ -54,17 +52,71 @@ pub fn layout_block(
     }
 }
 
-/// Lays out a list item, adding a bullet point and indenting the children.
-pub fn layout_list_item(
+/// Lays out a list container by recursively laying out its children
+/// (ListItems) and stacking them vertically, providing them with their index.
+pub fn layout_list(
     engine: &LayoutEngine,
     node: &mut IRNode,
     style: Arc<ComputedStyle>,
     available_size: (f32, f32),
 ) -> LayoutBox {
-    // TODO: List-style-type and other list properties should be driven by the style.
-    const BULLET_CHAR: &str = "•";
-    const BULLET_WIDTH_FACTOR: f32 = 0.6;
-    const BULLET_SPACING_FACTOR: f32 = 0.4;
+    let children = match node {
+        IRNode::List { children, .. } => children,
+        _ => {
+            return LayoutBox {
+                rect: Rect::default(),
+                style,
+                content: LayoutContent::Children(vec![]),
+            }
+        }
+    };
+
+    let mut child_boxes = Vec::new();
+    let mut content_height = 0.0;
+
+    for (index, child) in children.iter_mut().enumerate() {
+        if let IRNode::ListItem { .. } = child {
+            // We pass the index+1 because lists are 1-based.
+            let mut child_box =
+                layout_list_item(engine, child, style.clone(), available_size, index + 1);
+            child_box.rect.y += content_height;
+            content_height += child_box.rect.height;
+            child_boxes.push(child_box);
+        } else {
+            // Non-ListItem in a List, lay out as a simple block.
+            log::warn!("Found non-ListItem node inside a List. This is not recommended.");
+            let mut child_box = engine.build_layout_tree(child, style.clone(), available_size);
+            child_box.rect.y += content_height;
+            content_height += child_box.rect.height;
+            child_boxes.push(child_box);
+        }
+    }
+
+    // Offset all children by the parent's padding.
+    for child in &mut child_boxes {
+        child.rect.x += style.padding.left;
+        child.rect.y += style.padding.top;
+    }
+
+    LayoutBox {
+        rect: Rect {
+            height: content_height,
+            ..Default::default()
+        },
+        style,
+        content: LayoutContent::Children(child_boxes),
+    }
+}
+
+/// Lays out a list item, adding a marker and indenting the children.
+pub fn layout_list_item(
+    engine: &LayoutEngine,
+    node: &mut IRNode,
+    style: Arc<ComputedStyle>,
+    available_size: (f32, f32),
+    index: usize,
+) -> LayoutBox {
+    const MARKER_SPACING_FACTOR: f32 = 0.4;
 
     let children = match node {
         IRNode::ListItem { children, .. } => children,
@@ -77,24 +129,39 @@ pub fn layout_list_item(
         }
     };
 
-    let bullet_width = style.font_size * BULLET_WIDTH_FACTOR;
-    let bullet_spacing = style.font_size * BULLET_SPACING_FACTOR;
-    let indent = bullet_width + bullet_spacing;
-    let child_available_size = (available_size.0 - indent, available_size.1);
-
-    // Create the bullet as a LayoutBox.
-    let bullet_box = LayoutBox {
-        rect: Rect {
-            x: style.padding.left,
-            y: style.padding.top,
-            width: bullet_width,
-            height: style.line_height,
-        },
-        style: style.clone(),
-        content: LayoutContent::Text(BULLET_CHAR.to_string(), None),
+    // Determine marker content based on style.
+    let marker_text = match style.list_style_type {
+        ListStyleType::Disc => "•".to_string(),
+        ListStyleType::Circle => "◦".to_string(),
+        ListStyleType::Square => "▪".to_string(),
+        ListStyleType::Decimal => format!("{}.", index),
+        ListStyleType::None => String::new(),
     };
 
-    let mut child_boxes = vec![bullet_box];
+    let mut child_boxes = Vec::new();
+    let indent;
+
+    if !marker_text.is_empty() {
+        let marker_width = engine.measure_text_width(&marker_text, &style);
+        let marker_spacing = style.font_size * MARKER_SPACING_FACTOR;
+        indent = marker_width + marker_spacing;
+
+        let marker_box = LayoutBox {
+            rect: Rect {
+                x: 0.0, // Positioned relative to the list item's content box
+                y: 0.0,
+                width: marker_width,
+                height: style.line_height,
+            },
+            style: style.clone(),
+            content: LayoutContent::Text(marker_text, None),
+        };
+        child_boxes.push(marker_box);
+    } else {
+        indent = 0.0;
+    }
+
+    let child_available_size = (available_size.0 - indent, available_size.1);
     let mut content_height = 0.0;
 
     for child in children {
@@ -105,6 +172,7 @@ pub fn layout_list_item(
         child_boxes.push(child_box);
     }
 
+    // Offset all children by the list item's own padding.
     for child in &mut child_boxes {
         child.rect.x += style.padding.left;
         child.rect.y += style.padding.top;

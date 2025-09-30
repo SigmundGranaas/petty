@@ -1,10 +1,8 @@
-use super::style::ComputedStyle;
-use super::{IRNode, LayoutBox, LayoutContent, LayoutEngine};
+use super::{IRNode, LayoutBox, LayoutContent};
 use crate::core::idf::InlineNode;
 use crate::core::layout::test_utils::{create_test_engine, get_base_style};
 use crate::core::style::dimension::{Dimension, Margins};
 use crate::core::style::stylesheet::ElementStyle;
-use std::sync::Arc;
 
 fn find_first_text_box<'a>(layout_box: &'a LayoutBox) -> Option<&'a LayoutBox> {
     match &layout_box.content {

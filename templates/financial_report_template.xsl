@@ -1,58 +1,51 @@
-<!-- FILE: templates/financial_report_template.xsl -->
 <xsl:stylesheet version="1.0"
                 xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
                 xmlns:fo="http://www.w3.org/1999/XSL/Format">
 
     <!-- Page Layout -->
-    <fo:simple-page-master page-width="8.5in" page-height="11in"
-                           margin-top="50pt" margin-bottom="50pt"
-                           margin-left="50pt" margin-right="50pt"/>
+    <fo:simple-page-master page-width="8.5in" page-height="11in" margin="50pt"/>
 
     <!-- ============================================= -->
-    <!-- NAMED TEMPLATE for a standard financial row   -->
+    <!-- TEMPLATES for each data row type (using match)-->
     <!-- ============================================= -->
-    <xsl:template name="render-row-item">
+    <!-- This is the idiomatic XSLT way to handle different data structures. -->
+    <!-- It's more modular and extensible than xsl:if or xsl:choose. -->
+
+    <xsl:template match="data[type='item']">
         <row>
-            <cell style="td"><text><xsl:value-of select="label"/></text></cell>
-            <cell style="td-right td"><text>{{formatCurrency value}}</text></cell>
+            <cell use-attribute-sets="td"><text><xsl:value-of select="label"/></text></cell>
+            <cell use-attribute-sets="td td-right"><text>{{formatCurrency value}}</text></cell>
         </row>
     </xsl:template>
 
-    <!-- ============================================= -->
-    <!-- NAMED TEMPLATE for a subtotal row             -->
-    <!-- ============================================= -->
-    <xsl:template name="render-row-subtotal">
+    <xsl:template match="data[type='subtotal']">
         <row>
-            <cell style="td subtotal-row-cell"><text><xsl:value-of select="label"/></text></cell>
-            <cell style="td-right subtotal-row-cell"><text>{{formatCurrency value}}</text></cell>
+            <cell use-attribute-sets="td subtotal-row-cell"><text><xsl:value-of select="label"/></text></cell>
+            <cell use-attribute-sets="td td-right subtotal-row-cell"><text>{{formatCurrency value}}</text></cell>
         </row>
     </xsl:template>
 
-    <!-- ============================================= -->
-    <!-- NAMED TEMPLATE for a total row                -->
-    <!-- ============================================= -->
-    <xsl:template name="render-row-total">
+    <xsl:template match="data[type='total']">
         <row>
-            <cell style="td total-row-cell"><text><xsl:value-of select="label"/></text></cell>
-            <cell style="td-right total-row-cell"><text>{{formatCurrency value}}</text></cell>
+            <cell use-attribute-sets="td total-row-cell"><text><xsl:value-of select="label"/></text></cell>
+            <cell use-attribute-sets="td td-right total-row-cell"><text>{{formatCurrency value}}</text></cell>
         </row>
     </xsl:template>
-
 
     <!-- ============================================= -->
     <!-- Main Template (Entry Point)                   -->
     <!-- ============================================= -->
     <xsl:template match="/">
         <page-sequence select=".">
-            <text style="h1"><xsl:value-of select="companyName"/></text>
-            <text style="h2"><xsl:value-of select="reportTitle"/></text>
+            <text use-attribute-sets="h1"><xsl:value-of select="companyName"/></text>
+            <text use-attribute-sets="h2"><xsl:value-of select="reportTitle"/></text>
 
             <xsl:for-each select="sections">
-                <text style="section-title"><xsl:value-of select="title"/></text>
+                <text use-attribute-sets="section-title"><xsl:value-of select="title"/></text>
 
                 <xsl:for-each select="tables">
                     <xsl:if test="title">
-                        <text style="table-title"><xsl:value-of select="title"/></text>
+                        <text use-attribute-sets="table-title"><xsl:value-of select="title"/></text>
                     </xsl:if>
 
                     <table>
@@ -60,30 +53,19 @@
                             <column width="70%"/>
                             <column width="30%"/>
                         </columns>
-
-                        <!-- Table Body Content -->
-                        <xsl:for-each select="data">
+                        <tbody>
                             <!--
                               *** CHANGE IS HERE ***
-                              Instead of embedding the row logic, we now call the
-                              appropriate named template based on the data type.
+                              apply-templates will automatically find the best matching
+                              template rule for each `data` element based on its type.
                             -->
-                            <xsl:if test="type = 'item'">
-                                <xsl:call-template name="render-row-item"/>
-                            </xsl:if>
-                            <xsl:if test="type = 'subtotal'">
-                                <xsl:call-template name="render-row-subtotal"/>
-                            </xsl:if>
-                            <xsl:if test="type = 'total'">
-                                <xsl:call-template name="render-row-total"/>
-                            </xsl:if>
-                        </xsl:for-each>
+                            <xsl:apply-templates select="data"/>
+                        </tbody>
                     </table>
                 </xsl:for-each>
             </xsl:for-each>
         </page-sequence>
     </xsl:template>
-
 
     <!-- ============================================= -->
     <!-- Style Definitions                             -->
@@ -123,7 +105,7 @@
         <xsl:attribute name="padding-bottom">6pt</xsl:attribute>
     </xsl:attribute-set>
 
-    <xsl:attribute-set name="td-right">
+    <xsl:attribute-set name="td-right" use-attribute-sets="td">
         <xsl:attribute name="text-align">right</xsl:attribute>
     </xsl:attribute-set>
 

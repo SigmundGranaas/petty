@@ -1,4 +1,3 @@
-
 use super::style::ComputedStyle;
 use super::{IRNode, LayoutBox, LayoutContent, LayoutEngine, Rect};
 use crate::core::idf::{TableColumnDefinition, TableRow};
@@ -44,7 +43,8 @@ pub(super) fn calculate_column_widths(
     widths
 }
 
-/// Lays out a full table, handling pagination by returning remaining rows.
+/// Lays out a full table by creating a structured `LayoutBox` tree of rows and cells.
+/// This structure allows the pagination engine to keep rows together.
 pub fn layout_table(
     engine: &LayoutEngine,
     node: &mut IRNode,
@@ -68,27 +68,23 @@ pub fn layout_table(
         }
     };
 
-    // TODO: This is a simplified non-paginating layout. A full implementation would
-    // need to use `available_size.1` to detect when a row will not fit on the current
-    // page, stop layout, and signal to the pagination engine that the remaining rows
-    // need to be processed on the next page.
-    let mut child_boxes = vec![];
+    let mut row_boxes = vec![];
     let mut current_y = 0.0;
 
     if let Some(h) = header.as_mut() {
         for row in &mut h.rows {
-            let (row_boxes, row_height) =
-                layout_table_row(engine, row, &style, calculated_widths, current_y);
-            child_boxes.extend(row_boxes);
-            current_y += row_height;
+            let mut row_box = layout_table_row(engine, row, &style, calculated_widths);
+            row_box.rect.y = current_y;
+            current_y += row_box.rect.height;
+            row_boxes.push(row_box);
         }
     }
 
     for row in &mut body.rows {
-        let (row_boxes, row_height) =
-            layout_table_row(engine, row, &style, calculated_widths, current_y);
-        child_boxes.extend(row_boxes);
-        current_y += row_height;
+        let mut row_box = layout_table_row(engine, row, &style, calculated_widths);
+        row_box.rect.y = current_y;
+        current_y += row_box.rect.height;
+        row_boxes.push(row_box);
     }
 
     LayoutBox {
@@ -97,54 +93,62 @@ pub fn layout_table(
             ..Default::default()
         },
         style,
-        content: LayoutContent::Children(child_boxes),
+        content: LayoutContent::Children(row_boxes),
     }
 }
 
-/// Lays out a single table row and its cells.
+/// Lays out a single table row and its cells, returning a single `LayoutBox` for the row.
 fn layout_table_row(
     engine: &LayoutEngine,
     row: &mut TableRow,
     parent_style: &Arc<ComputedStyle>,
     widths: &[f32],
-    start_y: f32,
-) -> (Vec<LayoutBox>, f32) {
+) -> LayoutBox {
     let mut cell_boxes = Vec::new();
     let mut max_cell_height: f32 = 0.0;
-    let mut current_x = 0.0;
 
+    // First pass: layout all cells to determine their heights and find the max.
     for (i, cell) in row.cells.iter_mut().enumerate() {
         let cell_width = *widths.get(i).unwrap_or(&0.0);
-        let cell_style = engine.compute_style(
-            &cell.style_sets,
-            cell.style_override.as_ref(),
-            parent_style,
-        );
-        let available_size = (cell_width, f32::INFINITY);
+        let cell_style =
+            engine.compute_style(&cell.style_sets, cell.style_override.as_ref(), parent_style);
 
         // Create a temporary root node for the cell's children to lay them out.
-        // This is a common pattern to reuse the layout engine for a sub-tree.
+        // This reuses the main layout logic for a sub-tree.
         let mut cell_root = IRNode::Root(std::mem::take(&mut cell.children));
-        let mut cell_box = engine.build_layout_tree(&mut cell_root, cell_style, available_size);
+        // The returned box represents the entire cell, including its padding and content.
+        let cell_box =
+            engine.build_layout_tree(&mut cell_root, cell_style, (cell_width, f32::INFINITY));
 
         // Restore children
         if let IRNode::Root(children) = cell_root {
             cell.children = children;
         }
 
-        cell_box.rect.x = current_x;
-        cell_box.rect.y = start_y;
-
         max_cell_height = max_cell_height.max(cell_box.rect.height);
         cell_boxes.push(cell_box);
-        current_x += cell_width;
     }
 
-    // Ensure all cells in the row have the same height.
-    for cell_box in &mut cell_boxes {
+    // Second pass: position cells horizontally and enforce the uniform row height.
+    let mut final_boxes = vec![];
+    let mut current_x = 0.0;
+    for mut cell_box in cell_boxes {
+        cell_box.rect.x = current_x;
+        cell_box.rect.y = 0.0; // Position is relative to the row's content box.
         cell_box.rect.height = max_cell_height;
+        current_x += cell_box.rect.width;
+        final_boxes.push(cell_box);
     }
 
-
-    (cell_boxes, max_cell_height)
+    // Return a single LayoutBox for the entire row.
+    LayoutBox {
+        rect: Rect {
+            x: 0.0,
+            y: 0.0, // Y position is set by the table layout function.
+            width: current_x,
+            height: max_cell_height,
+        },
+        style: parent_style.clone(), // A row box doesn't have its own style, so it inherits.
+        content: LayoutContent::Children(final_boxes),
+    }
 }

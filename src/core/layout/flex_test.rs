@@ -1,8 +1,8 @@
 #![cfg(test)]
 
-use crate::core::idf::{IRNode, InlineNode};
-use crate::core::style::dimension::{Dimension, Margins};
-use crate::core::style::flex::{FlexDirection, JustifyContent};
+use crate::core::idf::IRNode;
+use crate::core::style::dimension::Dimension;
+use crate::core::style::flex::JustifyContent;
 use crate::core::style::stylesheet::ElementStyle;
 use crate::core::layout::test_utils::{create_test_engine, get_base_style};
 use crate::core::layout::LayoutContent;

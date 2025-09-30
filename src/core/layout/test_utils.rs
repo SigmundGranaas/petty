@@ -4,6 +4,7 @@ use crate::core::idf::{IRNode, InlineNode, LayoutUnit};
 use crate::core::layout::engine::LayoutEngine;
 use crate::core::layout::fonts::FontManager;
 use crate::core::layout::style::ComputedStyle;
+use crate::core::layout::{LayoutElement, PositionedElement, TextElement};
 use crate::core::style::dimension::{Margins, PageSize};
 use crate::core::style::stylesheet::{PageLayout, Stylesheet};
 use serde_json::Value;
@@ -37,12 +38,22 @@ pub fn create_test_engine_with_page(width: f32, height: f32, margin: f32) -> Lay
     LayoutEngine::new(stylesheet, Arc::new(font_manager))
 }
 
-/// Creates a simple paragraph node for testing.
+/// Creates a simple paragraph node for testing, converting `\n` to line breaks.
 pub fn create_paragraph(text: &str) -> IRNode {
+    let mut children = Vec::new();
+    for (i, line) in text.split('\n').enumerate() {
+        if i > 0 {
+            children.push(InlineNode::LineBreak);
+        }
+        if !line.is_empty() {
+            children.push(InlineNode::Text(line.to_string()));
+        }
+    }
+
     IRNode::Paragraph {
         style_sets: vec![],
         style_override: None,
-        children: vec![InlineNode::Text(text.to_string())],
+        children,
     }
 }
 
@@ -61,4 +72,21 @@ pub fn get_base_style() -> Arc<ComputedStyle> {
     style.font_size = 10.0;
     style.line_height = 12.0;
     Arc::new(style)
+}
+
+/// Finds the first drawable text element on a page that contains the given substring.
+pub fn find_first_text_box_with_content<'a>(
+    elements: &'a [PositionedElement],
+    content: &str,
+) -> Option<&'a PositionedElement> {
+    elements.iter().find(|el| {
+        if let LayoutElement::Text(TextElement {
+                                       content: text_content, ..
+                                   }) = &el.element
+        {
+            text_content.contains(content)
+        } else {
+            false
+        }
+    })
 }

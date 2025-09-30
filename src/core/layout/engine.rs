@@ -54,7 +54,7 @@ impl LayoutEngine {
     /// **Pass 1: Measurement & Annotation**
     /// This pass walks the entire `IRNode` tree for a `sequence`, calculating
     /// size-dependent properties and annotating the tree with them.
-    fn measurement_pass(&self, node: &mut IRNode) -> Result<(), PipelineError> {
+    pub(crate) fn measurement_pass(&self, node: &mut IRNode) -> Result<(), PipelineError> {
         match node {
             IRNode::Table {
                 columns,
@@ -129,11 +129,16 @@ impl LayoutEngine {
 
         // Dispatch to the appropriate layout function to get the box's CONTENT and CONTENT_HEIGHT.
         let mut layout_box = match node {
-            IRNode::Root(..) | IRNode::Block { .. } | IRNode::List { .. } => {
+            IRNode::Root(..) | IRNode::Block { .. } => {
                 block::layout_block(self, node, style.clone(), child_available_size)
             }
+            IRNode::List { .. } => {
+                block::layout_list(self, node, style.clone(), child_available_size)
+            }
             IRNode::ListItem { .. } => {
-                block::layout_list_item(self, node, style.clone(), child_available_size)
+                // This path is for standalone ListItems. Inside a List, they are handled by layout_list.
+                // We pass an index of 0 as it's an unknown context.
+                block::layout_list_item(self, node, style.clone(), child_available_size, 0)
             }
             IRNode::Paragraph { .. } => {
                 text::layout_paragraph(self, node, style.clone(), child_available_size)

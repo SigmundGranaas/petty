@@ -12,7 +12,6 @@ pub type Result<T> = std::result::Result<T, LayoutError>;
 
 // Re-export the main entry point and key types for external use.
 pub use self::engine::LayoutEngine;
-pub use self::page::PageIterator;
 
 // Declare the modules that make up the layout engine.
 mod engine;
@@ -52,7 +51,8 @@ mod page_test;
 #[cfg(test)]
 mod flex_test;
 #[cfg(test)]
+mod list_test;
+#[cfg(test)]
 mod table_test;
 #[cfg(test)]
 mod text_test;
-

@@ -6,20 +6,19 @@
       "footer_text": "{{companyName}} - {{reportTitle}} | Page {{page_num}}"
     },
     "styles": {
-      "header": { "font-size": "24pt", "color": "#2a4d69" },
-      "report-title": { "font-size": "16pt", "color": "#4b86b4", "margin-bottom": "15pt" },
+      "header": { "fontSize": "24pt", "color": "#2a4d69" },
+      "report-title": { "fontSize": "16pt", "color": "#4b86b4", "marginBottom": "15pt" },
       "section-title": {
-        "font-size": "14pt", "font-weight": "bold", "color": "#2a4d69",
-        "margin-top": "10pt", "margin-bottom": "5pt",
-        "padding-bottom": "2pt",
-        "border-bottom": "1pt solid #adcbe3"
+        "fontSize": "14pt", "fontWeight": "bold", "color": "#2a4d69",
+        "marginTop": "10pt", "marginBottom": "5pt",
+        "paddingBottom": "2pt",
+        "borderBottom": "1pt solid #adcbe3"
       },
-      "p": { "font-size": "11pt", "line-height": "15pt" },
-      "th": { "font-weight": "bold", "text-align": "right" },
-      "td": { "padding": "2pt 5pt" },
-      "td-numeric": { "text-align": "right" },
-      "td-subtotal": { "font-weight": "bold", "border-top": "0.5pt solid #cccccc" },
-      "td-total": { "font-weight": "bold", "border-top": "0.5pt solid #2a4d69", "border-bottom": "2pt double #2a4d69" }
+      "p": { "fontSize": "11pt", "lineHeight": "15pt" },
+      "td": { "padding": "4pt 5pt" },
+      "td-numeric": { "textAlign": "Right" },
+      "td-subtotal": { "fontWeight": "bold", "borderTop": "0.5pt solid #cccccc" },
+      "td-total": { "fontWeight": "bold", "borderTop": "0.5pt solid #2a4d69", "borderBottom": "2pt double #2a4d69" }
     }
   },
   "_template": {
@@ -42,26 +41,25 @@
               "template": {
                 "type": "Table",
                 "columns": [
-                  { "width": "75%", "style": "td" },
-                  { "width": "25%", "style": "td td-numeric" }
+                  { "width": "75%" },
+                  { "width": "25%" }
                 ],
                 "body": {
                   "rows": [
                     {
                       "each": "data",
                       "template": {
-                        "type": "Block",
-                        "comment": "This block implicitly becomes a TableRow",
+                        "type": "TableRow",
                         "children": [
                           {
-                            "type": "Block",
-                            "comment": "This block implicitly becomes a TableCell",
+                            "type": "TableCell",
+                            "styleNames": ["td"],
                             "children": [{ "type": "Paragraph", "children": [{ "type": "Text", "content": "{{label}}" }] }]
                           },
                           {
-                            "type": "Block",
-                            "comment": "This block becomes the second TableCell",
+                            "type": "TableCell",
                             "styleNames": [
+                              "td", "td-numeric",
                               "{{#if (eq type 'subtotal')}}td-subtotal{{/if}}",
                               "{{#if (eq type 'total')}}td-total{{/if}}"
                             ],

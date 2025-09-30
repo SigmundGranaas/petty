@@ -3,6 +3,7 @@ use crate::core::style::color::Color;
 use crate::core::style::dimension::{Dimension, Margins, PageSize};
 use crate::core::style::flex::{AlignItems, AlignSelf, FlexDirection, FlexWrap, JustifyContent};
 use crate::core::style::font::{FontStyle, FontWeight};
+use crate::core::style::list::ListStyleType;
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
 use crate::core::style::text::TextAlign;
 use std::sync::Arc;
@@ -24,6 +25,9 @@ pub struct ComputedStyle {
     pub background_color: Option<Color>,
     pub border: Option<Border>,
     pub border_bottom: Option<Border>,
+
+    // List properties
+    pub list_style_type: ListStyleType,
 
     // Flexbox container properties
     pub flex_direction: FlexDirection,
@@ -55,6 +59,7 @@ impl Default for ComputedStyle {
             background_color: None,
             border: None,
             border_bottom: None,
+            list_style_type: ListStyleType::default(),
             flex_direction: FlexDirection::default(),
             flex_wrap: FlexWrap::default(),
             justify_content: JustifyContent::default(),
@@ -165,6 +170,9 @@ fn apply_element_style(computed: &mut ComputedStyle, style_def: &ElementStyle) {
     }
     if let Some(b) = &style_def.border_bottom {
         computed.border_bottom = Some(b.clone());
+    }
+    if let Some(lst) = &style_def.list_style_type {
+        computed.list_style_type = lst.clone();
     }
     if let Some(d) = &style_def.flex_direction {
         computed.flex_direction = d.clone();

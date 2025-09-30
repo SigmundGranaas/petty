@@ -4,6 +4,8 @@
 //! into the strongly-typed style primitives defined in `crate::core`. It decouples the
 //! core parsers from the specifics of CSS-like value parsing.
 
+use crate::core::style::flex::{AlignItems, AlignSelf, FlexDirection, FlexWrap, JustifyContent};
+use crate::core::style::list::ListStyleType;
 use crate::parser::ParseError;
 use serde::{de, Deserialize, Deserializer};
 use crate::core::style::border::{Border, BorderStyle};
@@ -229,6 +231,88 @@ pub fn parse_text_align(s: &str) -> Result<TextAlign, ParseError> {
     }
 }
 
+// --- List Properties ---
+pub fn parse_list_style_type(s: &str) -> Result<ListStyleType, ParseError> {
+    match s.to_lowercase().as_str() {
+        "disc" => Ok(ListStyleType::Disc),
+        "circle" => Ok(ListStyleType::Circle),
+        "square" => Ok(ListStyleType::Square),
+        "decimal" => Ok(ListStyleType::Decimal),
+        "none" => Ok(ListStyleType::None),
+        _ => Err(ParseError::TemplateParse(format!(
+            "Invalid list-style-type: {}",
+            s
+        ))),
+    }
+}
+
+// --- Flexbox Properties ---
+pub fn parse_flex_direction(s: &str) -> Result<FlexDirection, ParseError> {
+    match s.to_lowercase().as_str() {
+        "row" => Ok(FlexDirection::Row),
+        "row-reverse" => Ok(FlexDirection::RowReverse),
+        "column" => Ok(FlexDirection::Column),
+        "column-reverse" => Ok(FlexDirection::ColumnReverse),
+        _ => Err(ParseError::TemplateParse(format!(
+            "Invalid flex-direction: {}",
+            s
+        ))),
+    }
+}
+
+pub fn parse_flex_wrap(s: &str) -> Result<FlexWrap, ParseError> {
+    match s.to_lowercase().as_str() {
+        "nowrap" => Ok(FlexWrap::NoWrap),
+        "wrap" => Ok(FlexWrap::Wrap),
+        "wrap-reverse" => Ok(FlexWrap::WrapReverse),
+        _ => Err(ParseError::TemplateParse(format!(
+            "Invalid flex-wrap: {}",
+            s
+        ))),
+    }
+}
+
+pub fn parse_justify_content(s: &str) -> Result<JustifyContent, ParseError> {
+    match s.to_lowercase().as_str() {
+        "flex-start" => Ok(JustifyContent::FlexStart),
+        "flex-end" => Ok(JustifyContent::FlexEnd),
+        "center" => Ok(JustifyContent::Center),
+        "space-between" => Ok(JustifyContent::SpaceBetween),
+        "space-around" => Ok(JustifyContent::SpaceAround),
+        "space-evenly" => Ok(JustifyContent::SpaceEvenly),
+        _ => Err(ParseError::TemplateParse(format!(
+            "Invalid justify-content: {}",
+            s
+        ))),
+    }
+}
+
+pub fn parse_align_items(s: &str) -> Result<AlignItems, ParseError> {
+    match s.to_lowercase().as_str() {
+        "stretch" => Ok(AlignItems::Stretch),
+        "flex-start" => Ok(AlignItems::FlexStart),
+        "flex-end" => Ok(AlignItems::FlexEnd),
+        "center" => Ok(AlignItems::Center),
+        "baseline" => Ok(AlignItems::Baseline),
+        _ => Err(ParseError::TemplateParse(format!(
+            "Invalid align-items: {}",
+            s
+        ))),
+    }
+}
+
+pub fn parse_align_self(s: &str) -> Result<AlignSelf, ParseError> {
+    match s.to_lowercase().as_str() {
+        "auto" => Ok(AlignSelf::Auto),
+        "stretch" => Ok(AlignSelf::Stretch),
+        "flex-start" => Ok(AlignSelf::FlexStart),
+        "flex-end" => Ok(AlignSelf::FlexEnd),
+        "center" => Ok(AlignSelf::Center),
+        "baseline" => Ok(AlignSelf::Baseline),
+        _ => Err(ParseError::TemplateParse(format!("Invalid align-self: {}", s))),
+    }
+}
+
 // --- Page Layout Parsing ---
 
 /// Parses a page size string (e.g., "A4", "Letter").
@@ -291,6 +375,36 @@ pub fn apply_style_property(
         }
         "width" => style.width = Some(parse_dimension(value)?),
         "height" => style.height = Some(parse_dimension(value)?),
+
+        // List Properties
+        "list-style-type" => style.list_style_type = Some(parse_list_style_type(value)?),
+
+        // Flexbox Container Properties
+        "flex-direction" => style.flex_direction = Some(parse_flex_direction(value)?),
+        "flex-wrap" => style.flex_wrap = Some(parse_flex_wrap(value)?),
+        "justify-content" => style.justify_content = Some(parse_justify_content(value)?),
+        "align-items" => style.align_items = Some(parse_align_items(value)?),
+
+        // Flexbox Item Properties
+        "flex-grow" => {
+            style.flex_grow = Some(
+                value
+                    .trim()
+                    .parse::<f32>()
+                    .map_err(|e| ParseError::FloatParse(e, value.to_string()))?,
+            )
+        }
+        "flex-shrink" => {
+            style.flex_shrink = Some(
+                value
+                    .trim()
+                    .parse::<f32>()
+                    .map_err(|e| ParseError::FloatParse(e, value.to_string()))?,
+            )
+        }
+        "flex-basis" => style.flex_basis = Some(parse_dimension(value)?),
+        "align-self" => style.align_self = Some(parse_align_self(value)?),
+
         _ => {} // Not a style attribute, just ignore.
     };
     Ok(())

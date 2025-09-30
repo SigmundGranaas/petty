@@ -2,23 +2,22 @@
                 xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
                 xmlns:fo="http://www.w3.org/1999/XSL/Format">
 
-    <fo:layout-master-set>
-        <fo:simple-page-master master-name="A4"
-                               page-width="210mm" page-height="297mm"
-                               margin="20mm">
-        </fo:simple-page-master>
-    </fo:layout-master-set>
+    <!-- The simple-page-master is the modern, preferred way to define page layout. -->
+    <fo:simple-page-master master-name="A4"
+                           page-width="210mm" page-height="297mm"
+                           margin="20mm">
+    </fo:simple-page-master>
 
     <!--
       This named template defines the body for a single invoice.
       It can be reused or called from different places.
     -->
     <xsl:template name="invoice-body">
-        <text style="h1">Invoice <xsl:value-of select="invoiceNumber"/></text>
-        <text style="h2"><xsl:value-of select="name"/></text>
+        <text use-attribute-sets="h1">Invoice <xsl:value-of select="invoiceNumber"/></text>
+        <text use-attribute-sets="h2"><xsl:value-of select="name"/></text>
         <text><xsl:value-of select="address"/></text>
 
-        <table style="invoice-table">
+        <table use-attribute-sets="invoice-table">
             <columns>
                 <column width="50%" header-style="th" style="td"/>
                 <column width="25%" header-style="th-right" style="td-right"/>
@@ -81,8 +80,8 @@
         <xsl:attribute name="background-color">#EEEEEE</xsl:attribute>
     </xsl:attribute-set>
 
-    <xsl:attribute-set name="th-right">
-        <xsl:attribute name="use-attribute-sets">th</xsl:attribute>
+    <!-- More efficient to compose styles this way. -->
+    <xsl:attribute-set name="th-right" use-attribute-sets="th">
         <xsl:attribute name="text-align">right</xsl:attribute>
     </xsl:attribute-set>
 
@@ -91,8 +90,7 @@
         <xsl:attribute name="border-bottom">1pt solid #CCCCCC</xsl:attribute>
     </xsl:attribute-set>
 
-    <xsl:attribute-set name="td-right">
-        <xsl:attribute name="use-attribute-sets">td</xsl:attribute>
+    <xsl:attribute-set name="td-right" use-attribute-sets="td">
         <xsl:attribute name="text-align">right</xsl:attribute>
     </xsl:attribute-set>
 

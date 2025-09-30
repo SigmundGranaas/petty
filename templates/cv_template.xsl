@@ -1,102 +1,184 @@
+<?xml version="1.0" encoding="UTF-8"?>
 <xsl:stylesheet version="1.0"
                 xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
                 xmlns:fo="http://www.w3.org/1999/XSL/Format">
 
-    <!-- All style definitions are the same -->
-    <fo:simple-page-master page-width="8.5in" page-height="11in" margin="0.75in"/>
-    <xsl:attribute-set name="header"><xsl:attribute name="padding-bottom">12pt</xsl:attribute><xsl:attribute name="border-bottom">1pt solid #ddd</xsl:attribute><xsl:attribute name="margin-bottom">16pt</xsl:attribute></xsl:attribute-set>
-    <xsl:attribute-set name="name"><xsl:attribute name="font-size">28pt</xsl:attribute><xsl:attribute name="font-weight">bold</xsl:attribute><xsl:attribute name="color">#111</xsl:attribute></xsl:attribute-set>
-    <xsl:attribute-set name="title"><xsl:attribute name="font-size">14pt</xsl:attribute><xsl:attribute name="color">#555</xsl:attribute><xsl:attribute name="margin-top">4pt</xsl:attribute></xsl:attribute-set>
-    <xsl:attribute-set name="contact-info"><xsl:attribute name="text-align">right</xsl:attribute><xsl:attribute name="color">#444</xsl:attribute><xsl:attribute name="font-size">10pt</xsl:attribute><xsl:attribute name="line-height">14pt</xsl:attribute></xsl:attribute-set>
-    <xsl:attribute-set name="link-color"><xsl:attribute name="color">#0066cc</xsl:attribute></xsl:attribute-set>
-    <xsl:attribute-set name="h2"><xsl:attribute name="font-size">14pt</xsl:attribute><xsl:attribute name="font-weight">bold</xsl:attribute><xsl:attribute name="color">#333</xsl:attribute><xsl:attribute name="margin-top">12pt</xsl:attribute><xsl:attribute name="padding-bottom">4pt</xsl:attribute><xsl:attribute name="border-bottom">1px solid #eee</xsl:attribute></xsl:attribute-set>
-    <xsl:attribute-set name="job-header"><xsl:attribute name="font-size">11pt</xsl:attribute><xsl:attribute name="margin-top">10pt</xsl:attribute></xsl:attribute-set>
-    <xsl:attribute-set name="job-title"><xsl:attribute name="font-weight">bold</xsl:attribute></xsl:attribute-set>
-    <xsl:attribute-set name="job-dates"><xsl:attribute name="text-align">right</xsl:attribute><xsl:attribute name="color">#666</xsl:attribute></xsl:attribute-set>
-    <xsl:attribute-set name="list"><xsl:attribute name="margin-left">15pt</xsl:attribute><xsl:attribute name="margin-top">6pt</xsl:attribute></xsl:attribute-set>
-    <xsl:attribute-set name="skill-category"><xsl:attribute name="font-weight">bold</xsl:attribute><xsl:attribute name="width">120pt</xsl:attribute></xsl:attribute-set>
-    <xsl:attribute-set name="project-name"><xsl:attribute name="font-weight">bold</xsl:attribute><xsl:attribute name="font-size">11pt</xsl:attribute></xsl:attribute-set>
+    <!-- 1. PAGE LAYOUT -->
+    <fo:simple-page-master
+            page-width="8.5in"
+            page-height="11in"
+            margin="50pt"
+            footer-text="Report ID: {{id}} | Page {{page_num}}"
+            footer-style="footer"
+    />
+
+    <!-- 2. STYLE DEFINITIONS (Attribute Sets) -->
+    <xsl:attribute-set name="page-title">
+        <xsl:attribute name="font-size">28pt</xsl:attribute>
+        <xsl:attribute name="font-weight">bold</xsl:attribute>
+        <xsl:attribute name="color">#0D47A1</xsl:attribute>
+        <xsl:attribute name="margin-bottom">25pt</xsl:attribute>
+    </xsl:attribute-set>
+
+    <xsl:attribute-set name="account-info-text">
+        <xsl:attribute name="font-size">12pt</xsl:attribute>
+        <xsl:attribute name="color">#555555</xsl:attribute>
+        <xsl:attribute name="margin-bottom">35pt</xsl:attribute>
+    </xsl:attribute-set>
+
+    <xsl:attribute-set name="section-title">
+        <xsl:attribute name="font-size">18pt</xsl:attribute>
+        <xsl:attribute name="color">#0D47A1</xsl:attribute>
+        <xsl:attribute name="margin-bottom">15pt</xsl:attribute>
+        <xsl:attribute name="padding-bottom">5pt</xsl:attribute>
+        <xsl:attribute name="border-bottom">1pt solid #B0BEC5</xsl:attribute>
+    </xsl:attribute-set>
+
+    <!-- Table Styles -->
+    <xsl:attribute-set name="transaction-table">
+        <xsl:attribute name="margin-bottom">25pt</xsl:attribute>
+    </xsl:attribute-set>
+
+    <xsl:attribute-set name="th">
+        <xsl:attribute name="font-weight">bold</xsl:attribute>
+        <xsl:attribute name="text-align">left</xsl:attribute>
+        <xsl:attribute name="padding">8pt 6pt</xsl:attribute>
+        <xsl:attribute name="border-bottom">2pt solid #0D47A1</xsl:attribute>
+        <xsl:attribute name="color">#37474F</xsl:attribute>
+    </xsl:attribute-set>
+
+    <xsl:attribute-set name="th-right" use-attribute-sets="th">
+        <xsl:attribute name="text-align">right</xsl:attribute>
+    </xsl:attribute-set>
+
+    <xsl:attribute-set name="td-odd">
+        <xsl:attribute name="padding">7pt 6pt</xsl:attribute>
+        <xsl:attribute name="font-size">10pt</xsl:attribute>
+        <xsl:attribute name="border-bottom">1pt solid #ECEFF1</xsl:attribute>
+        <xsl:attribute name="color">#263238</xsl:attribute>
+    </xsl:attribute-set>
+    <xsl:attribute-set name="td-odd-right" use-attribute-sets="td-odd">
+        <xsl:attribute name="text-align">right</xsl:attribute>
+    </xsl:attribute-set>
+
+    <xsl:attribute-set name="td-even" use-attribute-sets="td-odd">
+        <xsl:attribute name="background-color">#F8F9FA</xsl:attribute>
+    </xsl:attribute-set>
+    <xsl:attribute-set name="td-even-right" use-attribute-sets="td-even">
+        <xsl:attribute name="text-align">right</xsl:attribute>
+    </xsl:attribute-set>
+
+    <!-- Summary Table Styles -->
+    <xsl:attribute-set name="summary-flex-container">
+        <xsl:attribute name="margin-top">20pt</xsl:attribute>
+        <xsl:attribute name="justify-content">flex-end</xsl:attribute>
+    </xsl:attribute-set>
+
+    <xsl:attribute-set name="summary-label">
+        <xsl:attribute name="text-align">right</xsl:attribute>
+        <xsl:attribute name="padding">5pt 10pt</xsl:attribute>
+        <xsl:attribute name="font-size">11pt</xsl:attribute>
+    </xsl:attribute-set>
+
+    <xsl:attribute-set name="summary-value" use-attribute-sets="summary-label">
+        <xsl:attribute name="padding">5pt 6pt</xsl:attribute>
+    </xsl:attribute-set>
+
+    <xsl:attribute-set name="summary-total-label" use-attribute-sets="summary-label">
+        <xsl:attribute name="font-size">14pt</xsl:attribute>
+        <xsl:attribute name="font-weight">bold</xsl:attribute>
+        <xsl:attribute name="border-top">1.5pt solid #263238</xsl:attribute>
+        <xsl:attribute name="padding-top">10pt</xsl:attribute>
+    </xsl:attribute-set>
+
+    <xsl:attribute-set name="summary-total-value" use-attribute-sets="summary-total-label">
+        <xsl:attribute name="padding">10pt 6pt 5pt 6pt</xsl:attribute>
+    </xsl:attribute-set>
+
+    <xsl:attribute-set name="footer">
+        <xsl:attribute name="font-size">9pt</xsl:attribute>
+        <xsl:attribute name="color">#78909C</xsl:attribute>
+        <xsl:attribute name="text-align">center</xsl:attribute>
+    </xsl:attribute-set>
 
 
-    <!-- ===================== -->
-    <!-- ==== Main Template ==== -->
-    <!-- ===================== -->
+    <!-- 3. DOCUMENT STRUCTURE TEMPLATE -->
     <xsl:template match="/">
         <page-sequence>
-            <!-- Header Section -->
-            <flex-container style="header">
-                <block width="65%">
-                    <block style="name"><xsl:value-of select="name"/></block>
-                    <block style="title"><xsl:value-of select="title"/></block>
-                </block>
-                <block style="contact-info" width="35%">
-                    <xsl:value-of select="email"/><br/>
-                    <xsl:value-of select="phone"/><br/>
-                    <xsl:value-of select="location"/><br/>
-                    <link href="{{linkedin}}" style="link-color"><xsl:value-of select="linkedin"/></link><br/>
-                    <link href="{{github}}" style="link-color"><xsl:value-of select="github"/></link>
+            <text use-attribute-sets="page-title">Transaction Summary</text>
+
+            <!-- *** KEY FIX 1: Explicitly select child nodes from the current context. *** -->
+            <text use-attribute-sets="account-info-text">Account: <xsl:value-of select="./user/account"/></text>
+
+            <text use-attribute-sets="section-title">Details</text>
+
+            <table use-attribute-sets="transaction-table">
+                <columns>
+                    <column width="auto"/>
+                    <column width="15%"/>
+                    <column width="20%"/>
+                    <column width="20%"/>
+                </columns>
+                <header>
+                    <row>
+                        <cell use-attribute-sets="th"><text>Item</text></cell>
+                        <cell use-attribute-sets="th-right"><text>Qty</text></cell>
+                        <cell use-attribute-sets="th-right"><text>Unit Price</text></cell>
+                        <cell use-attribute-sets="th-right"><text>Total</text></cell>
+                    </row>
+                </header>
+                <tbody>
+                    <!-- This path is now correct and robust, ensuring table rows will render. -->
+                    <xsl:for-each select="./items">
+                        <row>
+                            <xsl:choose>
+                                <xsl:when test="position() mod 2 = 1">
+                                    <!-- Paths like 'description' are relative to the current item, which is correct. -->
+                                    <cell use-attribute-sets="td-odd"><text><xsl:value-of select="description"/></text></cell>
+                                    <cell use-attribute-sets="td-odd-right"><text><xsl:value-of select="quantity"/></text></cell>
+                                    <cell use-attribute-sets="td-odd-right"><text>{{formatCurrency price}}</text></cell>
+                                    <cell use-attribute-sets="td-odd-right"><text>{{formatCurrency line_total}}</text></cell>
+                                </xsl:when>
+                                <xsl:otherwise>
+                                    <cell use-attribute-sets="td-even"><text><xsl:value-of select="description"/></text></cell>
+                                    <cell use-attribute-sets="td-even-right"><text><xsl:value-of select="quantity"/></text></cell>
+                                    <cell use-attribute-sets="td-even-right"><text>{{formatCurrency price}}</text></cell>
+                                    <cell use-attribute-sets="td-even-right"><text>{{formatCurrency line_total}}</text></cell>
+                                </xsl:otherwise>
+                            </xsl:choose>
+                        </row>
+                    </xsl:for-each>
+                </tbody>
+            </table>
+
+            <!--
+              *** KEY FIX 2: Use a robust flexbox + two-column table for summary alignment. ***
+              This pushes the totals to the right and guarantees perfect alignment of labels and values.
+            -->
+            <flex-container use-attribute-sets="summary-flex-container">
+                <block width="45%">
+                    <table>
+                        <columns>
+                            <column width="auto"/>
+                            <column width="auto"/>
+                        </columns>
+                        <tbody>
+                            <row>
+                                <cell use-attribute-sets="summary-label"><text>Subtotal:</text></cell>
+                                <cell use-attribute-sets="summary-value"><text>{{formatCurrency summary/total}}</text></cell>
+                            </row>
+                            <row>
+                                <cell use-attribute-sets="summary-label"><text>Tax (8%):</text></cell>
+                                <cell use-attribute-sets="summary-value"><text>{{formatCurrency summary/tax}}</text></cell>
+                            </row>
+                            <row>
+                                <cell use-attribute-sets="summary-total-label"><text>Grand Total:</text></cell>
+                                <cell use-attribute-sets="summary-total-value"><text>{{formatCurrency summary/grand_total}}</text></cell>
+                            </row>
+                        </tbody>
+                    </table>
                 </block>
             </flex-container>
-
-            <!-- Summary Section -->
-            <block style="h2">Summary</block>
-            <text><xsl:value-of select="summary"/></text>
-
-            <!-- Experience Section -->
-            <block style="h2">Experience</block>
-            <xsl:for-each select="experience">
-                <flex-container style="job-header">
-                    <block width="70%">
-                        <text>
-                            <strong style="job-title"><xsl:value-of select="title"/></strong>
-                            <xsl:value-of select="concat(' at ', company)"/>
-                        </text>
-                    </block>
-                    <block style="job-dates" width="30%"><xsl:value-of select="dates"/></block>
-                </flex-container>
-                <list style="list">
-                    <xsl:for-each select="responsibilities">
-                        <list-item><text><xsl:value-of select="."/></text></list-item>
-                    </xsl:for-each>
-                </list>
-            </xsl:for-each>
-
-            <!-- Skills Section -->
-            <block style="h2">Skills</block>
-            <xsl:for-each select="skills">
-                <flex-container margin-top="4pt">
-                    <block style="skill-category">
-                        <text><xsl:value-of select="concat(category, ':')"/></text>
-                    </block>
-                    <block>
-                        <text><xsl:value-of select="list"/></text>
-                    </block>
-                </flex-container>
-            </xsl:for-each>
-
-            <!-- Projects Section -->
-            <block style="h2">Projects</block>
-            <xsl:for-each select="projects">
-                <block margin-top="8pt">
-                    <flex-container>
-                        <block style="project-name" width="70%"><xsl:value-of select="name"/></block>
-                        <block style="job-dates" width="30%"><link href="{{url}}" style="link-color"><xsl:value-of select="url"/></link></block>
-                    </flex-container>
-                    <text margin-top="2pt"><xsl:value-of select="description"/></text>
-                </block>
-            </xsl:for-each>
-
-            <!-- Education Section -->
-            <block style="h2">Education</block>
-            <xsl:for-each select="education">
-                <flex-container style="job-header">
-                    <block width="70%">
-                        <text><strong style="job-title"><xsl:value-of select="degree"/></strong></text>
-                    </block>
-                    <block style="job-dates" width="30%"><xsl:value-of select="dates"/></block>
-                </flex-container>
-                <text margin-left="2pt"><xsl:value-of select="institution"/></text>
-            </xsl:for-each>
         </page-sequence>
     </xsl:template>
 </xsl:stylesheet>

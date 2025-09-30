@@ -52,6 +52,10 @@ pub enum JsonInstruction {
         href_template: String,
         children: Vec<JsonInstruction>,
     },
+    InlineImage {
+        styles: CompiledStyles,
+        src_template: String,
+    },
     LineBreak,
 
     // Control Flow
@@ -189,6 +193,10 @@ impl<'a> Compiler<'a> {
                 styles: self.compile_styles(&h.style_names, &h.style_override)?,
                 href_template: h.href.clone(),
                 children: self.compile_children(&h.children)?,
+            }),
+            JsonNode::InlineImage(i) => Ok(JsonInstruction::InlineImage {
+                styles: self.compile_styles(&i.style_names, &i.style_override)?,
+                src_template: i.src.clone(),
             }),
             JsonNode::LineBreak => Ok(JsonInstruction::LineBreak),
         }

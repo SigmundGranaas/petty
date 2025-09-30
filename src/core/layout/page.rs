@@ -67,19 +67,14 @@ impl<'a> Iterator for PageIterator<'a> {
         }
 
         let mut page_elements = Vec::new();
-        let mut current_y = self.margins.top;
         let mut work_was_done = false;
 
         'page_loop: loop {
-            // First, try to get a box from our pending queue. This happens when a box
-            // from the previous `next()` call caused a page break.
             let layout_box = if let Some(pending) = self.pending_boxes.pop_front() {
                 work_was_done = true;
                 pending
             } else {
-                // If the pending queue is empty, flatten the next node from the traversal stack.
                 let Some(next_box) = self.flatten_next_node() else {
-                    // Nothing left to flatten, we are completely done.
                     self.is_finished = true;
                     break 'page_loop;
                 };
@@ -87,13 +82,12 @@ impl<'a> Iterator for PageIterator<'a> {
                 next_box
             };
 
-            // Calculate the absolute Y position on the infinite page, then adjust for the current page.
             let absolute_y_infinite = layout_box.rect.y;
             let absolute_y_on_page = absolute_y_infinite + self.page_y_offset;
 
-            // Check for page break BEFORE processing the element.
-            let remaining_height = self.content_bottom_y - current_y;
-            if layout_box.rect.height > remaining_height {
+            // Page break check: Does the element's bottom edge go past the content area?
+            // Use a small epsilon to handle floating point inaccuracies.
+            if absolute_y_on_page + layout_box.rect.height > self.content_bottom_y + 0.001 {
                 let fresh_page_height = self.content_bottom_y - self.margins.top;
                 if layout_box.rect.height > fresh_page_height {
                     log::error!(
@@ -103,23 +97,21 @@ impl<'a> Iterator for PageIterator<'a> {
                     if matches!(layout_box.content, LayoutContent::Color) {
                         self.traversal_stack.pop();
                     }
-                    continue 'page_loop; // Skip and try the next element on the same page.
+                    continue 'page_loop;
                 }
 
-                // It doesn't fit here, but will on the next page.
-                // Calculate the offset required to move this element to the top of the next page.
                 let new_page_top_y = self.margins.top;
                 self.page_y_offset = new_page_top_y - absolute_y_infinite;
 
-                // Put it back in the queue and end the current page.
                 self.pending_boxes.push_front(layout_box);
-                return Some(page_elements);
+
+                if !page_elements.is_empty() {
+                    return Some(page_elements);
+                } else {
+                    continue 'page_loop;
+                }
             }
 
-            // The element fits. Update current_y watermark for the next element.
-            current_y = current_y.max(absolute_y_on_page + layout_box.rect.height);
-
-            // This box is a primitive that can be drawn.
             let positioned_el = PositionedElement {
                 x: layout_box.rect.x,
                 y: absolute_y_on_page,
@@ -147,46 +139,39 @@ impl<'a> Iterator for PageIterator<'a> {
 }
 
 impl<'a> PageIterator<'a> {
-    /// Traverses the `LayoutBox` tree and returns the next renderable (non-container) box.
-    /// It manages the traversal stack and calculates the absolute `x` and `y` positions of the box
-    /// on a single, infinitely long page.
     fn flatten_next_node(&mut self) -> Option<LayoutBox> {
         loop {
             let Some(current_level) = self.traversal_stack.last_mut() else {
-                return None; // Traversal is complete.
+                return None;
             };
 
             let Some(mut next_box) = current_level.iterator.next() else {
-                // Finished with this level's children, pop the stack.
                 self.traversal_stack.pop();
                 continue;
             };
 
-            // Calculate the absolute position for this box by adding its relative
-            // position to its parent's absolute position.
             next_box.rect.x += current_level.offset.x;
             next_box.rect.y += current_level.offset.y;
 
-            if let LayoutContent::Children(children) = next_box.content {
-                // This is a container. The offset for its children is simply its own
-                // absolute position, since the children's coordinates are already relative
-                // to its padded content box (as calculated in `layout_block`).
-                let new_offset = next_box.rect;
+            let has_visible_style = next_box.style.background_color.is_some();
 
-                self.traversal_stack.push(TraversalState {
-                    iterator: children.into_iter(),
-                    offset: new_offset,
-                });
-                // Also, if it has a background, it's a renderable item itself.
-                if next_box.style.background_color.is_some() {
-                    return Some(LayoutBox {
-                        content: LayoutContent::Color,
-                        ..next_box
+            match next_box.content {
+                LayoutContent::Children(children) => {
+                    let new_offset = next_box.rect;
+                    self.traversal_stack.push(TraversalState {
+                        iterator: children.into_iter(),
+                        offset: new_offset,
                     });
+                    if has_visible_style {
+                        return Some(LayoutBox {
+                            content: LayoutContent::Color,
+                            ..next_box
+                        });
+                    }
                 }
-            } else {
-                // This is a primitive, renderable box. Return it.
-                return Some(next_box);
+                _ => {
+                    return Some(next_box);
+                }
             }
         }
     }

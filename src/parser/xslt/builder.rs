@@ -573,9 +573,9 @@ impl<'h> TreeBuilder<'h> {
                 let style_override = styles.style_override.clone();
 
                 if matches!(self.node_stack.last(), Some(IRNode::Paragraph { .. })) {
-                    self.push_inline_to_parent(InlineNode::Image { src, style_sets, style_override, data: None });
+                    self.push_inline_to_parent(InlineNode::Image { src, style_sets, style_override });
                 } else {
-                    self.push_block_to_parent(IRNode::Image { src, style_sets, style_override, data: None });
+                    self.push_block_to_parent(IRNode::Image { src, style_sets, style_override });
                 }
             }
             b"fo:block" | b"br" => self.push_inline_to_parent(InlineNode::LineBreak),
