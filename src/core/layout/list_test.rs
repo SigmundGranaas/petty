@@ -1,3 +1,4 @@
+// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/list_test.rs
 #![cfg(test)]
 
 use super::test_utils::{
@@ -37,8 +38,8 @@ fn test_unordered_list_layout() {
     }]);
 
     let layout_unit = create_layout_unit(tree);
-    let mut page_iter = engine.paginate_tree(layout_unit).unwrap();
-    let page = page_iter.next().unwrap();
+    let mut pages = engine.paginate_tree(layout_unit).unwrap();
+    let page = pages.remove(0);
 
     // Each item produces a marker box and a text box.
     assert_eq!(page.len(), 4);
@@ -81,8 +82,8 @@ fn test_ordered_list_layout() {
     }]);
 
     let layout_unit = create_layout_unit(tree);
-    let mut page_iter = engine.paginate_tree(layout_unit).unwrap();
-    let page = page_iter.next().unwrap();
+    let mut pages = engine.paginate_tree(layout_unit).unwrap();
+    let page = pages.remove(0);
 
     assert_eq!(page.len(), 4);
     assert_eq!(get_text_content(&page[0].element), "1.");
@@ -110,26 +111,26 @@ fn test_list_pagination() {
         children,
     }]);
     let layout_unit = create_layout_unit(tree);
-    let mut page_iter = engine.paginate_tree(layout_unit).unwrap();
+    let mut pages = engine.paginate_tree(layout_unit).unwrap();
 
     // Page 1
-    let page1 = page_iter.next().unwrap();
+    let page1 = pages.remove(0);
     assert_eq!(page1.len(), 4 * 2, "Page 1 should have 4 items (8 elements)");
     assert_eq!(get_text_content(&page1[7].element), "List item 4");
 
     // Page 2
-    let page2 = page_iter.next().unwrap();
+    let page2 = pages.remove(0);
     assert_eq!(page2.len(), 4 * 2, "Page 2 should have next 4 items");
     let item5_text = &page2[1];
     assert_eq!(get_text_content(&item5_text.element), "List item 5");
     assert_eq!(item5_text.y, 10.0);
 
     // Page 3
-    let page3 = page_iter.next().unwrap();
+    let page3 = pages.remove(0);
     assert_eq!(page3.len(), 2 * 2, "Page 3 should have remaining 2 items");
     let item9_text = &page3[1];
     assert_eq!(get_text_content(&item9_text.element), "List item 9");
     assert_eq!(item9_text.y, 10.0);
 
-    assert!(page_iter.next().is_none());
+    assert!(pages.is_empty());
 }

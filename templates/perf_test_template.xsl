@@ -68,24 +68,30 @@
         <xsl:attribute name="text-align">right</xsl:attribute>
     </xsl:attribute-set>
 
-    <!-- Summary Table Styles -->
-    <xsl:attribute-set name="summary-table">
+    <!-- Summary Block Styles -->
+    <xsl:attribute-set name="summary-flex-container">
         <xsl:attribute name="margin-top">20pt</xsl:attribute>
+        <xsl:attribute name="justify-content">flex-end</xsl:attribute>
     </xsl:attribute-set>
 
     <xsl:attribute-set name="summary-label">
         <xsl:attribute name="text-align">right</xsl:attribute>
         <xsl:attribute name="padding">5pt 10pt</xsl:attribute>
         <xsl:attribute name="font-size">11pt</xsl:attribute>
+        <xsl:attribute name="font-weight">bold</xsl:attribute>
+        <xsl:attribute name="color">#555</xsl:attribute>
     </xsl:attribute-set>
 
     <xsl:attribute-set name="summary-value" use-attribute-sets="summary-label">
+        <xsl:attribute name="font-weight">normal</xsl:attribute>
         <xsl:attribute name="padding">5pt 6pt</xsl:attribute>
+        <xsl:attribute name="color">#263238</xsl:attribute>
     </xsl:attribute-set>
 
     <xsl:attribute-set name="summary-total-label" use-attribute-sets="summary-label">
         <xsl:attribute name="font-size">14pt</xsl:attribute>
         <xsl:attribute name="font-weight">bold</xsl:attribute>
+        <xsl:attribute name="color">#0D47A1</xsl:attribute>
         <xsl:attribute name="border-top">1.5pt solid #263238</xsl:attribute>
         <xsl:attribute name="padding-top">10pt</xsl:attribute>
     </xsl:attribute-set>
@@ -106,8 +112,10 @@
         <page-sequence>
             <text use-attribute-sets="page-title">Transaction Summary</text>
 
-            <!-- *** KEY FIX 1: Corrected data paths to match the JSON structure from main.rs *** -->
-            <text use-attribute-sets="account-info-text">Account: <xsl:value-of select="user/account"/></text>
+            <!-- IMPROVEMENT 1: Simplified selection paths.
+                 The custom engine handles simple paths correctly. Using "user.account" is
+                 more idiomatic for JSON and less confusing than "./user/account". -->
+            <text use-attribute-sets="account-info-text">Account: <xsl:value-of select="user.account"/></text>
 
             <text use-attribute-sets="section-title">Details</text>
 
@@ -127,7 +135,7 @@
                     </row>
                 </header>
                 <tbody>
-                    <!-- The path is now 'items' directly, not 'records/items' -->
+                    <!-- Simplified the selection path from "./items" to "items". -->
                     <xsl:for-each select="items">
                         <row>
                             <xsl:choose>
@@ -150,34 +158,35 @@
             </table>
 
             <!--
-              *** KEY FIX 2: Replaced fragile flexbox with a robust three-column table. ***
-              The first 'auto' column acts as a spacer, pushing the other two to the right.
-              This guarantees perfect alignment within the page boundaries.
+            IMPROVEMENT 2: Summary Block Layout.
+            The original used a flex-container to right-align a fixed-width (45%) block,
+            which looked awkward. This version makes the summary table a direct child of the
+            flex-container. The table's width will now be determined by its content, creating a
+            tighter, cleaner look, which is then correctly right-aligned by the flex container.
             -->
-            <table use-attribute-sets="summary-table">
-                <columns>
-                    <column width="auto"/>
-                    <column width="25%"/>
-                    <column width="20%"/>
-                </columns>
-                <tbody>
-                    <row>
-                        <cell><text/></cell> <!-- Empty spacer cell -->
-                        <cell use-attribute-sets="summary-label"><text>Subtotal:</text></cell>
-                        <cell use-attribute-sets="summary-value"><text>{{formatCurrency summary/total}}</text></cell>
-                    </row>
-                    <row>
-                        <cell><text/></cell> <!-- Empty spacer cell -->
-                        <cell use-attribute-sets="summary-label"><text>Tax (8%):</text></cell>
-                        <cell use-attribute-sets="summary-value"><text>{{formatCurrency summary/tax}}</text></cell>
-                    </row>
-                    <row>
-                        <cell><text/></cell> <!-- Empty spacer cell -->
-                        <cell use-attribute-sets="summary-total-label"><text>Grand Total:</text></cell>
-                        <cell use-attribute-sets="summary-total-value"><text>{{formatCurrency summary/grand_total}}</text></cell>
-                    </row>
-                </tbody>
-            </table>
+            <flex-container use-attribute-sets="summary-flex-container">
+                <table>
+                    <columns>
+                        <column width="auto"/>
+                        <column width="auto"/>
+                    </columns>
+                    <tbody>
+                        <row>
+                            <cell use-attribute-sets="summary-label"><text>Subtotal:</text></cell>
+                            <!-- Switched to dot notation for Handlebars, which is more standard for JSON. -->
+                            <cell use-attribute-sets="summary-value"><text>{{formatCurrency summary.total}}</text></cell>
+                        </row>
+                        <row>
+                            <cell use-attribute-sets="summary-label"><text>Tax (8%):</text></cell>
+                            <cell use-attribute-sets="summary-value"><text>{{formatCurrency summary.tax}}</text></cell>
+                        </row>
+                        <row>
+                            <cell use-attribute-sets="summary-total-label"><text>Grand Total:</text></cell>
+                            <cell use-attribute-sets="summary-total-value"><text>{{formatCurrency summary.grand_total}}</text></cell>
+                        </row>
+                    </tbody>
+                </table>
+            </flex-container>
         </page-sequence>
     </xsl:template>
 </xsl:stylesheet>

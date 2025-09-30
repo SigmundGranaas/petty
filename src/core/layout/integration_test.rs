@@ -1,142 +1,112 @@
-use super::{IRNode, LayoutBox, LayoutContent};
-use crate::core::idf::InlineNode;
-use crate::core::layout::test_utils::{create_test_engine, get_base_style};
+// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/integration_test.rs
+use crate::core::idf::{IRNode, InlineNode, LayoutUnit};
+use crate::core::layout::test_utils::{
+    create_paragraph, create_test_engine, create_test_engine_with_page,
+    find_first_text_box_with_content,
+};
 use crate::core::style::dimension::{Dimension, Margins};
 use crate::core::style::stylesheet::ElementStyle;
-
-fn find_first_text_box<'a>(layout_box: &'a LayoutBox) -> Option<&'a LayoutBox> {
-    match &layout_box.content {
-        LayoutContent::Text(..) => Some(layout_box),
-        LayoutContent::Children(children) => {
-            children.iter().find_map(find_first_text_box)
-        }
-        _ => None,
-    }
-}
+use serde_json::Value;
+use std::sync::Arc;
 
 #[test]
-fn test_subtree_nested_blocks() {
+fn test_nested_blocks_with_padding_and_margin() {
     let engine = create_test_engine();
-    let base_style = get_base_style();
-    let mut tree = IRNode::Block {
+    let tree = IRNode::Root(vec![IRNode::Block {
         style_sets: vec![],
         style_override: Some(ElementStyle {
             margin: Some(Margins { top: 5.0, ..Default::default() }),
-            padding: Some(Margins { top: 2.0, bottom: 2.0, ..Default::default() }),
+            padding: Some(Margins { top: 2.0, ..Default::default() }),
             ..Default::default()
         }),
         children: vec![IRNode::Paragraph {
             style_sets: vec![],
             style_override: Some(ElementStyle {
-                margin: Some(Margins { top: 10.0, bottom: 10.0, ..Default::default() }),
+                margin: Some(Margins { top: 10.0, ..Default::default() }),
                 ..Default::default()
             }),
             children: vec![InlineNode::Text("Hello".to_string())],
         }],
+    }]);
+
+    let layout_unit = LayoutUnit {
+        tree,
+        context: Arc::new(Value::Null),
     };
+    let pages = engine.paginate_tree(layout_unit).unwrap();
+    let page1 = &pages[0];
 
-    let layout_box = engine.build_layout_tree(&mut tree, base_style, (500.0, f32::INFINITY));
+    assert_eq!(page1.len(), 1);
+    let text_element = &page1[0];
 
-    // Expected Height Breakdown:
-    // Inner Paragraph has content height = 12.0 (one line)
-    // Inner Paragraph box height (content + padding + margin) = 12.0 + 0 + 0 + 10.0 + 10.0 = 32.0
-    // Outer Block content height = paragraph's total height = 32.0
-    // Outer Block box height = content_height(32.0) + padding(2+2) + margin(5+0) = 41.0
-    let expected_height = 41.0;
+    // Expected Y position breakdown:
+    // Page margin top: 10.0 (from default stylesheet in create_test_engine)
+    // Outer block margin top: 5.0
+    // Outer block padding top: 2.0
+    // Inner paragraph margin top: 10.0
+    // Total Y = 10.0 + 5.0 + 2.0 + 10.0 = 27.0
+    let expected_y = 27.0;
 
-    assert!((layout_box.rect.height - expected_height).abs() < 0.01);
-
-    // The layout_box itself has a `y` equal to its top margin.
-    assert!((layout_box.rect.y - 5.0).abs() < 0.01);
-
-    // Let's find the paragraph box inside.
-    let outer_block_children = match &layout_box.content {
-        LayoutContent::Children(c) => c,
-        _ => panic!("Outer block should have children"),
-    };
-    let paragraph_box = &outer_block_children[0];
-
-    // Its Y should be relative to the outer block's content area (i.e., inside padding).
-    // Y = outer_padding_top(2.0) + inner_paragraph_margin_top(10.0)
-    let expected_y = 2.0 + 10.0;
-    assert!((paragraph_box.rect.y - expected_y).abs() < 0.01);
+    assert!(
+        (text_element.y - expected_y).abs() < 0.01,
+        "Expected y={}, got {}",
+        expected_y,
+        text_element.y
+    );
 }
 
-
 #[test]
-fn test_subtree_flex_container_with_percentages() {
-    let engine = create_test_engine();
-    let base_style = get_base_style();
-    let container_width = 500.0;
-
-    let mut tree = IRNode::FlexContainer {
+fn test_flex_container_with_percentages() {
+    // Page width 520, margin 10 -> content width 500
+    let engine = create_test_engine_with_page(520.0, 500.0, 10.0);
+    let tree = IRNode::Root(vec![IRNode::FlexContainer {
         style_sets: vec![],
         style_override: None,
         children: vec![
-            IRNode::Block { // Left Column
+            IRNode::Block {
+                // Left Column
                 style_sets: vec![],
                 style_override: Some(ElementStyle {
                     width: Some(Dimension::Percent(30.0)),
-                    padding: Some(Margins { right: 10.0, ..Default::default() }),
                     ..Default::default()
                 }),
-                children: vec![
-                    IRNode::Paragraph {
-                        style_sets: vec![], style_override: None,
-                        children: vec![InlineNode::Text("Left column.".into())]
-                    }
-                ],
+                children: vec![create_paragraph("Left")],
             },
-            IRNode::Block { // Right Column
+            IRNode::Block {
+                // Right Column
                 style_sets: vec![],
                 style_override: Some(ElementStyle {
                     width: Some(Dimension::Percent(70.0)),
                     padding: Some(Margins { left: 10.0, ..Default::default() }),
                     ..Default::default()
                 }),
-                children: vec![
-                    IRNode::Paragraph {
-                        style_sets: vec![], style_override: None,
-                        children: vec![InlineNode::Text("Wider right column.".into())]
-                    }
-                ],
+                children: vec![create_paragraph("Right")],
             },
         ],
+    }]);
+
+    let layout_unit = LayoutUnit {
+        tree,
+        context: Arc::new(Value::Null),
     };
+    let pages = engine.paginate_tree(layout_unit).unwrap();
+    let page1 = &pages[0];
 
-    let layout_box = engine.build_layout_tree(&mut tree, base_style.clone(), (container_width, f32::INFINITY));
+    let left_text = find_first_text_box_with_content(page1, "Left").unwrap();
+    let right_text = find_first_text_box_with_content(page1, "Right").unwrap();
 
-    assert!(layout_box.rect.height > 0.0);
-    if let LayoutContent::Children(children) = layout_box.content {
-        assert_eq!(children.len(), 2, "Expected 2 flex items");
-        let left_item = &children[0];
-        let right_item = &children[1];
+    // Content width is 500.
+    // Left text starts at page margin
+    assert!((left_text.x - 10.0).abs() < 0.01);
 
-        // Left item should have a width of 150 (30% of 500)
-        assert!((left_item.rect.width - 150.0).abs() < 0.01, "Left item width was {}", left_item.rect.width);
-        assert_eq!(left_item.rect.x, 0.0);
-
-        // Right item should have a width of 350 (70% of 500) and start after the left one.
-        assert!((right_item.rect.width - 350.0).abs() < 0.01);
-        assert!((right_item.rect.x - 150.0).abs() < 0.01);
-
-        // --- CORRECTED TEST LOGIC ---
-        // Find the paragraph box inside the right item to check padding.
-        let paragraph_box = match &right_item.content {
-            LayoutContent::Children(item_children) => item_children.get(0).expect("Right item should have a paragraph"),
-            _ => panic!("Right item should have children"),
-        };
-
-        // The paragraph's `x` should be indented by the parent block's padding.
-        assert!((paragraph_box.rect.x - 10.0).abs() < 0.01, "Paragraph inside right item was not indented by padding. Got {}", paragraph_box.rect.x);
-
-        // Find the text box inside the paragraph.
-        let text_box = find_first_text_box(paragraph_box).unwrap();
-
-        // The text box's `x` should be 0, relative to the paragraph it's in.
-        assert!((text_box.rect.x - 0.0).abs() < 0.01, "Text inside paragraph was not at its container's origin. Got {}", text_box.rect.x);
-
-    } else {
-        panic!("Flex container should have children");
-    }
+    // Right text should start after the left block (30% of 500 = 150)
+    // plus its own block's padding (10.0).
+    // X = page_margin(10) + left_block_width(150) + right_block_padding(10)
+    let expected_right_x = 10.0 + (500.0 * 0.3) + 10.0;
+    assert!(
+        (right_text.x - expected_right_x).abs() < 0.01,
+        "Right text x was {}, expected {}",
+        right_text.x,
+        expected_right_x
+    );
 }

@@ -1,7 +1,8 @@
+// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/elements.rs
 //! Defines the concrete, drawable elements that are the output of the layout engine.
 
-use std::sync::Arc;
 use crate::core::layout::ComputedStyle;
+use std::sync::Arc;
 
 /// A simple, geometry-aware data structure representing a single drawable item.
 /// This is the final output of the layout process for a given element, containing
@@ -23,6 +24,16 @@ pub enum LayoutElement {
     Text(TextElement),
     Rectangle(RectElement),
     Image(ImageElement),
+}
+
+impl std::fmt::Display for LayoutElement {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LayoutElement::Text(t) => write!(f, "Text(\"{}\")", t.content),
+            LayoutElement::Rectangle(_) => write!(f, "Rectangle"),
+            LayoutElement::Image(i) => write!(f, "Image(src=\"{}\")", i.src),
+        }
+    }
 }
 
 /// Represents a block of text to be drawn.

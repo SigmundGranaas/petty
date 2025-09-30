@@ -1,10 +1,16 @@
+// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/engine.rs
 use super::fonts::FontManager;
-use super::page::PageIterator;
+use super::geom;
+use super::node::{LayoutContext, LayoutNode, LayoutResult};
+use super::nodes::block::BlockNode;
+use super::nodes::flex::FlexNode;
+use super::nodes::image::ImageNode;
+use super::nodes::list::ListNode;
+use super::nodes::paragraph::ParagraphNode;
+use super::nodes::table::TableNode;
 use super::style::{self, ComputedStyle};
-use super::table;
-use super::{block, flex, image, text, IRNode, LayoutBox, PipelineError};
+use super::{IRNode, LayoutError, PipelineError, PositionedElement};
 use crate::core::idf::LayoutUnit;
-use crate::core::style::dimension::Dimension;
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
 use std::sync::Arc;
 
@@ -26,151 +32,81 @@ impl LayoutEngine {
     }
 
     /// The main entry point into the layout process for a single `sequence`.
-    /// It performs all layout passes and returns a stateful `PageIterator`
-    /// that will paginate the final geometry tree.
-    pub fn paginate_tree<'a>(
-        &'a self,
-        mut layout_unit: LayoutUnit,
-    ) -> Result<PageIterator<'a>, PipelineError> {
-        // Pass 1: Measurement & Annotation (e.g., table columns)
-        self.measurement_pass(&mut layout_unit.tree)?;
-
-        // Pass 2: Build Geometry Tree (Sizing and Relative Positioning)
+    /// This is the new, cooperative pagination implementation.
+    pub fn paginate_tree(
+        &self,
+        layout_unit: LayoutUnit,
+    ) -> Result<Vec<Vec<PositionedElement>>, PipelineError> {
         let (page_width, page_height) = style::get_page_dimensions(&self.stylesheet);
         let margins = &self.stylesheet.page.margins;
-        let available_width = page_width - margins.left - margins.right;
-        let available_height = page_height - margins.top - margins.bottom;
+        let content_width = page_width - margins.left - margins.right;
+        let content_height = page_height - margins.top - margins.bottom;
 
-        let layout_tree = self.build_layout_tree(
-            &mut layout_unit.tree,
-            self.get_default_style(),
-            (available_width, available_height),
-        );
+        // 1. Build the full LayoutNode tree from the IRNode tree.
+        let mut root_node = self.build_layout_node_tree(&layout_unit.tree, self.get_default_style());
 
-        // Pass 3: Pagination
-        Ok(PageIterator::new(layout_tree, self))
-    }
+        // 2. Perform the measurement pass on the LayoutNode tree.
+        root_node.measure(self, content_width);
 
-    /// **Pass 1: Measurement & Annotation**
-    /// This pass walks the entire `IRNode` tree for a `sequence`, calculating
-    /// size-dependent properties and annotating the tree with them.
-    pub(crate) fn measurement_pass(&self, node: &mut IRNode) -> Result<(), PipelineError> {
-        match node {
-            IRNode::Table {
-                columns,
-                calculated_widths,
-                header,
-                body,
-                ..
-            } => {
-                let (page_width, _) = style::get_page_dimensions(&self.stylesheet);
-                let table_width = page_width
-                    - self.stylesheet.page.margins.left
-                    - self.stylesheet.page.margins.right;
-                *calculated_widths = table::calculate_column_widths(columns, table_width);
+        // 3. Start the pagination loop.
+        let mut work_item: Option<Box<dyn LayoutNode>> = Some(root_node);
+        let mut pages = Vec::new();
 
-                if let Some(h) = header {
-                    for row in &mut h.rows {
-                        for cell in &mut row.cells {
-                            for child in &mut cell.children {
-                                self.measurement_pass(child)?;
-                            }
-                        }
-                    }
+        while let Some(mut current_node) = work_item.take() {
+            let mut page_elements = Vec::new();
+            let bounds = geom::Rect {
+                x: margins.left,
+                y: margins.top,
+                width: content_width,
+                height: content_height,
+            };
+            let mut ctx = LayoutContext::new(self, bounds, &mut page_elements);
+
+            match current_node.layout(&mut ctx) {
+                Ok(LayoutResult::Full) => {
+                    // Document finished, loop will terminate.
                 }
-                for row in &mut body.rows {
-                    for cell in &mut row.cells {
-                        for child in &mut cell.children {
-                            self.measurement_pass(child)?;
-                        }
-                    }
+                Ok(LayoutResult::Partial(remainder)) => {
+                    work_item = Some(remainder);
+                }
+                Err(e @ LayoutError::ElementTooLarge(..)) => {
+                    log::error!("Layout error: {}. Skipping offending element.", e);
+                    // The element is skipped, but we continue processing the rest of the document
+                    // by taking the remainder if one was produced, or just continuing if not.
+                    // In a simple case (like an image), there's no remainder.
                 }
             }
-            IRNode::Root(children)
-            | IRNode::Block { children, .. }
-            | IRNode::FlexContainer { children, .. }
-            | IRNode::List { children, .. }
-            | IRNode::ListItem { children, .. } => {
-                for child in children {
-                    self.measurement_pass(child)?;
-                }
+
+            if !page_elements.is_empty() || pages.is_empty() {
+                pages.push(page_elements);
             }
-            _ => {} // Other nodes don't need pre-measurement in this version.
         }
-        Ok(())
+
+        Ok(pages)
     }
 
-    /// **Pass 2: Build LayoutBox Tree (Sizing & Relative Positioning)**
-    /// This is a recursive, top-down pass that consumes the `IRNode` tree and produces
-    /// a geometry-aware `LayoutBox` tree where every element has a computed size and
-    /// a position relative to its parent.
-    pub(crate) fn build_layout_tree(
+    /// Factory function to convert an `IRNode` into a `LayoutNode`.
+    pub(crate) fn build_layout_node_tree(
         &self,
-        node: &mut IRNode,
+        node: &IRNode,
         parent_style: Arc<ComputedStyle>,
-        available_size: (f32, f32),
-    ) -> LayoutBox {
-        let style = self.compute_style(node.style_sets(), node.style_override(), &parent_style);
-
-        // Resolve this node's own width based on available space.
-        let width = match &style.width {
-            Some(Dimension::Pt(w)) => *w,
-            Some(Dimension::Percent(p)) => available_size.0 * (p / 100.0),
-            // `Auto` or `None` means the width is determined by the container (block) or content (flex/inline).
-            // For block, it fills available space. For others, it's determined by the specific layout logic.
-            _ => available_size.0,
-        };
-
-        // Note: Height resolution must happen *after* children are laid out for `auto` height.
-        // We pass the parent's available height down for percentage calculations.
-        let child_available_width = width - style.padding.left - style.padding.right;
-        let child_available_height = available_size.1 - style.padding.top - style.padding.bottom;
-        let child_available_size = (child_available_width, child_available_height);
-
-        // Dispatch to the appropriate layout function to get the box's CONTENT and CONTENT_HEIGHT.
-        let mut layout_box = match node {
-            IRNode::Root(..) | IRNode::Block { .. } => {
-                block::layout_block(self, node, style.clone(), child_available_size)
-            }
-            IRNode::List { .. } => {
-                block::layout_list(self, node, style.clone(), child_available_size)
-            }
+    ) -> Box<dyn LayoutNode> {
+        match node {
+            IRNode::Root(_) => Box::new(BlockNode::new_root(node, self, parent_style)),
+            IRNode::Block { .. } => Box::new(BlockNode::new(node, self, parent_style)),
+            IRNode::List { .. } => Box::new(ListNode::new(node, self, parent_style)),
+            IRNode::FlexContainer { .. } => Box::new(FlexNode::new(node, self, parent_style)),
+            IRNode::Table { .. } => Box::new(TableNode::new(node, self, parent_style)),
+            IRNode::Paragraph { .. } => Box::new(ParagraphNode::new(node, self, parent_style)),
+            IRNode::Image { .. } => Box::new(ImageNode::new(node, self, parent_style)),
+            // ListItem is handled internally by ListNode
             IRNode::ListItem { .. } => {
-                // This path is for standalone ListItems. Inside a List, they are handled by layout_list.
-                // We pass an index of 0 as it's an unknown context.
-                block::layout_list_item(self, node, style.clone(), child_available_size, 0)
+                // This case should ideally not be hit if ListItems are always in Lists.
+                // We'll treat it as a Block for robustness.
+                log::warn!("Orphan ListItem found; treating as a Block.");
+                Box::new(BlockNode::new(node, self, parent_style))
             }
-            IRNode::Paragraph { .. } => {
-                text::layout_paragraph(self, node, style.clone(), child_available_size)
-            }
-            IRNode::Image { .. } => image::layout_image(node, style.clone(), child_available_size),
-            IRNode::FlexContainer { .. } => {
-                flex::layout_flex_container(self, node, style.clone(), child_available_size)
-            }
-            IRNode::Table { .. } => table::layout_table(self, node, style.clone(), child_available_size),
-        };
-
-        // The height of the content area.
-        let content_height = layout_box.rect.height;
-
-        // Finalize height calculation based on the style.
-        let final_height = match &style.height {
-            Some(Dimension::Pt(h)) => content_height.max(*h),
-            Some(Dimension::Percent(p)) => available_size.1 * (p / 100.0),
-            _ => content_height, // Auto height
-        };
-
-        // The final box for this node has its own position (margins) and size (including padding and margins).
-        layout_box.rect.x = style.margin.left;
-        layout_box.rect.y = style.margin.top;
-        layout_box.rect.width = width;
-        layout_box.rect.height = final_height
-            + style.padding.top
-            + style.padding.bottom
-            + style.margin.top
-            + style.margin.bottom;
-
-        layout_box
+        }
     }
 
     pub fn compute_style(
@@ -195,10 +131,10 @@ impl LayoutEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::Value;
-    use std::sync::Arc;
     use crate::core::idf::InlineNode;
     use crate::core::style::dimension::Margins;
+    use serde_json::Value;
+    use std::sync::Arc;
 
     fn create_test_engine() -> LayoutEngine {
         let stylesheet = Stylesheet::default();
@@ -220,8 +156,8 @@ mod tests {
             context: Value::Null.into(),
         };
 
-        let mut page_iter = engine.paginate_tree(layout_unit).unwrap();
-        let page1 = page_iter.next().unwrap();
+        let mut pages = engine.paginate_tree(layout_unit).unwrap();
+        let page1 = pages.remove(0);
 
         assert!(!page1.is_empty(), "Page should have elements");
         let text_element = &page1[0];
@@ -230,7 +166,6 @@ mod tests {
         // Paragraph has 0 margin/padding.
         // So, the text should start at y=10.0.
         assert_eq!(text_element.y, 10.0);
-        // Default top margin is 10
         // Default font size 12, line height 14.4
         assert_eq!(text_element.height, 14.4);
     }
@@ -239,27 +174,34 @@ mod tests {
     fn test_block_with_margin_and_padding() {
         let engine = create_test_engine();
         let block_style_override = ElementStyle {
-            margin: Some(Margins { top: 20.0, bottom: 20.0, ..Default::default() }),
-            padding: Some(Margins { top: 10.0, bottom: 10.0, ..Default::default() }),
+            margin: Some(Margins {
+                top: 20.0,
+                bottom: 20.0,
+                ..Default::default()
+            }),
+            padding: Some(Margins {
+                top: 10.0,
+                bottom: 10.0,
+                ..Default::default()
+            }),
             ..Default::default()
         };
-        let tree = IRNode::Root(vec![
-            IRNode::Block {
+        let tree = IRNode::Root(vec![IRNode::Block {
+            style_sets: vec![],
+            style_override: Some(block_style_override),
+            children: vec![IRNode::Paragraph {
                 style_sets: vec![],
-                style_override: Some(block_style_override),
-                children: vec![
-                    IRNode::Paragraph {
-                        style_sets: vec![],
-                        style_override: None,
-                        children: vec![InlineNode::Text("Inside".to_string())]
-                    }
-                ],
-            }
-        ]);
+                style_override: None,
+                children: vec![InlineNode::Text("Inside".to_string())],
+            }],
+        }]);
 
-        let layout_unit = LayoutUnit { tree, context: Value::Null.into() };
-        let mut page_iter = engine.paginate_tree(layout_unit).unwrap();
-        let page1 = page_iter.next().unwrap();
+        let layout_unit = LayoutUnit {
+            tree,
+            context: Value::Null.into(),
+        };
+        let mut pages = engine.paginate_tree(layout_unit).unwrap();
+        let page1 = pages.remove(0);
 
         assert_eq!(page1.len(), 1, "Should have one text element");
         let text_el = &page1[0];

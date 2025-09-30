@@ -329,7 +329,6 @@ impl<'h, 's> TemplateExecutor<'h, 's> {
             style_sets,
             style_override: table.styles.style_override.clone(),
             columns: table.columns.clone(),
-            calculated_widths: vec![],
             header,
             body,
         };

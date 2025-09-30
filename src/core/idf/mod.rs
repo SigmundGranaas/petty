@@ -109,8 +109,6 @@ pub enum IRNode {
         style_sets: Vec<Arc<ElementStyle>>,
         style_override: Option<ElementStyle>,
         columns: Vec<TableColumnDefinition>,
-        /// This field is populated by the Layout Engine's measurement pass.
-        calculated_widths: Vec<f32>,
         header: Option<Box<TableHeader>>,
         body: Box<TableBody>,
     },

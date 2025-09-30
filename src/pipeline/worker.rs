@@ -1,3 +1,4 @@
+// FILE: /home/sigmund/RustroverProjects/petty/src/pipeline/worker.rs
 use crate::error::PipelineError;
 use log::{debug, info};
 use serde_json::Value;
@@ -62,7 +63,7 @@ pub(super) fn finish_layout_and_resource_loading(
 
     let layout_start = Instant::now();
     debug!("[WORKER-{}] Paginating sequence tree.", worker_id);
-    let pages: Vec<Vec<PositionedElement>> = layout_engine.paginate_tree(layout_unit)?.collect();
+    let pages: Vec<Vec<PositionedElement>> = layout_engine.paginate_tree(layout_unit)?;
     debug!(
         "[WORKER-{}] Finished paginating sequence ({} pages) in {:.2?}.",
         worker_id,

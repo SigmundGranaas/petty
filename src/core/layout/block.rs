@@ -1,6 +1,5 @@
 use super::style::ComputedStyle;
 use super::{IRNode, LayoutBox, LayoutContent, LayoutEngine, Rect};
-use crate::core::style::list::ListStyleType;
 use std::sync::Arc;
 
 /// Lays out a standard block container by recursively laying out its children

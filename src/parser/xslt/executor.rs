@@ -398,7 +398,6 @@ impl<'h> TemplateExecutor<'h> {
                     header_style: c.header_style.clone(),
                 })
                 .collect(),
-            calculated_widths: Vec::new(),
             header: if header_template.is_some() {
                 Some(Box::new(TableHeader { rows: vec![] }))
             } else {
