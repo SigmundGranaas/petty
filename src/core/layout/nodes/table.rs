@@ -5,6 +5,7 @@ use crate::core::layout::nodes::block::BlockNode;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{geom, LayoutEngine, LayoutError, PositionedElement};
 use crate::core::style::dimension::Dimension;
+use std::any::Any;
 use std::sync::Arc;
 
 // --- Main Table Node ---
@@ -20,9 +21,7 @@ pub struct TableNode {
 impl TableNode {
     pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Self {
         let (columns, header, body) = match node {
-            IRNode::Table {
-                columns, header, body, ..
-            } => (columns, header, body),
+            IRNode::Table { columns, header, body, .. } => (columns, header, body),
             _ => panic!("TableNode must be created from IRNode::Table"),
         };
 
@@ -30,17 +29,9 @@ impl TableNode {
 
         let mut rows = Vec::new();
         if let Some(h) = header {
-            rows.extend(
-                h.rows
-                    .iter()
-                    .map(|r| TableRowNode::new(r, &style, engine)),
-            );
+            rows.extend(h.rows.iter().map(|r| TableRowNode::new(r, &style, engine)));
         }
-        rows.extend(
-            body.rows
-                .iter()
-                .map(|r| TableRowNode::new(r, &style, engine)),
-        );
+        rows.extend(body.rows.iter().map(|r| TableRowNode::new(r, &style, engine)));
 
         Self {
             rows,
@@ -54,6 +45,10 @@ impl TableNode {
 impl LayoutNode for TableNode {
     fn style(&self) -> &Arc<ComputedStyle> {
         &self.style
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 
     fn measure(&mut self, engine: &LayoutEngine, available_width: f32) {
@@ -102,11 +97,7 @@ pub struct TableRowNode {
 
 impl TableRowNode {
     fn new(row: &TableRow, style: &Arc<ComputedStyle>, engine: &LayoutEngine) -> Self {
-        let cells = row
-            .cells
-            .iter()
-            .map(|c| TableCellNode::new(c, style, engine))
-            .collect();
+        let cells = row.cells.iter().map(|c| TableCellNode::new(c, style, engine)).collect();
         Self {
             cells,
             height: 0.0,
@@ -160,8 +151,7 @@ struct TableCellNode {
 
 impl TableCellNode {
     fn new(cell: &crate::core::idf::TableCell, style: &Arc<ComputedStyle>, engine: &LayoutEngine) -> Self {
-        let cell_style =
-            engine.compute_style(&cell.style_sets, cell.style_override.as_ref(), style);
+        let cell_style = engine.compute_style(&cell.style_sets, cell.style_override.as_ref(), style);
         let children = cell
             .children
             .iter()

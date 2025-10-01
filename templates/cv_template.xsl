@@ -14,6 +14,7 @@
     <xsl:attribute-set name="job-title"><xsl:attribute name="font-weight">bold</xsl:attribute></xsl:attribute-set>
     <xsl:attribute-set name="job-dates"><xsl:attribute name="text-align">right</xsl:attribute><xsl:attribute name="color">#666</xsl:attribute></xsl:attribute-set>
     <xsl:attribute-set name="list"><xsl:attribute name="margin-left">15pt</xsl:attribute><xsl:attribute name="margin-top">6pt</xsl:attribute></xsl:attribute-set>
+    <xsl:attribute-set name="list-item"><xsl:attribute name="margin-top">6pt</xsl:attribute></xsl:attribute-set>
     <xsl:attribute-set name="skill-category"><xsl:attribute name="font-weight">bold</xsl:attribute><xsl:attribute name="width">120pt</xsl:attribute></xsl:attribute-set>
     <xsl:attribute-set name="project-name"><xsl:attribute name="font-weight">bold</xsl:attribute><xsl:attribute name="font-size">11pt</xsl:attribute></xsl:attribute-set>
 
@@ -56,7 +57,7 @@
                 </flex-container>
                 <list style="list">
                     <xsl:for-each select="responsibilities">
-                        <list-item><text><xsl:value-of select="."/></text></list-item>
+                        <list-item margin-bottom="4pt"><text><xsl:value-of select="."/></text></list-item>
                     </xsl:for-each>
                 </list>
             </xsl:for-each>
@@ -95,7 +96,7 @@
                     </block>
                     <block style="job-dates" width="30%"><xsl:value-of select="dates"/></block>
                 </flex-container>
-                <text margin-left="2pt"><xsl:value-of select="institution"/></text>
+                <text margin-left="2pt" margin-top="4pt" margin-bottom="4pt"><xsl:value-of select="institution"/></text>
             </xsl:for-each>
         </page-sequence>
     </xsl:template>

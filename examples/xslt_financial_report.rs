@@ -15,12 +15,12 @@ fn main() -> Result<(), PipelineError> {
     println!("✓ Using template: {}", template_path);
 
     let data_json_str = fs::read_to_string("data/financial_report_data.json")?;
-    let data_json: Value = from_str(&data_json_str)?;
+    let data_json: Value = from_str(&data_json_str).unwrap();
     println!("✓ Data loaded.");
 
     // Build the pipeline from the XSLT template file.
     let pipeline = PipelineBuilder::new()
-        .with_xslt_template_file(template_path)?
+        .with_template_file(template_path)?
         .build()?;
     println!("✓ Pipeline built with XSLT engine.");
 

@@ -1,54 +1,94 @@
-//! The main public entry point for the JSON parser module.
-//! It orchestrates the compile and execute phases.
+// FILE: /home/sigmund/RustroverProjects/petty/src/parser/json/processor.rs
+//! Implements the public interface for the JSON parser, conforming to the
+//! `TemplateParser` and `CompiledTemplate` traits.
 
 use super::ast::JsonTemplateFile;
-use super::compiler::Compiler;
+use super::compiler::{Compiler, JsonInstruction};
 use super::executor::TemplateExecutor;
 use crate::core::idf::IRNode;
 use crate::core::style::stylesheet::Stylesheet;
+use crate::error::PipelineError;
+use crate::parser::processor::{CompiledTemplate, TemplateParser};
 use crate::parser::ParseError;
 use handlebars::Handlebars;
 use serde_json::Value;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
-/// Processes a JSON template against a data context to produce an `IRNode` tree.
-pub struct JsonProcessor<'h> {
-    template_content: &'h str,
-    handlebars: &'h Handlebars<'h>,
+// --- The Compiled Artifact ---
+
+#[derive(Debug)]
+pub struct CompiledJsonTemplate {
+    instructions: Vec<JsonInstruction>,
+    definitions: HashMap<String, Vec<JsonInstruction>>,
+    stylesheet: Stylesheet,
+    resource_base_path: PathBuf,
+    handlebars: Handlebars<'static>,
 }
 
-impl<'h> JsonProcessor<'h> {
-    pub fn new(template_content: &'h str, handlebars: &'h Handlebars<'h>) -> Self {
-        Self {
-            template_content,
-            handlebars,
+impl CompiledTemplate for CompiledJsonTemplate {
+    fn execute(&self, data: &Value) -> Result<Vec<IRNode>, PipelineError> {
+        let mut executor = TemplateExecutor::new(&self.handlebars, &self.stylesheet, &self.definitions);
+        let ir_nodes = executor.build_tree(&self.instructions, data)?;
+        Ok(ir_nodes)
+    }
+
+    fn stylesheet(&self) -> &Stylesheet {
+        &self.stylesheet
+    }
+
+    fn resource_base_path(&self) -> &Path {
+        &self.resource_base_path
+    }
+}
+
+// --- The Parser ---
+
+pub struct JsonParser;
+
+impl TemplateParser for JsonParser {
+    fn parse(&self, template_source: &str, resource_base_path: PathBuf) -> Result<Arc<dyn CompiledTemplate>, ParseError> {
+        // Phase 1: Deserialize the raw JSON string into our AST.
+        let template_file: JsonTemplateFile = serde_json::from_str(template_source)?;
+        let mut stylesheet = Stylesheet::from(template_file._stylesheet.clone());
+
+        // If a default master isn't set, pick the first one found.
+        if stylesheet.default_page_master_name.is_none() {
+            stylesheet.default_page_master_name = stylesheet.page_masters.keys().next().cloned();
         }
-    }
 
-    /// Builds the `IRNode` tree by running the full compile-execute pipeline.
-    pub fn build_tree(&self, context: &Value) -> Result<Vec<IRNode>, ParseError> {
-        // --- Phase 1: Parse & Compile ---
+        // Phase 2: Pre-compile all template definitions (partials).
+        let empty_defs = HashMap::new(); // Cannot refer to other defs
+        let def_compiler = Compiler::new(&stylesheet, &empty_defs);
 
-        // Use Serde to parse the raw JSON string into our initial AST.
-        let template_file: JsonTemplateFile = serde_json::from_str(self.template_content)?;
-        let stylesheet = Stylesheet::from(template_file._stylesheet);
+        let compiled_definitions: HashMap<String, Vec<JsonInstruction>> = template_file
+            ._stylesheet
+            .definitions
+            .iter()
+            .map(|(name, node)| def_compiler.compile(node).map(|instr| (name.clone(), instr)))
+            .collect::<Result<_, _>>()?;
 
-        // Compile the Serde AST into a validated, executable instruction set.
-        // This is where style names are resolved and the template structure is verified.
-        let compiler = Compiler::new(&stylesheet);
-        let instructions = compiler.compile(&template_file._template)?;
+        // Phase 3: Compile the main template body, providing the compiled definitions for validation.
+        let main_compiler = Compiler::new(&stylesheet, &compiled_definitions);
+        let main_instructions = main_compiler.compile(&template_file._template)?;
 
-        // --- Phase 2: Execute ---
+        // Phase 4: Construct the final compiled artifact.
+        let mut handlebars = Handlebars::new();
+        handlebars.set_strict_mode(false);
 
-        // Execute the compiled instructions against the provided data context.
-        // This is where Handlebars expressions are rendered and control flow is executed.
-        let mut executor = TemplateExecutor::new(self.handlebars, &stylesheet);
-        executor.build_tree(&instructions, context)
+        let compiled_template = CompiledJsonTemplate {
+            instructions: main_instructions,
+            definitions: compiled_definitions,
+            stylesheet,
+            resource_base_path,
+            handlebars,
+        };
+
+        Ok(Arc::new(compiled_template))
     }
 }
 
-// NOTE: The `compiler` for the JSON format now produces a `ParseError::TemplateParse` on
-// a missing style. This is a breaking change for the test case, which needs to be
-// updated to handle the richer error type. The tests remain functionally the same.
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -58,10 +98,14 @@ mod tests {
         r#"
         {
           "_stylesheet": {
+            "pageMasters": {
+              "main": { "size": "A4" }
+            },
             "styles": {
               "title": { "fontSize": 18.0, "fontWeight": "bold" },
               "item_para": { "margin": "4pt" }
-            }
+            },
+            "definitions": {}
           },
           "_template": {
             "type": "Block",
@@ -77,28 +121,34 @@ mod tests {
 
     #[test]
     fn test_full_pipeline_premium_customer() {
-        let handlebars = Handlebars::new();
-        let processor = JsonProcessor::new(get_test_template(), &handlebars);
+        let parser = JsonParser;
+        let compiled_template = parser.parse(get_test_template(), PathBuf::new()).unwrap();
         let data = json!({
             "customer": { "name": "Acme Inc.", "is_premium": true },
             "products": [ { "name": "Anvil", "price": 100 }, { "name": "Rocket", "price": 5000 } ]
         });
 
-        let tree = processor.build_tree(&data).unwrap();
+        let tree = compiled_template.execute(&data).unwrap();
         // The root is not part of the children count from build_tree
         assert_eq!(tree.len(), 1);
-        let root_children = match &tree[0] { IRNode::Block { children, .. } => children, _ => panic!() };
+        let root_children = match &tree[0] {
+            IRNode::Block { children, .. } => children,
+            _ => panic!(),
+        };
         // Title para, premium para, 2x product para = 4 children
         assert_eq!(root_children.len(), 4);
     }
 
     #[test]
     fn test_full_pipeline_non_premium_customer() {
-        let handlebars = Handlebars::new();
-        let processor = JsonProcessor::new(get_test_template(), &handlebars);
+        let parser = JsonParser;
+        let compiled_template = parser.parse(get_test_template(), PathBuf::new()).unwrap();
         let data = json!({ "customer": { "name": "Contoso", "is_premium": false }, "products": [] });
-        let tree = processor.build_tree(&data).unwrap();
-        let root_children = match &tree[0] { IRNode::Block { children, .. } => children, _ => panic!() };
+        let tree = compiled_template.execute(&data).unwrap();
+        let root_children = match &tree[0] {
+            IRNode::Block { children, .. } => children,
+            _ => panic!(),
+        };
         // Just the title para
         assert_eq!(root_children.len(), 1);
     }

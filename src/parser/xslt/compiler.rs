@@ -1,17 +1,16 @@
-use super::ast::{
-    CompiledStylesheet, PreparsedStyles, PreparsedTemplate, TableColumnDefinition, TemplateRule,
-    WithParam, XsltInstruction,
-};
+use super::ast::{CompiledStylesheet, PreparsedStyles, PreparsedTemplate, TemplateRule, WithParam, XsltInstruction};
 use super::util::{get_attr_owned_optional, get_attr_owned_required, get_line_col_from_pos, get_owned_attributes, OwnedAttributes};
-use crate::core::idf::TableColumnDefinition as IRTableColumnDef;
+use crate::core::style::dimension::Dimension;
 use crate::core::style::stylesheet::ElementStyle;
-use crate::parser::stylesheet_parser::XsltParser;
+use crate::parser::stylesheet_parser;
 use crate::parser::{style, style_parsers, Location, ParseError};
 use crate::xpath;
+use handlebars::Handlebars;
 use quick_xml::events::{BytesStart, Event as XmlEvent};
 use quick_xml::name::QName;
 use quick_xml::Reader;
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// A stateful compiler that transforms an XSLT string into a `PreparsedTemplate` AST.
@@ -28,26 +27,27 @@ fn get_supported_tags() -> HashSet<&'static str> {
         "columns", "column", "fo:table-column",
         // Inline elements
         "text", "span", "fo:inline", "strong", "b", "em", "i", "link", "fo:basic-link", "image", "fo:external-graphic", "br",
-    ].into()
+        // Custom control tags
+        "page-break",
+    ]
+        .into()
 }
 
 impl Compiler {
     /// The main entry point for compiling an XSLT string. It performs a single pass,
     /// extracting styles and all templates into a structured `CompiledStylesheet`.
-    pub fn compile(full_xslt_str: &str) -> Result<CompiledStylesheet, ParseError> {
-        // STEP 1: Use the robust XsltParser to extract all stylesheet definitions (styles, page layout).
-        let stylesheet_defs = XsltParser::new(full_xslt_str).parse()?;
+    pub fn compile(full_xslt_str: &str, resource_base_path: PathBuf) -> Result<CompiledStylesheet, ParseError> {
+        // STEP 1: Use the robust XsltParser to extract all stylesheet definitions (styles, page masters).
+        let stylesheet = stylesheet_parser::XsltParser::new(full_xslt_str).parse()?;
 
         // STEP 2: Now, parse only the template rules, using the styles we just extracted.
         let mut reader = Reader::from_str(full_xslt_str);
         reader.config_mut().trim_text(false);
         let mut buf = Vec::new();
 
-        let mut compiled_stylesheet = CompiledStylesheet {
-            page: stylesheet_defs.page,
-            styles: stylesheet_defs.styles,
-            ..Default::default()
-        };
+        let mut root_template = None;
+        let mut template_rules: HashMap<Option<String>, Vec<TemplateRule>> = HashMap::new();
+        let mut named_templates = HashMap::new();
 
         loop {
             let pos = reader.buffer_position() as u64;
@@ -55,9 +55,9 @@ impl Compiler {
                 XmlEvent::Start(e) if e.name().as_ref() == b"xsl:template" => {
                     let attributes = get_owned_attributes(&e)?;
                     if let Some(match_attr) = get_attr_owned_optional(&attributes, b"match")? {
-                        let body = Self::compile_body(&mut reader, e.name(), &compiled_stylesheet.styles, full_xslt_str)?;
+                        let body = Self::compile_body(&mut reader, e.name(), &stylesheet.styles, full_xslt_str)?;
                         if match_attr == "/" {
-                            compiled_stylesheet.root_template = Some(body);
+                            root_template = Some(body);
                         } else {
                             let mode = get_attr_owned_optional(&attributes, b"mode")?;
                             let priority = get_attr_owned_optional(&attributes, b"priority")?
@@ -70,11 +70,11 @@ impl Compiler {
                                 .unwrap_or_else(|| Self::calculate_default_priority(&match_attr));
 
                             let rule = TemplateRule { match_pattern: match_attr, priority, mode: mode.clone(), body };
-                            compiled_stylesheet.template_rules.entry(mode).or_default().push(rule);
+                            template_rules.entry(mode).or_default().push(rule);
                         }
                     } else if let Some(name) = get_attr_owned_optional(&attributes, b"name")? {
-                        let body = Self::compile_body(&mut reader, e.name(), &compiled_stylesheet.styles, full_xslt_str)?;
-                        compiled_stylesheet.named_templates.insert(name, body);
+                        let body = Self::compile_body(&mut reader, e.name(), &stylesheet.styles, full_xslt_str)?;
+                        named_templates.insert(name, body);
                     }
                 }
                 XmlEvent::Eof => break,
@@ -83,19 +83,29 @@ impl Compiler {
             buf.clear();
         }
 
-        if compiled_stylesheet.root_template.is_none() {
+        if root_template.is_none() {
             return Err(ParseError::TemplateStructure {
                 message: "Could not find root <xsl:template match=\"/\">. This is required.".to_string(),
-                location: Location { line: 0, col: 0 }, // Can't know location of a missing element
+                location: Location { line: 0, col: 0 },
             });
         }
 
         // Sort all rule sets by priority (highest first)
-        for rules in compiled_stylesheet.template_rules.values_mut() {
+        for rules in template_rules.values_mut() {
             rules.sort_by(|a, b| b.priority.partial_cmp(&a.priority).unwrap_or(std::cmp::Ordering::Equal));
         }
 
-        Ok(compiled_stylesheet)
+        let mut handlebars = Handlebars::new();
+        handlebars.set_strict_mode(false);
+
+        Ok(CompiledStylesheet {
+            stylesheet,
+            root_template,
+            template_rules,
+            named_templates,
+            resource_base_path,
+            handlebars,
+        })
     }
 
     /// Calculates the default priority of a match pattern based on its specificity.
@@ -221,6 +231,10 @@ impl Compiler {
                 Ok(XsltInstruction::ApplyTemplates { select, mode })
             }
             b"xsl:with-param" | b"xsl:param" => Ok(XsltInstruction::Text("".into())),
+            b"page-break" => {
+                let master_name = get_attr_owned_optional(&attributes, b"master-name")?;
+                Ok(XsltInstruction::PageBreak { master_name })
+            }
             _ => {
                 let preparsed_styles = Self::resolve_styles(&attributes, styles, location)?;
                 let attrs = Self::get_non_style_attributes(&attributes)?;
@@ -246,7 +260,6 @@ impl Compiler {
                     let select_str = get_attr_owned_required(&attrs, b"select", b"xsl:with-param", pos as usize, full_xslt_str)?;
                     params.push(WithParam { name, select: xpath::parse_selection(&select_str)? });
 
-                    // Correctly check if it's a start tag before skipping to end
                     let event_owned = e.to_owned();
                     if event_owned.name() == e.name() && !e.is_empty() {
                         reader.read_to_end_into(e.name(), &mut Vec::new())?;
@@ -349,23 +362,20 @@ impl Compiler {
     }
 
     /// Compiles the contents of a `<columns>` tag.
-    fn compile_columns(reader: &mut Reader<&[u8]>, end_qname: QName) -> Result<Vec<TableColumnDefinition>, ParseError> {
+    fn compile_columns(reader: &mut Reader<&[u8]>, end_qname: QName) -> Result<Vec<Dimension>, ParseError> {
         let mut columns = Vec::new();
         let mut buf = Vec::new();
         loop {
             match reader.read_event_into(&mut buf)? {
                 XmlEvent::Empty(e) if e.name().as_ref() == b"column" || e.name().as_ref() == b"fo:table-column" => {
-                    let mut col = IRTableColumnDef::default();
                     for attr in e.attributes().flatten() {
                         let value = attr.decode_and_unescape_value(reader.decoder())?;
-                        match attr.key.as_ref() {
-                            b"column-width" | b"width" => col.width = style_parsers::run_parser(style_parsers::parse_dimension, &value).ok(),
-                            b"header-style" => col.header_style = Some(value.into_owned()),
-                            b"style" => col.style = Some(value.into_owned()),
-                            _ => {}
+                        if attr.key.as_ref() == b"column-width" || attr.key.as_ref() == b"width" {
+                            if let Ok(dim) = style_parsers::run_parser(style_parsers::parse_dimension, &value) {
+                                columns.push(dim);
+                            }
                         }
                     }
-                    columns.push(TableColumnDefinition { width: col.width, style: col.style, header_style: col.header_style });
                 }
                 XmlEvent::End(e) if e.name() == end_qname => break,
                 _ => {}

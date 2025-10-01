@@ -1,18 +1,30 @@
 // FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/block_test.rs
 #![cfg(test)]
 
-use crate::core::idf::{IRNode, LayoutUnit};
-use crate::core::layout::test_utils::{
-    create_paragraph, create_test_engine_with_page, find_first_text_box_with_content,
-};
-use crate::core::style::dimension::Margins;
-use crate::core::style::stylesheet::ElementStyle;
-use serde_json::Value;
-use std::sync::Arc;
+use crate::core::idf::IRNode;
+use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
+use crate::core::style::dimension::{Margins, PageSize};
+use crate::core::style::stylesheet::{ElementStyle, PageLayout, Stylesheet};
+use std::collections::HashMap;
 
 #[test]
 fn test_block_with_padding_indents_child() {
-    let engine = create_test_engine_with_page(500.0, 500.0, 10.0);
+    let stylesheet = Stylesheet {
+        page_masters: HashMap::from([(
+            "master".to_string(),
+            PageLayout {
+                size: PageSize::Custom {
+                    width: 500.0,
+                    height: 500.0,
+                },
+                margins: Some(Margins::all(10.0)),
+                ..Default::default()
+            },
+        )]),
+        default_page_master_name: Some("master".to_string()),
+        ..Default::default()
+    };
+
     let block_style = ElementStyle {
         padding: Some(Margins {
             left: 25.0,
@@ -20,17 +32,13 @@ fn test_block_with_padding_indents_child() {
         }),
         ..Default::default()
     };
-    let tree = IRNode::Root(vec![IRNode::Block {
+    let nodes = vec![IRNode::Block {
         style_sets: vec![],
         style_override: Some(block_style),
         children: vec![create_paragraph("Indented text.")],
-    }]);
+    }];
 
-    let layout_unit = LayoutUnit {
-        tree,
-        context: Arc::new(Value::Null),
-    };
-    let pages = engine.paginate_tree(layout_unit).unwrap();
+    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
     let text_el = find_first_text_box_with_content(page1, "Indented").unwrap();
 
@@ -41,21 +49,32 @@ fn test_block_with_padding_indents_child() {
 #[test]
 fn test_block_splits_across_pages() {
     // Page content height = 80. Line height is 14.4. 5 lines fit.
-    let engine = create_test_engine_with_page(500.0, 100.0, 10.0);
-    let tree = IRNode::Root(vec![IRNode::Block {
+    let stylesheet = Stylesheet {
+        page_masters: HashMap::from([(
+            "master".to_string(),
+            PageLayout {
+                size: PageSize::Custom {
+                    width: 500.0,
+                    height: 100.0,
+                },
+                margins: Some(Margins::all(10.0)),
+                ..Default::default()
+            },
+        )]),
+        default_page_master_name: Some("master".to_string()),
+        ..Default::default()
+    };
+
+    let nodes = vec![IRNode::Block {
         style_sets: vec![],
         style_override: None,
         children: vec![
             create_paragraph("Line 1\nLine 2\nLine 3"), // 3 lines
             create_paragraph("Line 4\nLine 5\nLine 6"), // 3 lines
         ],
-    }]);
+    }];
 
-    let layout_unit = LayoutUnit {
-        tree,
-        context: Arc::new(Value::Null),
-    };
-    let pages = engine.paginate_tree(layout_unit).unwrap();
+    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
 
     assert_eq!(pages.len(), 2, "Expected two pages");
 

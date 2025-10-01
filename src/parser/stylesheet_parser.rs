@@ -1,3 +1,4 @@
+// FILE: /home/sigmund/RustroverProjects/petty/src/parser/stylesheet_parser.rs
 //! A structured, recursive-descent parser for XSLT stylesheet definitions.
 //!
 //! This parser is responsible for consuming an XSLT file and extracting all
@@ -12,6 +13,7 @@ use crate::parser::style_parsers::{parse_length, parse_shorthand_margins, run_pa
 use crate::parser::xslt::util::get_owned_attributes;
 use quick_xml::events::{BytesStart, Event as XmlEvent};
 use quick_xml::Reader;
+use std::collections::HashMap;
 use std::str::from_utf8;
 use std::sync::Arc;
 
@@ -54,22 +56,44 @@ impl<'a> XsltParser<'a> {
 
     /// Parses the content between `<xsl:stylesheet>` and `</xsl:stylesheet>`.
     fn parse_stylesheet_content(&mut self) -> Result<Stylesheet, ParseError> {
-        let mut stylesheet = Stylesheet::default();
+        let mut named_masters = HashMap::new();
+        let mut unnamed_masters = Vec::new();
+        let mut styles = HashMap::new();
+
         loop {
-            let event = self.read_event()?; // Read event once at the top of the loop
+            let event = self.read_event()?;
             match event {
                 XmlEvent::Start(e) => {
-                    let start_tag = e.clone(); // Clone to own the data for this iteration
+                    let start_tag = e.clone();
                     match start_tag.name().as_ref() {
                         b"fo:simple-page-master" => {
-                            stylesheet.page = self.parse_simple_page_master(&start_tag)?;
+                            let (name_opt, page_layout) = self.parse_simple_page_master(&start_tag)?;
+                            if let Some(name) = name_opt {
+                                named_masters.insert(name, page_layout);
+                            } else {
+                                unnamed_masters.push(page_layout);
+                            }
                             self.skip_element(start_tag.name())?;
                         }
                         b"xsl:attribute-set" => {
                             let (name, style) = self.parse_attribute_set(&start_tag)?;
-                            stylesheet.styles.insert(name, Arc::new(style));
+                            styles.insert(name, Arc::new(style));
                         }
                         _ => self.skip_element(start_tag.name())?,
+                    }
+                }
+                XmlEvent::Empty(e) => {
+                    let empty_tag = e.clone();
+                    match empty_tag.name().as_ref() {
+                        b"fo:simple-page-master" => {
+                            let (name_opt, page_layout) = self.parse_simple_page_master(&empty_tag)?;
+                            if let Some(name) = name_opt {
+                                named_masters.insert(name, page_layout);
+                            } else {
+                                unnamed_masters.push(page_layout);
+                            }
+                        }
+                        _ => (),
                     }
                 }
                 XmlEvent::End(e) if e.name().as_ref() == b"xsl:stylesheet" => break,
@@ -82,14 +106,40 @@ impl<'a> XsltParser<'a> {
                 _ => (),
             }
         }
-        Ok(stylesheet)
+
+        // --- Finalize Page Masters ---
+        if unnamed_masters.len() > 1 {
+            return Err(ParseError::TemplateStructure {
+                message: "Found multiple <fo:simple-page-master> tags without a 'master-name'. Please name them to avoid ambiguity.".into(),
+                location: self.get_current_location(),
+            });
+        }
+        if !unnamed_masters.is_empty() && !named_masters.is_empty() {
+            return Err(ParseError::TemplateStructure {
+                message: "Found a mix of named and unnamed <fo:simple-page-master> tags. Please provide a 'master-name' for all of them.".into(),
+                location: self.get_current_location(),
+            });
+        }
+        if let Some(layout) = unnamed_masters.pop() {
+            named_masters.insert("master".to_string(), layout);
+        }
+
+        let default_page_master_name = named_masters.keys().next().cloned();
+
+        Ok(Stylesheet {
+            page_masters: named_masters,
+            default_page_master_name,
+            styles,
+        })
     }
 
     /// Parses an `<xsl:attribute-set>` and its child `<xsl:attribute>` tags.
     fn parse_attribute_set(&mut self, start_tag: &BytesStart) -> Result<(String, ElementStyle), ParseError> {
         let location = self.get_current_location();
         let attrs = get_owned_attributes(start_tag)?;
-        let name = attrs.iter().find(|(k, _)| k.as_slice() == b"name")
+        let name = attrs
+            .iter()
+            .find(|(k, _)| k.as_slice() == b"name")
             .and_then(|(_, v)| from_utf8(v).ok())
             .ok_or_else(|| ParseError::TemplateStructure {
                 message: "<xsl:attribute-set> is missing the required 'name' attribute.".to_string(),
@@ -115,10 +165,12 @@ impl<'a> XsltParser<'a> {
                     })?;
                 }
                 XmlEvent::End(e) if e.name() == start_tag.name() => break,
-                XmlEvent::Eof => return Err(ParseError::TemplateStructure {
-                    message: format!("Unexpected EOF while parsing attribute-set '{}'.", name),
-                    location: self.get_current_location(),
-                }),
+                XmlEvent::Eof => {
+                    return Err(ParseError::TemplateStructure {
+                        message: format!("Unexpected EOF while parsing attribute-set '{}'.", name),
+                        location: self.get_current_location(),
+                    })
+                }
                 _ => (),
             }
         }
@@ -129,12 +181,15 @@ impl<'a> XsltParser<'a> {
     fn parse_attribute_content(&mut self, start_tag: &BytesStart) -> Result<(String, String), ParseError> {
         let mut value = String::new();
         let attrs = get_owned_attributes(start_tag)?;
-        let name = attrs.iter().find(|(k, _)| k.as_slice() == b"name")
+        let name = attrs
+            .iter()
+            .find(|(k, _)| k.as_slice() == b"name")
             .and_then(|(_, v)| from_utf8(v).ok())
             .ok_or_else(|| ParseError::TemplateStructure {
                 message: "<xsl:attribute> is missing 'name' attribute.".to_string(),
                 location: self.get_current_location(),
-            })?.to_string();
+            })?
+            .to_string();
 
         if !start_tag.is_empty() {
             loop {
@@ -143,10 +198,12 @@ impl<'a> XsltParser<'a> {
                         value = e.unescape()?.into_owned();
                     }
                     XmlEvent::End(e) if e.name() == start_tag.name() => break,
-                    XmlEvent::Eof => return Err(ParseError::TemplateStructure {
-                        message: "Unexpected EOF while parsing attribute content.".to_string(),
-                        location: self.get_current_location(),
-                    }),
+                    XmlEvent::Eof => {
+                        return Err(ParseError::TemplateStructure {
+                            message: "Unexpected EOF while parsing attribute content.".to_string(),
+                            location: self.get_current_location(),
+                        })
+                    }
                     _ => {}
                 }
             }
@@ -160,15 +217,21 @@ impl<'a> XsltParser<'a> {
     }
 
     /// Parses a `<fo:simple-page-master>` tag into a `PageLayout`.
-    fn parse_simple_page_master(&self, start_tag: &BytesStart) -> Result<PageLayout, ParseError> {
+    fn parse_simple_page_master(&self, start_tag: &BytesStart) -> Result<(Option<String>, PageLayout), ParseError> {
         let attrs = get_owned_attributes(start_tag)?;
         let mut page = PageLayout::default();
+
+        let name = attrs
+            .iter()
+            .find(|(k, _)| k.as_slice() == b"master-name")
+            .and_then(|(_, v)| from_utf8(v).ok())
+            .map(|s| s.to_string());
 
         for (key, val_bytes) in &attrs {
             let key_str = from_utf8(key)?;
             let val_str = from_utf8(val_bytes)?;
             match key_str {
-                "master-name" => page.name = Some(val_str.to_string()),
+                "master-name" => {} // Already handled
                 "page-width" => page.size.set_width(run_parser(parse_length, val_str)?),
                 "page-height" => page.size.set_height(run_parser(parse_length, val_str)?),
                 "size" => page.size = parse_page_size(val_str)?,
@@ -180,7 +243,7 @@ impl<'a> XsltParser<'a> {
                 _ => log::warn!("Unknown attribute on <fo:simple-page-master>: '{}'", key_str),
             }
         }
-        Ok(page)
+        Ok((name, page))
     }
 
     /// Consumes XML events until the corresponding end tag for `start_name` is found.
@@ -191,7 +254,7 @@ impl<'a> XsltParser<'a> {
                 XmlEvent::Start(_) => depth += 1,
                 XmlEvent::End(_) => depth -= 1,
                 XmlEvent::Eof => break, // Let the caller handle the unexpected EOF
-                _ => (), // Ignore Text, Empty, etc. within the skipped element
+                _ => (),               // Ignore Text, Empty, etc. within the skipped element
             }
         }
         Ok(())

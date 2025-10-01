@@ -2,9 +2,10 @@
 use crate::core::idf::IRNode;
 use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult};
 use crate::core::layout::style::ComputedStyle;
-use crate::core::layout::{geom, LayoutEngine, LayoutError, PositionedElement};
+use crate::core::layout::{geom, LayoutElement, LayoutEngine, LayoutError, PositionedElement, TextElement};
 use crate::core::style::dimension::Dimension;
 use crate::core::style::list::ListStyleType;
+use std::any::Any;
 use std::sync::Arc;
 
 /// A `LayoutNode` for a single item within a list.
@@ -56,26 +57,95 @@ impl LayoutNode for ListItemNode {
         &self.style
     }
 
-    fn measure(&mut self, engine: &LayoutEngine, available_width: f32) {
-        for child in &mut self.children {
-            child.measure(engine, available_width);
-        }
+    fn as_any(&self) -> &dyn Any {
+        self
     }
-    fn measure_content_height(&mut self, engine: &LayoutEngine, available_width: f32) -> f32 {
-        if let Some(Dimension::Pt(h)) = self.style.height {
-            return h; // List item height doesn't include its margins
-        }
-        self.children
-            .iter_mut()
-            .map(|c| c.measure_content_height(engine, available_width))
-            .sum()
-    }
-    fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
-        const MARKER_SPACING_FACTOR: f32 = 0.4;
 
-        // --- 1. Handle Marker Layout ---
+    fn measure(&mut self, engine: &LayoutEngine, available_width: f32) {
+        // Correctly calculate indented width for children measurement
+        const MARKER_SPACING_FACTOR: f32 = 0.4;
+        let indent = if !self.marker_text.is_empty() {
+            let marker_width = engine.measure_text_width(&self.marker_text, &self.style);
+            let marker_spacing = self.style.font_size * MARKER_SPACING_FACTOR;
+            marker_width + marker_spacing
+        } else {
+            0.0
+        };
+        let child_available_width = available_width
+            - self.style.padding.left
+            - self.style.padding.right
+            - indent;
+
+        for child in &mut self.children {
+            child.measure(engine, child_available_width);
+        }
+    }
+
+    fn measure_content_height(&mut self, engine: &LayoutEngine, available_width: f32) -> f32 {
+        // Correctly calculate indented width for children measurement
+        const MARKER_SPACING_FACTOR: f32 = 0.4;
+        let indent = if !self.marker_text.is_empty() {
+            let marker_width = engine.measure_text_width(&self.marker_text, &self.style);
+            let marker_spacing = self.style.font_size * MARKER_SPACING_FACTOR;
+            marker_width + marker_spacing
+        } else {
+            0.0
+        };
+        let child_available_width = available_width
+            - self.style.padding.left
+            - self.style.padding.right
+            - indent;
+
+        // Determine the height of the child content.
+        let content_height = if let Some(Dimension::Pt(h)) = self.style.height {
+            h
+        } else {
+            self.children
+                .iter_mut()
+                .map(|c| c.measure_content_height(engine, child_available_width))
+                .sum()
+        };
+
+        // The total inner height of the content box is the greater of the children's
+        // stacked height (plus padding) and the minimum height required for the marker line.
+        let inner_height = self.style.padding.top
+            + content_height.max(self.style.line_height)
+            + self.style.padding.bottom;
+
+        // The total space taken up by the element is its inner box height plus vertical margins.
+        self.style.margin.top + inner_height + self.style.margin.bottom
+    }
+
+    fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
+        // 1. Handle top margin
+        if !ctx.is_empty() && self.style.margin.top > ctx.available_height() {
+            return Ok(LayoutResult::Partial(Box::new(Self {
+                children: std::mem::take(&mut self.children),
+                style: self.style.clone(),
+                marker_text: self.marker_text.clone(),
+            })));
+        }
+        ctx.advance_cursor(self.style.margin.top);
+
+        // Record the Y position where the content box (padding + content) will start.
+        let content_start_y_in_ctx = ctx.cursor.1;
+
+        // 2. Handle Marker Layout
+        const MARKER_SPACING_FACTOR: f32 = 0.4;
         let indent;
         if !self.marker_text.is_empty() {
+            // Check if just the first line would cause a page break.
+            let required_height_for_first_line =
+                self.style.padding.top + self.style.line_height + self.style.padding.bottom;
+            if required_height_for_first_line > ctx.available_height() && !ctx.is_empty() {
+                ctx.cursor.1 -= self.style.margin.top; // Roll back margin advance
+                return Ok(LayoutResult::Partial(Box::new(Self {
+                    children: std::mem::take(&mut self.children),
+                    style: self.style.clone(),
+                    marker_text: self.marker_text.clone(), // Keep marker for next page
+                })));
+            }
+
             let marker_width = ctx.engine.measure_text_width(&self.marker_text, &self.style);
             let marker_spacing = self.style.font_size * MARKER_SPACING_FACTOR;
             indent = marker_width + marker_spacing;
@@ -85,27 +155,22 @@ impl LayoutNode for ListItemNode {
                 y: 0.0,
                 width: marker_width,
                 height: self.style.line_height,
-                element: crate::core::layout::LayoutElement::Text(
-                    crate::core::layout::TextElement {
-                        content: self.marker_text.clone(),
-                        href: None,
-                    },
-                ),
+                element: LayoutElement::Text(TextElement {
+                    content: self.marker_text.clone(),
+                    href: None,
+                }),
                 style: self.style.clone(),
             };
-            if self.style.line_height > ctx.available_height() && !ctx.is_empty() {
-                return Ok(LayoutResult::Partial(Box::new(Self {
-                    children: std::mem::take(&mut self.children),
-                    style: self.style.clone(),
-                    marker_text: self.marker_text.clone(),
-                })));
-            }
-            ctx.push_element(marker_box);
+            ctx.push_element_at(
+                marker_box,
+                self.style.padding.left,
+                content_start_y_in_ctx + self.style.padding.top,
+            );
         } else {
             indent = 0.0;
         }
 
-        let content_start_y_in_ctx = ctx.cursor.1;
+        // 3. Setup child context
         let child_bounds = geom::Rect {
             x: ctx.bounds.x + self.style.padding.left + indent,
             y: ctx.bounds.y + content_start_y_in_ctx + self.style.padding.top,
@@ -119,16 +184,17 @@ impl LayoutNode for ListItemNode {
             elements: unsafe { &mut *(ctx.elements as *mut Vec<PositionedElement>) },
         };
 
+        // 4. Layout children
         for (i, child) in self.children.iter_mut().enumerate() {
             match child.layout(&mut child_ctx)? {
                 LayoutResult::Full => continue,
                 LayoutResult::Partial(remainder) => {
                     let height_used_by_children = child_ctx.cursor.1;
-                    let total_height = (self.style.padding.top
-                        + height_used_by_children
-                        + self.style.padding.bottom)
-                        .max(self.style.line_height);
-                    ctx.advance_cursor(total_height);
+                    let total_content_height = self.style.padding.top
+                        + height_used_by_children.max(self.style.line_height)
+                        + self.style.padding.bottom;
+
+                    ctx.cursor.1 = content_start_y_in_ctx + total_content_height;
 
                     let mut remaining_children = vec![remainder];
                     remaining_children.extend(self.children.drain((i + 1)..));
@@ -143,12 +209,16 @@ impl LayoutNode for ListItemNode {
             }
         }
 
+        // 5. Finalize height and advance cursor for full layout
         let height_used_by_children = child_ctx.cursor.1;
-        let total_height = (self.style.padding.top
-            + height_used_by_children
-            + self.style.padding.bottom)
-            .max(self.style.line_height);
-        ctx.advance_cursor(total_height);
+        let total_content_height = self.style.padding.top
+            + height_used_by_children.max(self.style.line_height)
+            + self.style.padding.bottom;
+
+        ctx.cursor.1 = content_start_y_in_ctx + total_content_height;
+
+        // 6. Handle bottom margin
+        ctx.advance_cursor(self.style.margin.bottom);
 
         Ok(LayoutResult::Full)
     }

@@ -4,6 +4,7 @@ use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult};
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{ImageElement, LayoutElement, LayoutEngine, LayoutError, PositionedElement};
 use crate::core::style::dimension::Dimension;
+use std::any::Any;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -48,6 +49,10 @@ impl ImageNode {
 impl LayoutNode for ImageNode {
     fn style(&self) -> &Arc<ComputedStyle> {
         &self.style
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 
     fn measure(&mut self, _engine: &LayoutEngine, available_width: f32) {

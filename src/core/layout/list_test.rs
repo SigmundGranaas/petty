@@ -1,13 +1,14 @@
 // FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/list_test.rs
+// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/list_test.rs
 #![cfg(test)]
 
-use super::test_utils::{
-    create_layout_unit, create_paragraph, create_test_engine, create_test_engine_with_page,
-};
+use super::test_utils::{create_paragraph, paginate_test_nodes};
 use crate::core::idf::IRNode;
 use crate::core::layout::{LayoutElement, TextElement};
+use crate::core::style::dimension::{Margins, PageSize};
 use crate::core::style::list::ListStyleType;
-use crate::core::style::stylesheet::ElementStyle;
+use crate::core::style::stylesheet::{ElementStyle, PageLayout, Stylesheet};
+use std::collections::HashMap;
 
 fn create_list_item(text: &str) -> IRNode {
     IRNode::ListItem {
@@ -27,18 +28,17 @@ fn get_text_content(element: &LayoutElement) -> &str {
 
 #[test]
 fn test_unordered_list_layout() {
-    let engine = create_test_engine();
-    let tree = IRNode::Root(vec![IRNode::List {
+    let mut stylesheet = Stylesheet::default();
+    stylesheet.page_masters.insert("master".to_string(), PageLayout::default());
+    stylesheet.default_page_master_name = Some("master".to_string());
+
+    let nodes = vec![IRNode::List {
         style_sets: vec![],
         style_override: None,
-        children: vec![
-            create_list_item("Item 1"),
-            create_list_item("Item 2"),
-        ],
-    }]);
+        children: vec![create_list_item("Item 1"), create_list_item("Item 2")],
+    }];
 
-    let layout_unit = create_layout_unit(tree);
-    let mut pages = engine.paginate_tree(layout_unit).unwrap();
+    let mut pages = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page = pages.remove(0);
 
     // Each item produces a marker box and a text box.
@@ -68,21 +68,20 @@ fn test_unordered_list_layout() {
 
 #[test]
 fn test_ordered_list_layout() {
-    let engine = create_test_engine();
-    let tree = IRNode::Root(vec![IRNode::List {
+    let mut stylesheet = Stylesheet::default();
+    stylesheet.page_masters.insert("master".to_string(), PageLayout::default());
+    stylesheet.default_page_master_name = Some("master".to_string());
+
+    let nodes = vec![IRNode::List {
         style_sets: vec![],
         style_override: Some(ElementStyle {
             list_style_type: Some(ListStyleType::Decimal),
             ..Default::default()
         }),
-        children: vec![
-            create_list_item("First"),
-            create_list_item("Second"),
-        ],
-    }]);
+        children: vec![create_list_item("First"), create_list_item("Second")],
+    }];
 
-    let layout_unit = create_layout_unit(tree);
-    let mut pages = engine.paginate_tree(layout_unit).unwrap();
+    let mut pages = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page = pages.remove(0);
 
     assert_eq!(page.len(), 4);
@@ -100,18 +99,28 @@ fn test_ordered_list_layout() {
 fn test_list_pagination() {
     // Page content height is 70 (90H - 10T - 10B). Line height is 14.4.
     // 70 / 14.4 = 4.86. Should fit 4 items.
-    let engine = create_test_engine_with_page(500.0, 90.0, 10.0);
+    let stylesheet = Stylesheet {
+        page_masters: HashMap::from([(
+            "master".to_string(),
+            PageLayout {
+                size: PageSize::Custom { width: 500.0, height: 90.0 },
+                margins: Some(Margins::all(10.0)),
+                ..Default::default()
+            },
+        )]),
+        default_page_master_name: Some("master".to_string()),
+        ..Default::default()
+    };
     let mut children = vec![];
     for i in 1..=10 {
         children.push(create_list_item(&format!("List item {}", i)));
     }
-    let tree = IRNode::Root(vec![IRNode::List {
+    let nodes = vec![IRNode::List {
         style_sets: vec![],
         style_override: None,
         children,
-    }]);
-    let layout_unit = create_layout_unit(tree);
-    let mut pages = engine.paginate_tree(layout_unit).unwrap();
+    }];
+    let mut pages = paginate_test_nodes(stylesheet, nodes).unwrap();
 
     // Page 1
     let page1 = pages.remove(0);

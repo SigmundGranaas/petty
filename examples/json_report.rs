@@ -16,13 +16,13 @@ fn main() -> Result<(), PipelineError> {
     println!("✓ Using template: {}", template_path);
 
     // CORRECTED: Use the financial report data, which matches the template's structure and variables.
-    let data_json_str = fs::read_to_string("data/financial_report_data.json")?;
-    let data_json: Value = from_str(&data_json_str)?;
+    let data_json_str = fs::read_to_string("data/financial_report_data.json").unwrap();
+    let data_json: Value = from_str(&data_json_str).unwrap();
     println!("✓ Data loaded.");
 
     // Build the pipeline from the JSON template file.
     let pipeline = PipelineBuilder::new()
-        .with_json_template_file(template_path)?
+        .with_template_file(template_path)?
         .build()?;
     println!("✓ Pipeline built with JSON engine.");
 

@@ -1,15 +1,11 @@
 // FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/flex_test.rs
 #![cfg(test)]
-use crate::core::idf::{IRNode, LayoutUnit};
-use crate::core::layout::test_utils::{
-    create_paragraph, create_test_engine_with_page,
-    find_first_text_box_with_content,
-};
-use crate::core::style::dimension::Dimension;
+use crate::core::idf::IRNode;
+use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
+use crate::core::style::dimension::{Dimension, Margins, PageSize};
 use crate::core::style::flex::{FlexWrap, JustifyContent};
-use crate::core::style::stylesheet::ElementStyle;
-use serde_json::Value;
-use std::sync::Arc;
+use crate::core::style::stylesheet::{ElementStyle, PageLayout, Stylesheet};
+use std::collections::HashMap;
 
 fn create_flex_item(width: f32, height: f32, text: &str) -> IRNode {
     IRNode::Block {
@@ -25,8 +21,21 @@ fn create_flex_item(width: f32, height: f32, text: &str) -> IRNode {
 
 #[test]
 fn test_flex_justify_content() {
-    let engine = create_test_engine_with_page(500.0, 500.0, 0.0);
-    let tree = IRNode::Root(vec![IRNode::FlexContainer {
+    let stylesheet = Stylesheet {
+        page_masters: HashMap::from([(
+            "master".to_string(),
+            PageLayout {
+                size: PageSize::Custom {
+                    width: 500.0,
+                    height: 500.0,
+                },
+                ..Default::default()
+            },
+        )]),
+        default_page_master_name: Some("master".to_string()),
+        ..Default::default()
+    };
+    let nodes = vec![IRNode::FlexContainer {
         style_sets: vec![],
         style_override: Some(ElementStyle {
             justify_content: Some(JustifyContent::Center),
@@ -36,12 +45,8 @@ fn test_flex_justify_content() {
             create_flex_item(100.0, 20.0, "1"),
             create_flex_item(100.0, 20.0, "2"),
         ],
-    }]);
-    let layout_unit = LayoutUnit {
-        tree,
-        context: Arc::new(Value::Null),
-    };
-    let pages = engine.paginate_tree(layout_unit).unwrap();
+    }];
+    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
 
     let item1 = find_first_text_box_with_content(page1, "1").unwrap();
@@ -56,8 +61,23 @@ fn test_flex_wrap_with_page_break() {
     // Page content height = 50. Each item is 30 high.
     // Line 1: 3 items, height 30. Fits. Cursor at 30.
     // Line 2: 3 items, height 30. Does not fit (30 > 50-30). Page break.
-    let engine = create_test_engine_with_page(350.0, 70.0, 10.0);
-    let tree = IRNode::Root(vec![IRNode::FlexContainer {
+    let stylesheet = Stylesheet {
+        page_masters: HashMap::from([(
+            "master".to_string(),
+            PageLayout {
+                size: PageSize::Custom {
+                    width: 350.0,
+                    height: 70.0,
+                },
+                margins: Some(Margins::all(10.0)),
+                ..Default::default()
+            },
+        )]),
+        default_page_master_name: Some("master".to_string()),
+        ..Default::default()
+    };
+
+    let nodes = vec![IRNode::FlexContainer {
         style_sets: vec![],
         style_override: Some(ElementStyle {
             flex_wrap: Some(FlexWrap::Wrap),
@@ -70,13 +90,9 @@ fn test_flex_wrap_with_page_break() {
             create_flex_item(100.0, 30.0, "4"), // Start of second line
             create_flex_item(100.0, 30.0, "5"),
         ],
-    }]);
+    }];
 
-    let layout_unit = LayoutUnit {
-        tree,
-        context: Arc::new(Value::Null),
-    };
-    let pages = engine.paginate_tree(layout_unit).unwrap();
+    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
 
     assert_eq!(pages.len(), 2, "Expected flex container to wrap onto a second page");
 

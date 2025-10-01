@@ -1,7 +1,4 @@
-use super::ast::{
-    CompiledStylesheet, PreparsedStyles, PreparsedTemplate, TableColumnDefinition, TemplateRule,
-    XsltInstruction,
-};
+use super::ast::{CompiledStylesheet, PreparsedStyles, PreparsedTemplate, TemplateRule, XsltInstruction};
 use crate::core::idf::{self, IRNode, InlineNode, TableBody, TableCell, TableHeader, TableRow};
 use crate::parser::ParseError;
 use crate::xpath;
@@ -30,12 +27,9 @@ fn get_children(node: &Value) -> Vec<(&Value, Option<&str>)> {
 }
 
 impl<'h> TemplateExecutor<'h> {
-    pub fn new(
-        template_engine: &'h Handlebars<'h>,
-        stylesheet: &'h CompiledStylesheet,
-    ) -> Self {
+    pub fn new(stylesheet: &'h CompiledStylesheet) -> Self {
         Self {
-            template_engine,
+            template_engine: &stylesheet.handlebars,
             stylesheet,
             node_stack: vec![],
             inline_stack: vec![],
@@ -75,7 +69,9 @@ impl<'h> TemplateExecutor<'h> {
     /// Recursively walks the AST and builds the `IRNode` tree.
     fn execute_template(&mut self, template: &PreparsedTemplate, context: &Value) -> Result<(), ParseError> {
         for instruction in &template.0 {
-            if matches!(instruction, XsltInstruction::Text(s) if s.is_empty()) { continue; }
+            if matches!(instruction, XsltInstruction::Text(s) if s.is_empty()) {
+                continue;
+            }
             match instruction {
                 XsltInstruction::ForEach { select, body } => {
                     let selected_values = {
@@ -94,7 +90,9 @@ impl<'h> TemplateExecutor<'h> {
                     }
                 }
                 XsltInstruction::If { test, body } => {
-                    if test.evaluate(context, self.get_current_variables().get("position").and_then(|v| v.as_u64().map(|n| n as usize))) { self.execute_template(body, context)?; }
+                    if test.evaluate(context, self.get_current_variables().get("position").and_then(|v| v.as_u64().map(|n| n as usize))) {
+                        self.execute_template(body, context)?;
+                    }
                 }
                 XsltInstruction::ContentTag { tag_name, styles, attrs, body } => {
                     self.execute_start_tag(tag_name, styles, attrs, context)?;
@@ -110,7 +108,9 @@ impl<'h> TemplateExecutor<'h> {
                 }
                 XsltInstruction::ValueOf { select } => {
                     let content = xpath::select_as_string(select, context, self.get_current_variables());
-                    if !content.is_empty() { self.push_inline_to_parent(InlineNode::Text(content)); }
+                    if !content.is_empty() {
+                        self.push_inline_to_parent(InlineNode::Text(content));
+                    }
                 }
                 XsltInstruction::CallTemplate { name, params } => {
                     let target_template = self.stylesheet.named_templates.get(name).ok_or_else(|| ParseError::TemplateParse(format!("Called template '{}' not found.", name)))?;
@@ -129,9 +129,6 @@ impl<'h> TemplateExecutor<'h> {
                 }
                 XsltInstruction::ApplyTemplates { select, mode } => {
                     if let Some(sel) = select {
-                        // When selecting from variables, we must clone the results to
-                        // release the immutable borrow on `self` before calling the
-                        // mutable method `apply_templates_to_nodes`.
                         let selected_values: Vec<Value> = {
                             let vars = self.get_current_variables();
                             sel.select(context, vars).into_iter().cloned().collect()
@@ -139,11 +136,12 @@ impl<'h> TemplateExecutor<'h> {
                         let nodes_to_process: Vec<_> = selected_values.iter().map(|v| (v, None)).collect();
                         self.apply_templates_to_nodes(nodes_to_process, mode.as_deref())?;
                     } else {
-                        // When selecting from the context, there's no conflict,
-                        // so we can proceed as before.
                         let nodes_to_process = get_children(context);
                         self.apply_templates_to_nodes(nodes_to_process, mode.as_deref())?;
                     }
+                }
+                XsltInstruction::PageBreak { master_name } => {
+                    self.push_block_to_parent(IRNode::PageBreak { master_name: master_name.clone() });
                 }
             }
         }
@@ -178,8 +176,7 @@ impl<'h> TemplateExecutor<'h> {
 
     /// Finds the highest-priority template rule that matches a given node.
     fn find_matching_template(&self, node: &Value, name: Option<&str>, mode: Option<&str>) -> Option<&'h TemplateRule> {
-        self.stylesheet.template_rules.get(&mode.map(String::from))
-            .and_then(|rules| rules.iter().find(|rule| xpath::matches(node, name, &rule.match_pattern)))
+        self.stylesheet.template_rules.get(&mode.map(String::from)).and_then(|rules| rules.iter().find(|rule| xpath::matches(node, name, &rule.match_pattern)))
     }
 
     fn execute_start_tag(&mut self, tag_name: &[u8], styles: &PreparsedStyles, attrs: &HashMap<String, String>, context: &Value) -> Result<(), ParseError> {
@@ -201,13 +198,17 @@ impl<'h> TemplateExecutor<'h> {
             "fo:table-row" | "row" => {
                 if let Some(IRNode::Table { header, body, .. }) = self.node_stack.last_mut() {
                     let target_rows = if self.is_in_table_header { header.as_mut().map(|h| &mut h.rows) } else { Some(&mut body.rows) };
-                    if let Some(rows) = target_rows { rows.push(TableRow { cells: vec![] }); }
+                    if let Some(rows) = target_rows {
+                        rows.push(TableRow { cells: vec![] });
+                    }
                 }
             }
             "fo:table-cell" | "cell" => {
                 if let Some(IRNode::Table { header, body, .. }) = self.node_stack.last_mut() {
                     let target_row = if self.is_in_table_header { header.as_mut().and_then(|h| h.rows.last_mut()) } else { body.rows.last_mut() };
-                    if let Some(row) = target_row { row.cells.push(TableCell { style_sets, style_override, children: vec![] }); }
+                    if let Some(row) = target_row {
+                        row.cells.push(TableCell { style_sets, style_override, children: vec![] });
+                    }
                 }
             }
             _ => self.node_stack.push(IRNode::Block { style_sets, style_override, children: vec![] }),
@@ -218,10 +219,16 @@ impl<'h> TemplateExecutor<'h> {
     fn execute_end_tag(&mut self, tag_name: &[u8]) -> Result<(), ParseError> {
         match String::from_utf8_lossy(tag_name).as_ref() {
             "fo:basic-link" | "link" | "fo:inline" | "strong" | "b" | "em" | "i" | "span" => {
-                if let Some(node) = self.inline_stack.pop() { self.push_inline_to_parent(node); }
+                if let Some(node) = self.inline_stack.pop() {
+                    self.push_inline_to_parent(node);
+                }
             }
             "fo:table-row" | "row" | "fo:table-cell" | "cell" => {}
-            _ => { if let Some(node) = self.node_stack.pop() { self.push_block_to_parent(node); } }
+            _ => {
+                if let Some(node) = self.node_stack.pop() {
+                    self.push_block_to_parent(node);
+                }
+            }
         }
         Ok(())
     }
@@ -246,11 +253,11 @@ impl<'h> TemplateExecutor<'h> {
         Ok(())
     }
 
-    fn execute_table(&mut self, styles: &PreparsedStyles, columns: &[TableColumnDefinition], header_template: Option<&PreparsedTemplate>, body_template: &PreparsedTemplate, context: &Value) -> Result<(), ParseError> {
+    fn execute_table(&mut self, styles: &PreparsedStyles, columns: &[crate::core::style::dimension::Dimension], header_template: Option<&PreparsedTemplate>, body_template: &PreparsedTemplate, context: &Value) -> Result<(), ParseError> {
         let table_node = IRNode::Table {
             style_sets: styles.style_sets.clone(),
             style_override: styles.style_override.clone(),
-            columns: columns.iter().map(|c| idf::TableColumnDefinition { width: c.width.clone(), style: c.style.clone(), header_style: c.header_style.clone() }).collect(),
+            columns: columns.iter().map(|d| idf::TableColumnDefinition { width: Some(d.clone()), ..Default::default() }).collect(),
             header: if header_template.is_some() { Some(Box::new(TableHeader { rows: vec![] })) } else { None },
             body: Box::new(TableBody { rows: vec![] }),
         };
@@ -264,12 +271,16 @@ impl<'h> TemplateExecutor<'h> {
 
         self.execute_template(body_template, context)?;
 
-        if let Some(node) = self.node_stack.pop() { self.push_block_to_parent(node); }
+        if let Some(node) = self.node_stack.pop() {
+            self.push_block_to_parent(node);
+        }
         Ok(())
     }
 
     fn render_text(&self, text: &str, context: &Value) -> Result<String, ParseError> {
-        if !text.contains("{{") { return Ok(text.to_string()); }
+        if !text.contains("{{") {
+            return Ok(text.to_string());
+        }
         self.template_engine.render_template(text, context).map_err(|e| ParseError::TemplateRender(e.to_string()))
     }
 
@@ -279,8 +290,10 @@ impl<'h> TemplateExecutor<'h> {
             Some(IRNode::Root(c)) | Some(IRNode::Block { children: c, .. }) | Some(IRNode::FlexContainer { children: c, .. }) | Some(IRNode::List { children: c, .. }) | Some(IRNode::ListItem { children: c, .. }) => c.push(node),
             Some(IRNode::Table { header, body, .. }) => {
                 let row = if self.is_in_table_header { header.as_mut().and_then(|h| h.rows.last_mut()) } else { body.rows.last_mut() };
-                if let Some(cell) = row.and_then(|r| r.cells.last_mut()) { cell.children.push(node); }
-            },
+                if let Some(cell) = row.and_then(|r| r.cells.last_mut()) {
+                    cell.children.push(node);
+                }
+            }
             _ => log::warn!("Cannot add block node to current parent."),
         }
     }

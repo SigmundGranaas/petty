@@ -1,18 +1,25 @@
 // FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/integration_test.rs
-use crate::core::idf::{IRNode, InlineNode, LayoutUnit};
-use crate::core::layout::test_utils::{
-    create_paragraph, create_test_engine, create_test_engine_with_page,
-    find_first_text_box_with_content,
-};
-use crate::core::style::dimension::{Dimension, Margins};
-use crate::core::style::stylesheet::ElementStyle;
-use serde_json::Value;
-use std::sync::Arc;
+use crate::core::idf::{IRNode, InlineNode};
+use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
+use crate::core::style::dimension::{Dimension, Margins, PageSize};
+use crate::core::style::stylesheet::{ElementStyle, PageLayout, Stylesheet};
+use std::collections::HashMap;
 
 #[test]
 fn test_nested_blocks_with_padding_and_margin() {
-    let engine = create_test_engine();
-    let tree = IRNode::Root(vec![IRNode::Block {
+    let stylesheet = Stylesheet {
+        page_masters: HashMap::from([(
+            "master".to_string(),
+            PageLayout {
+                size: PageSize::A4,
+                margins: Some(Margins::all(72.0)), // 1 inch
+                ..Default::default()
+            },
+        )]),
+        default_page_master_name: Some("master".to_string()),
+        ..Default::default()
+    };
+    let nodes = vec![IRNode::Block {
         style_sets: vec![],
         style_override: Some(ElementStyle {
             margin: Some(Margins { top: 5.0, ..Default::default() }),
@@ -27,20 +34,16 @@ fn test_nested_blocks_with_padding_and_margin() {
             }),
             children: vec![InlineNode::Text("Hello".to_string())],
         }],
-    }]);
+    }];
 
-    let layout_unit = LayoutUnit {
-        tree,
-        context: Arc::new(Value::Null),
-    };
-    let pages = engine.paginate_tree(layout_unit).unwrap();
+    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
 
     assert_eq!(page1.len(), 1);
     let text_element = &page1[0];
 
     // Expected Y position breakdown:
-    // Page margin top: 72.0 (from default stylesheet in create_test_engine)
+    // Page margin top: 72.0
     // Outer block margin top: 5.0
     // Outer block padding top: 2.0
     // Inner paragraph margin top: 10.0
@@ -58,8 +61,19 @@ fn test_nested_blocks_with_padding_and_margin() {
 #[test]
 fn test_flex_container_with_percentages() {
     // Page width 520, margin 10 -> content width 500
-    let engine = create_test_engine_with_page(520.0, 500.0, 10.0);
-    let tree = IRNode::Root(vec![IRNode::FlexContainer {
+    let stylesheet = Stylesheet {
+        page_masters: HashMap::from([(
+            "master".to_string(),
+            PageLayout {
+                size: PageSize::Custom { width: 520.0, height: 500.0 },
+                margins: Some(Margins::all(10.0)),
+                ..Default::default()
+            },
+        )]),
+        default_page_master_name: Some("master".to_string()),
+        ..Default::default()
+    };
+    let nodes = vec![IRNode::FlexContainer {
         style_sets: vec![],
         style_override: None,
         children: vec![
@@ -83,13 +97,9 @@ fn test_flex_container_with_percentages() {
                 children: vec![create_paragraph("Right")],
             },
         ],
-    }]);
+    }];
 
-    let layout_unit = LayoutUnit {
-        tree,
-        context: Arc::new(Value::Null),
-    };
-    let pages = engine.paginate_tree(layout_unit).unwrap();
+    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
 
     let left_text = find_first_text_box_with_content(page1, "Left").unwrap();

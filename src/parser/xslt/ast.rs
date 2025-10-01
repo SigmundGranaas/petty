@@ -1,7 +1,9 @@
 use crate::core::style::dimension::Dimension;
-use crate::core::style::stylesheet::{ElementStyle, PageLayout};
+use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
 use crate::xpath::{Condition, Selection};
+use handlebars::Handlebars;
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 /// Represents a pre-compiled, executable block of XSLT.
@@ -13,13 +15,6 @@ pub struct PreparsedTemplate(pub Vec<XsltInstruction>);
 pub struct PreparsedStyles {
     pub style_sets: Vec<Arc<ElementStyle>>,
     pub style_override: Option<ElementStyle>,
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct TableColumnDefinition {
-    pub width: Option<Dimension>,
-    pub style: Option<String>,
-    pub header_style: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -36,13 +31,15 @@ pub struct TemplateRule {
     pub body: PreparsedTemplate,
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct CompiledStylesheet {
-    pub page: PageLayout,
+    pub stylesheet: Stylesheet,
     pub root_template: Option<PreparsedTemplate>,
     pub template_rules: HashMap<Option<String>, Vec<TemplateRule>>,
     pub named_templates: HashMap<String, PreparsedTemplate>,
-    pub styles: HashMap<String, Arc<ElementStyle>>,
+    pub resource_base_path: PathBuf,
+    // Handlebars is needed at execution time for {{...}} expressions
+    pub handlebars: Handlebars<'static>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -80,8 +77,11 @@ pub enum XsltInstruction {
     },
     Table {
         styles: PreparsedStyles,
-        columns: Vec<TableColumnDefinition>,
+        columns: Vec<Dimension>, // Simplified for now
         header: Option<PreparsedTemplate>,
         body: PreparsedTemplate,
+    },
+    PageBreak {
+        master_name: Option<String>,
     },
 }

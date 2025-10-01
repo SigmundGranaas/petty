@@ -1,11 +1,11 @@
 // FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/flex.rs
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/flex.rs
 use crate::core::idf::IRNode;
 use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult};
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{geom, LayoutEngine, LayoutError, PositionedElement};
 use crate::core::style::dimension::Dimension;
 use crate::core::style::flex::{AlignItems, AlignSelf, FlexDirection, FlexWrap, JustifyContent};
+use std::any::Any;
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -39,6 +39,10 @@ impl FlexNode {
 impl LayoutNode for FlexNode {
     fn style(&self) -> &Arc<ComputedStyle> {
         &self.style
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 
     fn measure(&mut self, engine: &LayoutEngine, available_width: f32) {
@@ -82,11 +86,8 @@ impl LayoutNode for FlexNode {
             }
 
             let free_space = container_main_size - line.main_size;
-            let (mut main_cursor, spacing) = calculate_main_axis_alignment(
-                free_space,
-                line.items.len(),
-                &self.style.justify_content,
-            );
+            let (mut main_cursor, spacing) =
+                calculate_main_axis_alignment(free_space, line.items.len(), &self.style.justify_content);
 
             for item in &line.items {
                 let item_cross_offset =
@@ -166,13 +167,9 @@ fn resolve_flex_lines(
         .map(|(i, child_node)| {
             let item_style = child_node.style().clone();
 
-            let flex_basis =
-                resolve_flex_basis(engine, child_node, &item_style, available_main_size, is_horiz);
+            let flex_basis = resolve_flex_basis(engine, child_node, &item_style, available_main_size, is_horiz);
 
-            let cross_size = child_node.measure_content_height(
-                engine,
-                if is_horiz { flex_basis } else { available_width },
-            );
+            let cross_size = child_node.measure_content_height(engine, if is_horiz { flex_basis } else { available_width });
 
             FlexItem {
                 index: i,
@@ -233,11 +230,14 @@ fn resolve_flex_basis(
     is_horiz: bool,
 ) -> f32 {
     let basis_prop = &style.flex_basis;
-    let size_prop = if is_horiz { style.width.as_ref() } else { style.height.as_ref() };
-    let resolved_basis_dim = match basis_prop {
-        Dimension::Auto => size_prop,
-        _ => Some(basis_prop),
+    let size_prop = if is_horiz { &style.width } else { &style.height };
+
+    let resolved_basis_dim = if style.flex_basis == Dimension::Auto {
+        size_prop.as_ref()
+    } else {
+        Some(basis_prop)
     };
+
     match resolved_basis_dim {
         Some(Dimension::Pt(val)) => *val,
         Some(Dimension::Percent(p)) => container_main_size * (p / 100.0),
@@ -268,11 +268,7 @@ fn resolve_flexible_lengths(line: &mut FlexLine, available_main_size: f32) {
             }
         }
     } else if remaining_space < 0.0 {
-        let total_shrink: f32 = line
-            .items
-            .iter()
-            .map(|i| i.style.flex_shrink * i.flex_basis)
-            .sum();
+        let total_shrink: f32 = line.items.iter().map(|i| i.style.flex_shrink * i.flex_basis).sum();
         if total_shrink > 0.0 {
             for item in &mut line.items {
                 let shrink_ratio = (item.style.flex_shrink * item.flex_basis) / total_shrink;
@@ -288,13 +284,19 @@ fn calculate_main_axis_alignment(
     item_count: usize,
     justify: &JustifyContent,
 ) -> (f32, f32) {
-    if free_space <= 0.0 { return (0.0, 0.0); }
+    if free_space <= 0.0 {
+        return (0.0, 0.0);
+    }
     match justify {
         JustifyContent::FlexStart => (0.0, 0.0),
         JustifyContent::FlexEnd => (free_space, 0.0),
         JustifyContent::Center => (free_space / 2.0, 0.0),
         JustifyContent::SpaceBetween => {
-            if item_count > 1 { (0.0, free_space / (item_count - 1) as f32) } else { (free_space / 2.0, 0.0) }
+            if item_count > 1 {
+                (0.0, free_space / (item_count - 1) as f32)
+            } else {
+                (free_space / 2.0, 0.0)
+            }
         }
         JustifyContent::SpaceAround => {
             let spacing = free_space / item_count as f32;

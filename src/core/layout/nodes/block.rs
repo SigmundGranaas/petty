@@ -2,11 +2,11 @@
 use crate::core::idf::IRNode;
 use crate::core::layout::elements::RectElement;
 use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult};
+use crate::core::layout::nodes::page_break::PageBreakNode;
 use crate::core::layout::style::ComputedStyle;
-use crate::core::layout::{
-    geom, LayoutElement, LayoutEngine, LayoutError, PositionedElement,
-};
+use crate::core::layout::{geom, LayoutElement, LayoutEngine, LayoutError, PositionedElement};
 use crate::core::style::dimension::Dimension;
+use std::any::Any;
 use std::sync::Arc;
 
 /// A `LayoutNode` for block-level containers like `<div>`.
@@ -66,8 +66,7 @@ impl LayoutNode for BlockNode {
             return self.style.margin.top + h + self.style.margin.bottom;
         }
 
-        let child_available_width =
-            available_width - self.style.padding.left - self.style.padding.right;
+        let child_available_width = available_width - self.style.padding.left - self.style.padding.right;
         let content_height: f32 = self
             .children
             .iter_mut()
@@ -136,13 +135,25 @@ impl LayoutNode for BlockNode {
         let content_height = child_ctx.cursor.1;
         draw_background(ctx, &self.style, content_start_y_in_ctx, content_height);
 
-        ctx.cursor.1 = content_start_y_in_ctx
-            + self.style.padding.top
-            + content_height
-            + self.style.padding.bottom;
+        ctx.cursor.1 = content_start_y_in_ctx + self.style.padding.top + content_height + self.style.padding.bottom;
         ctx.advance_cursor(self.style.margin.bottom);
 
         Ok(LayoutResult::Full)
+    }
+
+    fn check_for_page_break(&mut self) -> Option<Option<String>> {
+        if let Some(first_child) = self.children.first_mut() {
+            if first_child.is::<PageBreakNode>() {
+                // It is a PageBreakNode. We can downcast, remove it, and return its value.
+                let page_break_node = self.children.remove(0).downcast::<PageBreakNode>().unwrap();
+                return Some(page_break_node.master_name);
+            }
+        }
+        None
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 

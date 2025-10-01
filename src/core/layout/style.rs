@@ -1,11 +1,11 @@
 // FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/style.rs
 use crate::core::style::border::Border;
 use crate::core::style::color::Color;
-use crate::core::style::dimension::{Dimension, Margins, PageSize};
+use crate::core::style::dimension::{Dimension, Margins};
 use crate::core::style::flex::{AlignItems, AlignSelf, FlexDirection, FlexWrap, JustifyContent};
 use crate::core::style::font::{FontStyle, FontWeight};
 use crate::core::style::list::ListStyleType;
-use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
+use crate::core::style::stylesheet::ElementStyle;
 use crate::core::style::text::TextAlign;
 use std::sync::Arc;
 
@@ -52,7 +52,12 @@ impl Default for ComputedStyle {
             font_style: FontStyle::Normal,
             line_height: 14.4, // 12.0 * 1.2
             text_align: TextAlign::Left,
-            color: Color { r: 0, g: 0, b: 0, a: 1.0 },
+            color: Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 1.0,
+            },
             margin: Margins::default(),
             padding: Margins::default(),
             width: None,
@@ -113,16 +118,6 @@ pub fn compute_style(
 /// Returns the default style for the document root.
 pub fn get_default_style() -> Arc<ComputedStyle> {
     Arc::new(ComputedStyle::default())
-}
-
-/// Returns the page dimensions in points based on the stylesheet.
-pub fn get_page_dimensions(stylesheet: &Stylesheet) -> (f32, f32) {
-    match stylesheet.page.size {
-        PageSize::A4 => (595.0, 842.0),
-        PageSize::Letter => (612.0, 792.0),
-        PageSize::Legal => (612.0, 1008.0),
-        PageSize::Custom { width, height } => (width, height),
-    }
 }
 
 /// Applies style rules from an `ElementStyle` definition to a `ComputedStyle`.

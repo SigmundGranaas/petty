@@ -6,7 +6,9 @@ use crate::core::idf::TableColumnDefinition;
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
 use crate::parser::ParseError;
 use itertools::Itertools;
+use std::collections::HashMap;
 use std::sync::Arc;
+
 // --- Executable Instruction Set ---
 
 /// A pre-compiled, executable instruction. This is the output of the `Compiler`.
@@ -24,6 +26,8 @@ pub enum JsonInstruction {
     Hyperlink { styles: CompiledStyles, href_template: String, children: Vec<JsonInstruction> },
     InlineImage { styles: CompiledStyles, src_template: String },
     LineBreak,
+    PageBreak { master_name: Option<String> },
+    RenderTemplate { name: String },
     ForEach { in_path: String, body: Vec<JsonInstruction> },
     If { test: String, then_branch: Vec<JsonInstruction>, else_branch: Vec<JsonInstruction> },
 }
@@ -46,11 +50,16 @@ pub struct CompiledTable {
 /// A stateful compiler that transforms a Serde-parsed JSON AST into an executable instruction set.
 pub struct Compiler<'a> {
     stylesheet: &'a Stylesheet,
+    definitions: &'a HashMap<String, Vec<JsonInstruction>>,
 }
 
 impl<'a> Compiler<'a> {
-    pub fn new(stylesheet: &'a Stylesheet) -> Self { Self { stylesheet } }
-    pub fn compile(&self, root_node: &TemplateNode) -> Result<Vec<JsonInstruction>, ParseError> { self.compile_node(root_node) }
+    pub fn new(stylesheet: &'a Stylesheet, definitions: &'a HashMap<String, Vec<JsonInstruction>>) -> Self {
+        Self { stylesheet, definitions }
+    }
+    pub fn compile(&self, root_node: &TemplateNode) -> Result<Vec<JsonInstruction>, ParseError> {
+        self.compile_node(root_node)
+    }
 
     fn compile_node(&self, node: &TemplateNode) -> Result<Vec<JsonInstruction>, ParseError> {
         match node {
@@ -88,6 +97,14 @@ impl<'a> Compiler<'a> {
             JsonNode::Hyperlink(h) => Ok(JsonInstruction::Hyperlink { styles: self.compile_styles(&h.style_names, &h.style_override)?, href_template: h.href.clone(), children: self.compile_children(&h.children)? }),
             JsonNode::InlineImage(i) => Ok(JsonInstruction::InlineImage { styles: self.compile_styles(&i.style_names, &i.style_override)?, src_template: i.src.clone() }),
             JsonNode::LineBreak => Ok(JsonInstruction::LineBreak),
+            JsonNode::PageBreak { master_name } => Ok(JsonInstruction::PageBreak { master_name: master_name.clone() }),
+            JsonNode::RenderTemplate { name } => {
+                // Validate that the template exists at compile time.
+                if !self.definitions.contains_key(name) {
+                    return Err(ParseError::TemplateParse(format!("Defined template '{}' not found in stylesheet definitions.", name)));
+                }
+                Ok(JsonInstruction::RenderTemplate { name: name.clone() })
+            }
         }
     }
 
@@ -139,7 +156,8 @@ mod tests {
         let mut stylesheet = Stylesheet::default();
         stylesheet.styles = styles;
         let static_stylesheet: &'static Stylesheet = Box::leak(Box::new(stylesheet));
-        (Compiler::new(static_stylesheet), static_stylesheet.clone())
+        let empty_defs = Box::leak(Box::new(HashMap::new()));
+        (Compiler::new(static_stylesheet, empty_defs), static_stylesheet.clone())
     }
 
     #[test]

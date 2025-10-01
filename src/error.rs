@@ -1,31 +1,28 @@
-// src/error.rs
-use thiserror::Error;
-use crate::core::layout::LayoutError;
+// FILE: /home/sigmund/RustroverProjects/petty/src/error.rs
 use crate::parser::ParseError;
 use crate::render::RenderError;
+use thiserror::Error;
 
-/// A comprehensive error type for the entire document generation pipeline.
 #[derive(Error, Debug)]
 pub enum PipelineError {
-    #[error("Parsing failed: {0}")]
-    Parse(#[from] ParseError),
-
-    #[error("Layout failed: {0}")]
-    Layout(#[from] LayoutError),
-
-    #[error("Rendering failed: {0}")]
-    Render(#[from] RenderError),
-
+    #[error("Configuration error: {0}")]
+    Config(String),
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
-
-    #[error("Stylesheet is invalid or missing required parts: {0}")]
+    #[error("Stylesheet parsing or processing error: {0}")]
     StylesheetError(String),
+    #[error("Template parsing error: {0}")]
+    Parse(#[from] ParseError),
+    #[error("Rendering error: {0}")]
+    Render(#[from] RenderError),
+    #[error("Layout error: {0}")]
+    Layout(String),
+    #[error("Data parsing error: {0}")]
+    DataParse(#[from] serde_json::Error),
 }
 
-// Add this implementation to handle JSON errors at the top level (e.g., in examples)
-impl From<serde_json::Error> for PipelineError {
-    fn from(e: serde_json::Error) -> Self {
-        PipelineError::Parse(ParseError::JsonParse(e))
+impl From<crate::core::layout::LayoutError> for PipelineError {
+    fn from(e: crate::core::layout::LayoutError) -> Self {
+        PipelineError::Layout(e.to_string())
     }
 }

@@ -7,19 +7,31 @@ use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
 use crate::parser::ParseError;
 use handlebars::Handlebars;
 use serde_json::Value;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// A stateful executor that constructs an `IRNode` tree from a compiled instruction set.
-pub struct TemplateExecutor<'h, 's> {
+pub struct TemplateExecutor<'h, 's, 'd> {
     template_engine: &'h Handlebars<'h>,
     stylesheet: &'s Stylesheet,
+    definitions: &'d HashMap<String, Vec<JsonInstruction>>,
     node_stack: Vec<IRNode>,
     inline_stack: Vec<InlineNode>,
 }
 
-impl<'h, 's> TemplateExecutor<'h, 's> {
-    pub fn new(template_engine: &'h Handlebars<'h>, stylesheet: &'s Stylesheet) -> Self {
-        Self { template_engine, stylesheet, node_stack: vec![], inline_stack: vec![] }
+impl<'h, 's, 'd> TemplateExecutor<'h, 's, 'd> {
+    pub fn new(
+        template_engine: &'h Handlebars<'h>,
+        stylesheet: &'s Stylesheet,
+        definitions: &'d HashMap<String, Vec<JsonInstruction>>,
+    ) -> Self {
+        Self {
+            template_engine,
+            stylesheet,
+            definitions,
+            node_stack: vec![],
+            inline_stack: vec![],
+        }
     }
 
     pub fn build_tree(&mut self, instructions: &[JsonInstruction], context: &Value) -> Result<Vec<IRNode>, ParseError> {
@@ -35,7 +47,9 @@ impl<'h, 's> TemplateExecutor<'h, 's> {
     }
 
     fn execute_instructions(&mut self, instructions: &[JsonInstruction], context: &Value) -> Result<(), ParseError> {
-        for instruction in instructions { self.execute_instruction(instruction, context)?; }
+        for instruction in instructions {
+            self.execute_instruction(instruction, context)?;
+        }
         Ok(())
     }
 
@@ -45,7 +59,9 @@ impl<'h, 's> TemplateExecutor<'h, 's> {
                 let pointer_path = format!("/{}", in_path.replace('.', "/"));
                 let data_to_iterate = context.pointer(&pointer_path).ok_or_else(|| ParseError::TemplateRender(format!("#each path '{}' not found", in_path)))?;
                 let items = data_to_iterate.as_array().ok_or_else(|| ParseError::TemplateRender(format!("#each path '{}' not an array", in_path)))?;
-                for item_context in items { self.execute_instructions(body, item_context)?; }
+                for item_context in items {
+                    self.execute_instructions(body, item_context)?;
+                }
             }
             JsonInstruction::If { test, then_branch, else_branch } => {
                 let condition_template = format!("{{{{#if {}}}}}true{{{{/if}}}}", test.trim_matches(|c| c == '{' || c == '}'));
@@ -55,6 +71,11 @@ impl<'h, 's> TemplateExecutor<'h, 's> {
                     self.execute_instructions(else_branch, context)?;
                 }
             }
+            JsonInstruction::RenderTemplate { name } => {
+                let template_instructions = self.definitions.get(name).ok_or_else(|| ParseError::TemplateParse(format!("Rendered template '{}' not found.", name)))?;
+                self.execute_instructions(template_instructions, context)?;
+            }
+            JsonInstruction::PageBreak { master_name } => self.push_block_to_parent(IRNode::PageBreak { master_name: master_name.clone() }),
             JsonInstruction::Block { styles, children } => self.execute_container(IRNode::Block { style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone(), children: vec![] }, children, context)?,
             JsonInstruction::FlexContainer { styles, children } => self.execute_container(IRNode::FlexContainer { style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone(), children: vec![] }, children, context)?,
             JsonInstruction::List { styles, children } => self.execute_container(IRNode::List { style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone(), children: vec![] }, children, context)?,
@@ -68,12 +89,16 @@ impl<'h, 's> TemplateExecutor<'h, 's> {
             JsonInstruction::StyledSpan { styles, children } => {
                 self.inline_stack.push(InlineNode::StyledSpan { style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone(), children: vec![] });
                 self.execute_instructions(children, context)?;
-                if let Some(s) = self.inline_stack.pop() { self.push_inline_to_parent(s); }
+                if let Some(s) = self.inline_stack.pop() {
+                    self.push_inline_to_parent(s);
+                }
             }
             JsonInstruction::Hyperlink { styles, href_template, children } => {
                 self.inline_stack.push(InlineNode::Hyperlink { href: self.render_text(href_template, context)?, style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone(), children: vec![] });
                 self.execute_instructions(children, context)?;
-                if let Some(h) = self.inline_stack.pop() { self.push_inline_to_parent(h); }
+                if let Some(h) = self.inline_stack.pop() {
+                    self.push_inline_to_parent(h);
+                }
             }
         }
         Ok(())
@@ -90,7 +115,7 @@ impl<'h, 's> TemplateExecutor<'h, 's> {
     }
 
     fn execute_container(&mut self, mut node: IRNode, children: &[JsonInstruction], context: &Value) -> Result<(), ParseError> {
-        let mut sub_executor = TemplateExecutor::new(self.template_engine, self.stylesheet);
+        let mut sub_executor = TemplateExecutor::new(self.template_engine, self.stylesheet, self.definitions);
         let child_nodes = sub_executor.build_tree(children, context)?;
         match &mut node {
             IRNode::Block { children: c, .. } | IRNode::FlexContainer { children: c, .. } | IRNode::List { children: c, .. } | IRNode::ListItem { children: c, .. } => *c = child_nodes,
@@ -103,17 +128,21 @@ impl<'h, 's> TemplateExecutor<'h, 's> {
 
     fn execute_table(&mut self, table: &CompiledTable, context: &Value) -> Result<(), ParseError> {
         let header = if let Some(instructions) = &table.header {
-            let mut sub_executor = TemplateExecutor::new(self.template_engine, self.stylesheet);
+            let mut sub_executor = TemplateExecutor::new(self.template_engine, self.stylesheet, self.definitions);
             Some(Box::new(TableHeader { rows: sub_executor.build_tree(instructions, context)?.into_iter().map(TableRow::try_from).collect::<Result<_, _>>()? }))
-        } else { None };
-        let mut sub_executor = TemplateExecutor::new(self.template_engine, self.stylesheet);
+        } else {
+            None
+        };
+        let mut sub_executor = TemplateExecutor::new(self.template_engine, self.stylesheet, self.definitions);
         let body = Box::new(TableBody { rows: sub_executor.build_tree(&table.body, context)?.into_iter().map(TableRow::try_from).collect::<Result<_, _>>()? });
         self.push_block_to_parent(IRNode::Table { style_sets: self.gather_styles(&table.styles, context)?, style_override: table.styles.style_override.clone(), columns: table.columns.clone(), header, body });
         Ok(())
     }
 
     fn render_text(&self, text: &str, context: &Value) -> Result<String, ParseError> {
-        if !text.contains("{{") { return Ok(text.to_string()); }
+        if !text.contains("{{") {
+            return Ok(text.to_string());
+        }
         self.template_engine.render_template(text, context).map_err(|e| ParseError::TemplateRender(e.to_string()))
     }
 
@@ -128,7 +157,10 @@ impl<'h, 's> TemplateExecutor<'h, 's> {
 
     fn push_inline_to_parent(&mut self, node: InlineNode) {
         if let Some(parent_inline) = self.inline_stack.last_mut() {
-            if let InlineNode::StyledSpan { children: c, .. } | InlineNode::Hyperlink { children: c, .. } = parent_inline { c.push(node); return; }
+            if let InlineNode::StyledSpan { children: c, .. } | InlineNode::Hyperlink { children: c, .. } = parent_inline {
+                c.push(node);
+                return;
+            }
         }
         if let Some(IRNode::Paragraph { children: c, .. }) = self.node_stack.last_mut() {
             c.push(node);
@@ -139,6 +171,40 @@ impl<'h, 's> TemplateExecutor<'h, 's> {
 }
 
 // --- TryFrom Implementations required for table/inline processing ---
-impl TryFrom<IRNode> for TableRow { type Error = ParseError; fn try_from(node: IRNode) -> Result<Self, Self::Error> { if let IRNode::Block { children, .. } = node { Ok(TableRow { cells: children.into_iter().map(TableCell::try_from).collect::<Result<_, _>>()? }) } else { Err(ParseError::TemplateParse(format!("Expected Block to convert to TableRow, got {:?}", node))) } } }
-impl TryFrom<IRNode> for TableCell { type Error = ParseError; fn try_from(node: IRNode) -> Result<Self, Self::Error> { if let IRNode::Block { style_sets, style_override, children } = node { Ok(TableCell { style_sets, style_override, children }) } else { Err(ParseError::TemplateParse(format!("Expected Block to convert to TableCell, got {:?}", node))) } } }
-impl TryFrom<IRNode> for InlineNode { type Error = ParseError; fn try_from(node: IRNode) -> Result<Self, Self::Error> { match node { IRNode::Paragraph { mut children, .. } => { if children.len() == 1 { Ok(children.remove(0)) } else if children.is_empty() { Ok(InlineNode::Text("".to_string())) } else { Err(ParseError::TemplateParse("Cannot convert multi-child paragraph to single inline node.".into())) } } _ => Err(ParseError::TemplateParse("Node cannot be converted to an InlineNode".into())), } } }
+impl TryFrom<IRNode> for TableRow {
+    type Error = ParseError;
+    fn try_from(node: IRNode) -> Result<Self, Self::Error> {
+        if let IRNode::Block { children, .. } = node {
+            Ok(TableRow { cells: children.into_iter().map(TableCell::try_from).collect::<Result<_, _>>()? })
+        } else {
+            Err(ParseError::TemplateParse(format!("Expected Block to convert to TableRow, got {:?}", node)))
+        }
+    }
+}
+impl TryFrom<IRNode> for TableCell {
+    type Error = ParseError;
+    fn try_from(node: IRNode) -> Result<Self, Self::Error> {
+        if let IRNode::Block { style_sets, style_override, children } = node {
+            Ok(TableCell { style_sets, style_override, children })
+        } else {
+            Err(ParseError::TemplateParse(format!("Expected Block to convert to TableCell, got {:?}", node)))
+        }
+    }
+}
+impl TryFrom<IRNode> for InlineNode {
+    type Error = ParseError;
+    fn try_from(node: IRNode) -> Result<Self, Self::Error> {
+        match node {
+            IRNode::Paragraph { mut children, .. } => {
+                if children.len() == 1 {
+                    Ok(children.remove(0))
+                } else if children.is_empty() {
+                    Ok(InlineNode::Text("".to_string()))
+                } else {
+                    Err(ParseError::TemplateParse("Cannot convert multi-child paragraph to single inline node.".into()))
+                }
+            }
+            _ => Err(ParseError::TemplateParse("Node cannot be converted to an InlineNode".into())),
+        }
+    }
+}

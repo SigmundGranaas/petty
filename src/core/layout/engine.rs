@@ -1,4 +1,5 @@
 // FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/engine.rs
+// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/engine.rs
 use super::fonts::FontManager;
 use super::geom;
 use super::node::{LayoutContext, LayoutNode, LayoutResult};
@@ -6,12 +7,11 @@ use super::nodes::block::BlockNode;
 use super::nodes::flex::FlexNode;
 use super::nodes::image::ImageNode;
 use super::nodes::list::ListNode;
+use super::nodes::page_break::PageBreakNode;
 use super::nodes::paragraph::ParagraphNode;
 use super::nodes::table::TableNode;
 use super::style::{self, ComputedStyle};
-use super::{IRNode, LayoutError, PipelineError, PositionedElement};
-use crate::core::idf::LayoutUnit;
-use crate::core::style::dimension::Margins;
+use super::{IRNode, PipelineError, PositionedElement};
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
 use std::sync::Arc;
 
@@ -19,42 +19,43 @@ use std::sync::Arc;
 /// layout algorithm on a single `IRNode` tree.
 #[derive(Clone)]
 pub struct LayoutEngine {
-    pub(crate) stylesheet: Stylesheet,
     pub(crate) font_manager: Arc<FontManager>,
 }
 
 impl LayoutEngine {
-    /// Creates a new layout engine with the given stylesheet.
-    pub fn new(stylesheet: Stylesheet, font_manager: Arc<FontManager>) -> Self {
-        LayoutEngine {
-            stylesheet,
-            font_manager,
-        }
+    /// Creates a new layout engine.
+    pub fn new(font_manager: Arc<FontManager>) -> Self {
+        LayoutEngine { font_manager }
     }
 
-    /// The main entry point into the layout process for a single `sequence`.
-    /// This is the new, cooperative pagination implementation.
-    pub fn paginate_tree(
+    /// The main entry point into the layout process.
+    /// This method implements a cooperative pagination algorithm that processes a
+    /// complete `IRNode` tree, breaking it into pages based on content flow and
+    /// explicit page breaks.
+    pub fn paginate(
         &self,
-        layout_unit: LayoutUnit,
+        stylesheet: &Stylesheet,
+        ir_nodes: Vec<IRNode>,
     ) -> Result<Vec<Vec<PositionedElement>>, PipelineError> {
-        let (page_width, page_height) = style::get_page_dimensions(&self.stylesheet);
-        let default_margins = Margins::default();
-        let margins = self.stylesheet.page.margins.as_ref().unwrap_or(&default_margins);
-        let content_width = page_width - margins.left - margins.right;
-        let content_height = page_height - margins.top - margins.bottom;
-
-        // 1. Build the full LayoutNode tree from the IRNode tree.
-        let mut root_node = self.build_layout_node_tree(&layout_unit.tree, self.get_default_style());
-
-        // 2. Perform the measurement pass on the LayoutNode tree.
-        root_node.measure(self, content_width);
-
-        // 3. Start the pagination loop.
-        let mut work_item: Option<Box<dyn LayoutNode>> = Some(root_node);
         let mut pages = Vec::new();
+        let mut current_work: Option<Box<dyn LayoutNode>> =
+            Some(self.build_layout_node_tree(&IRNode::Root(ir_nodes), self.get_default_style()));
 
-        while let Some(mut current_node) = work_item.take() {
+        let mut current_master_name = stylesheet
+            .default_page_master_name
+            .clone()
+            .ok_or_else(|| PipelineError::Layout("No default page master defined".to_string()))?;
+
+        while let Some(mut work_item) = current_work.take() {
+            let page_layout = stylesheet.page_masters.get(&current_master_name).ok_or_else(|| {
+                PipelineError::Layout(format!("Page master '{}' not found in stylesheet", current_master_name))
+            })?;
+
+            let (page_width, page_height) = page_layout.size.dimensions_pt();
+            let margins = page_layout.margins.clone().unwrap_or_default();
+            let content_width = page_width - margins.left - margins.right;
+            let content_height = page_height - margins.top - margins.bottom;
+
             let mut page_elements = Vec::new();
             let bounds = geom::Rect {
                 x: margins.left,
@@ -62,28 +63,31 @@ impl LayoutEngine {
                 width: content_width,
                 height: content_height,
             };
+
+            // Before layout, perform the measurement pass on the current work item.
+            work_item.measure(self, content_width);
+
             let mut ctx = LayoutContext::new(self, bounds, &mut page_elements);
 
-            match current_node.layout(&mut ctx) {
-                Ok(LayoutResult::Full) => {
-                    // Document finished, loop will terminate.
-                }
-                Ok(LayoutResult::Partial(remainder)) => {
-                    work_item = Some(remainder);
-                }
-                Err(e @ LayoutError::ElementTooLarge(..)) => {
-                    log::error!("Layout error: {}. Skipping offending element.", e);
-                    // The element is skipped, but we continue processing the rest of the document
-                    // by taking the remainder if one was produced, or just continuing if not.
-                    // In a simple case (like an image), there's no remainder.
-                }
-            }
+            // Layout this page
+            let result = work_item.layout(&mut ctx)?;
 
             if !page_elements.is_empty() || pages.is_empty() {
                 pages.push(page_elements);
             }
-        }
 
+            // Prepare for next page
+            match result {
+                LayoutResult::Full => { /* Done with all content, loop will terminate. */ }
+                LayoutResult::Partial(mut remainder) => {
+                    // Check if the reason for the page break was an explicit <page-break> tag.
+                    if let Some(new_master) = remainder.check_for_page_break() {
+                        current_master_name = new_master.unwrap_or(current_master_name);
+                    }
+                    current_work = Some(remainder);
+                }
+            }
+        }
         Ok(pages)
     }
 
@@ -101,10 +105,9 @@ impl LayoutEngine {
             IRNode::Table { .. } => Box::new(TableNode::new(node, self, parent_style)),
             IRNode::Paragraph { .. } => Box::new(ParagraphNode::new(node, self, parent_style)),
             IRNode::Image { .. } => Box::new(ImageNode::new(node, self, parent_style)),
+            IRNode::PageBreak { master_name } => Box::new(PageBreakNode::new(master_name.clone())),
             // ListItem is handled internally by ListNode
             IRNode::ListItem { .. } => {
-                // This case should ideally not be hit if ListItems are always in Lists.
-                // We'll treat it as a Block for robustness.
                 log::warn!("Orphan ListItem found; treating as a Block.");
                 Box::new(BlockNode::new(node, self, parent_style))
             }
@@ -135,36 +138,34 @@ mod tests {
     use super::*;
     use crate::core::idf::InlineNode;
     use crate::core::style::dimension::Margins;
-    use serde_json::Value;
-    use std::sync::Arc;
+    use crate::core::style::stylesheet::PageLayout;
 
     fn create_test_engine() -> LayoutEngine {
-        let stylesheet = Stylesheet::default();
         let mut font_manager = FontManager::new();
         font_manager.load_fallback_font().unwrap();
-        LayoutEngine::new(stylesheet, Arc::new(font_manager))
+        LayoutEngine::new(Arc::new(font_manager))
     }
 
     #[test]
     fn test_paginate_simple_paragraph() {
         let engine = create_test_engine();
-        let tree = IRNode::Root(vec![IRNode::Paragraph {
+        let mut stylesheet = Stylesheet::default();
+        stylesheet.page_masters.insert("master".to_string(), PageLayout::default());
+        stylesheet.default_page_master_name = Some("master".to_string());
+
+        let ir_nodes = vec![IRNode::Paragraph {
             style_sets: vec![],
             style_override: None,
             children: vec![InlineNode::Text("Hello World".to_string())],
-        }]);
-        let layout_unit = LayoutUnit {
-            tree,
-            context: Value::Null.into(),
-        };
+        }];
 
-        let mut pages = engine.paginate_tree(layout_unit).unwrap();
+        let mut pages = engine.paginate(&stylesheet, ir_nodes).unwrap();
         let page1 = pages.remove(0);
 
         assert!(!page1.is_empty(), "Page should have elements");
         let text_element = &page1[0];
 
-        let default_margin = engine.stylesheet.page.margins.as_ref().map_or(0.0, |m| m.top);
+        let default_margin = stylesheet.page_masters["master"].margins.as_ref().map_or(0.0, |m| m.top);
         assert!((text_element.y - default_margin).abs() < 0.1);
         // Default font size 12, line height 14.4
         assert_eq!(text_element.height, 14.4);
@@ -173,6 +174,16 @@ mod tests {
     #[test]
     fn test_block_with_margin_and_padding() {
         let engine = create_test_engine();
+        let mut stylesheet = Stylesheet::default();
+        stylesheet.page_masters.insert(
+            "master".to_string(),
+            PageLayout {
+                margins: Some(Margins::default()),
+                ..Default::default()
+            },
+        );
+        stylesheet.default_page_master_name = Some("master".to_string());
+
         let block_style_override = ElementStyle {
             margin: Some(Margins {
                 top: 20.0,
@@ -186,7 +197,7 @@ mod tests {
             }),
             ..Default::default()
         };
-        let tree = IRNode::Root(vec![IRNode::Block {
+        let ir_nodes = vec![IRNode::Block {
             style_sets: vec![],
             style_override: Some(block_style_override),
             children: vec![IRNode::Paragraph {
@@ -194,18 +205,14 @@ mod tests {
                 style_override: None,
                 children: vec![InlineNode::Text("Inside".to_string())],
             }],
-        }]);
+        }];
 
-        let layout_unit = LayoutUnit {
-            tree,
-            context: Value::Null.into(),
-        };
-        let mut pages = engine.paginate_tree(layout_unit).unwrap();
+        let mut pages = engine.paginate(&stylesheet, ir_nodes).unwrap();
         let page1 = pages.remove(0);
 
         assert_eq!(page1.len(), 1, "Should have one text element");
         let text_el = &page1[0];
-        let page_margin = engine.stylesheet.page.margins.as_ref().map_or(0.0, |m| m.top);
+        let page_margin = stylesheet.page_masters["master"].margins.as_ref().map_or(0.0, |m| m.top);
 
         // y = page_margin_top(0) + block_margin_top(20) + block_padding_top(10) = 30.0
         assert!((text_el.y - (page_margin + 20.0 + 10.0)).abs() < 0.1);

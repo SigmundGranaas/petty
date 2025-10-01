@@ -2,23 +2,32 @@
 #![cfg(test)]
 
 use crate::core::idf::{IRNode, InlineNode};
-use crate::core::layout::test_utils::{
-    create_layout_unit, create_paragraph, create_test_engine_with_page,
-    find_first_text_box_with_content,
-};
-use crate::core::style::stylesheet::ElementStyle;
+use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
+use crate::core::style::dimension::{Margins, PageSize};
+use crate::core::style::stylesheet::{ElementStyle, PageLayout, Stylesheet};
 use crate::core::style::text::TextAlign;
+use std::collections::HashMap;
 
 #[test]
 fn test_text_wrapping() {
     // Page width 220, margin 10 -> content width 200
-    let engine = create_test_engine_with_page(220.0, 500.0, 10.0);
+    let stylesheet = Stylesheet {
+        page_masters: HashMap::from([(
+            "master".to_string(),
+            PageLayout {
+                size: PageSize::Custom { width: 220.0, height: 500.0 },
+                margins: Some(Margins::all(10.0)),
+                ..Default::default()
+            },
+        )]),
+        default_page_master_name: Some("master".to_string()),
+        ..Default::default()
+    };
 
     let text = "This is a very very long line of text that is absolutely guaranteed to wrap at least once.";
-    let tree = IRNode::Root(vec![create_paragraph(text)]);
+    let nodes = vec![create_paragraph(text)];
 
-    let layout_unit = create_layout_unit(tree);
-    let pages = engine.paginate_tree(layout_unit).unwrap();
+    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
 
     // The text will be broken into multiple PositionedElements (runs).
@@ -33,7 +42,18 @@ fn test_text_wrapping() {
 
 #[test]
 fn test_text_alignment_center() {
-    let engine = create_test_engine_with_page(500.0, 500.0, 10.0);
+    let stylesheet = Stylesheet {
+        page_masters: HashMap::from([(
+            "master".to_string(),
+            PageLayout {
+                size: PageSize::Custom { width: 500.0, height: 500.0 },
+                margins: Some(Margins::all(10.0)), // content width 480
+                ..Default::default()
+            },
+        )]),
+        default_page_master_name: Some("master".to_string()),
+        ..Default::default()
+    };
     let content_width = 480.0;
 
     let text = "Centered text";
@@ -48,15 +68,13 @@ fn test_text_alignment_center() {
         children: vec![InlineNode::Text(text.to_string())],
     };
 
-    let tree = IRNode::Root(vec![para]);
-    let layout_unit = create_layout_unit(tree);
-    let pages = engine.paginate_tree(layout_unit).unwrap();
+    let nodes = vec![para];
+    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
 
     let text_el = find_first_text_box_with_content(page1, text).unwrap();
 
-    // The text itself has a width. The box containing it (PositionedElement) has that width.
-    // Its x position should be offset.
+    let engine = crate::core::layout::test_utils::create_test_engine();
     let style = engine.get_default_style();
     let text_width = engine.measure_text_width(text, &style);
 

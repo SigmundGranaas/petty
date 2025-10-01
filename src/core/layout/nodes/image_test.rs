@@ -1,11 +1,10 @@
 // FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/image_test.rs
 #![cfg(test)]
-use crate::core::idf::{IRNode, LayoutUnit};
-use crate::core::layout::test_utils::{create_paragraph, create_test_engine_with_page};
-use crate::core::style::dimension::{Dimension, Margins};
-use crate::core::style::stylesheet::ElementStyle;
-use serde_json::Value;
-use std::sync::Arc;
+use crate::core::idf::IRNode;
+use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
+use crate::core::style::dimension::{Dimension, Margins, PageSize};
+use crate::core::style::stylesheet::{ElementStyle, PageLayout, Stylesheet};
+use std::collections::HashMap;
 
 fn create_image(height: f32) -> IRNode {
     IRNode::Image {
@@ -21,17 +20,24 @@ fn create_image(height: f32) -> IRNode {
 #[test]
 fn test_image_splits_to_next_page() {
     // Page content height = 80.
-    let engine = create_test_engine_with_page(500.0, 100.0, 10.0);
-    let tree = IRNode::Root(vec![
+    let stylesheet = Stylesheet {
+        page_masters: HashMap::from([(
+            "master".to_string(),
+            PageLayout {
+                size: PageSize::Custom { width: 500.0, height: 100.0 },
+                margins: Some(Margins::all(10.0)),
+                ..Default::default()
+            },
+        )]),
+        default_page_master_name: Some("master".to_string()),
+        ..Default::default()
+    };
+    let nodes = vec![
         create_image(40.0), // Fits
         create_image(50.0), // Does not fit (40 + 50 > 80)
-    ]);
+    ];
 
-    let layout_unit = LayoutUnit {
-        tree,
-        context: Arc::new(Value::Null),
-    };
-    let pages = engine.paginate_tree(layout_unit).unwrap();
+    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
 
     assert_eq!(pages.len(), 2, "Expected two pages");
 
@@ -48,30 +54,33 @@ fn test_image_splits_to_next_page() {
 
 #[test]
 fn test_image_with_margins() {
-    let engine = create_test_engine_with_page(500.0, 100.0, 10.0);
-    let image_style = ElementStyle {
-        height: Some(Dimension::Pt(30.0)),
-        margin: Some(Margins {
-            top: 15.0,
-            bottom: 5.0,
-            ..Default::default()
-        }),
+    let stylesheet = Stylesheet {
+        page_masters: HashMap::from([(
+            "master".to_string(),
+            PageLayout {
+                size: PageSize::Custom { width: 500.0, height: 100.0 },
+                margins: Some(Margins::all(10.0)),
+                ..Default::default()
+            },
+        )]),
+        default_page_master_name: Some("master".to_string()),
         ..Default::default()
     };
-    let tree = IRNode::Root(vec![
+    let image_style = ElementStyle {
+        height: Some(Dimension::Pt(30.0)),
+        margin: Some(Margins { top: 15.0, bottom: 5.0, ..Default::default() }),
+        ..Default::default()
+    };
+    let nodes = vec![
         IRNode::Image {
             src: "test.png".to_string(),
             style_sets: vec![],
             style_override: Some(image_style),
         }, // Total height = 15+30+5 = 50
         create_image(20.0), // Starts at y=10+50. Fits (10+50+20 <= 80)
-    ]);
+    ];
 
-    let layout_unit = LayoutUnit {
-        tree,
-        context: Arc::new(Value::Null),
-    };
-    let pages = engine.paginate_tree(layout_unit).unwrap();
+    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
     assert_eq!(pages.len(), 1);
 
     let page1 = &pages[0];
@@ -88,22 +97,30 @@ fn test_image_with_margins() {
 
 #[test]
 fn test_image_taller_than_page_is_skipped() {
-    let engine = create_test_engine_with_page(500.0, 100.0, 10.0); // Content height = 80
-    let tree = IRNode::Root(vec![
+    let stylesheet = Stylesheet {
+        page_masters: HashMap::from([(
+            "master".to_string(),
+            PageLayout {
+                size: PageSize::Custom { width: 500.0, height: 100.0 },
+                margins: Some(Margins::all(10.0)), // Content height = 80
+                ..Default::default()
+            },
+        )]),
+        default_page_master_name: Some("master".to_string()),
+        ..Default::default()
+    };
+    let nodes = vec![
         create_paragraph("Before"),
         create_image(90.0), // Taller than content height
         create_paragraph("After"),
-    ]);
-    let layout_unit = LayoutUnit {
-        tree,
-        context: Arc::new(Value::Null),
-    };
-    let pages = engine.paginate_tree(layout_unit).unwrap();
+    ];
+
+    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
 
     assert_eq!(pages.len(), 1, "Should only produce one page");
     let page1 = &pages[0];
     // The oversized image is skipped, but the other paragraphs are rendered.
     assert_eq!(page1.len(), 2);
-    assert!(page1.iter().any(|el| el.element.to_string().contains("Before")));
-    assert!(page1.iter().any(|el| el.element.to_string().contains("After")));
+    assert!(find_first_text_box_with_content(page1, "Before").is_some());
+    assert!(find_first_text_box_with_content(page1, "After").is_some());
 }

@@ -1,16 +1,11 @@
 // FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/table_test.rs
 #![cfg(test)]
 
-use crate::core::idf::{
-    IRNode, LayoutUnit, TableBody, TableCell, TableColumnDefinition, TableHeader, TableRow,
-};
-use crate::core::layout::test_utils::{
-    create_layout_unit, create_paragraph, create_test_engine_with_page,
-    find_first_text_box_with_content,
-};
-use crate::core::style::dimension::Dimension;
-use serde_json::Value;
-use std::sync::Arc;
+use crate::core::idf::{IRNode, TableBody, TableCell, TableColumnDefinition, TableHeader, TableRow};
+use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
+use crate::core::style::dimension::{Dimension, Margins, PageSize};
+use crate::core::style::stylesheet::{PageLayout, Stylesheet};
+use std::collections::HashMap;
 
 fn create_test_table(rows: usize) -> IRNode {
     let mut body_rows = Vec::new();
@@ -63,11 +58,21 @@ fn create_test_table(rows: usize) -> IRNode {
 #[test]
 fn test_table_basic_layout() {
     // Page: 500w. Table will use all of it. Cols will be 250w.
-    let engine = create_test_engine_with_page(500.0, 500.0, 0.0);
+    let stylesheet = Stylesheet {
+        page_masters: HashMap::from([(
+            "master".to_string(),
+            PageLayout {
+                size: PageSize::Custom { width: 500.0, height: 500.0 },
+                ..Default::default()
+            },
+        )]),
+        default_page_master_name: Some("master".to_string()),
+        ..Default::default()
+    };
     let table = create_test_table(2);
-    let layout_unit = create_layout_unit(IRNode::Root(vec![table]));
+    let nodes = vec![table];
 
-    let pages = engine.paginate_tree(layout_unit).unwrap();
+    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
 
     // Header(2) + R1(2) + R2(2) = 6 text elements
@@ -96,14 +101,22 @@ fn test_table_splits_across_pages() {
     // Can fit Header (14.4) + Row 1 (14.4) + Row 2 (14.4) = 43.2.
     // Row 3 starts at 43.2, needs 14.4, bottom would be 57.6, which > 50.
     // So, page break before Row 3.
-    let engine = create_test_engine_with_page(500.0, 70.0, 10.0); // Content height = 50
-    let table = create_test_table(5); // Header + 5 rows
-    let layout_unit = LayoutUnit {
-        tree: IRNode::Root(vec![table]),
-        context: Arc::new(Value::Null),
+    let stylesheet = Stylesheet {
+        page_masters: HashMap::from([(
+            "master".to_string(),
+            PageLayout {
+                size: PageSize::Custom { width: 500.0, height: 70.0 },
+                margins: Some(Margins::all(10.0)), // Content height = 50
+                ..Default::default()
+            },
+        )]),
+        default_page_master_name: Some("master".to_string()),
+        ..Default::default()
     };
+    let table = create_test_table(5); // Header + 5 rows
+    let nodes = vec![table];
 
-    let pages = engine.paginate_tree(layout_unit).unwrap();
+    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
     assert_eq!(pages.len(), 2, "Expected table to split into 2 pages");
 
     // Page 1: Header + 2 Rows = 3*2 = 6 elements

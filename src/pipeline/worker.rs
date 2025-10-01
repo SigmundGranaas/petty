@@ -1,4 +1,7 @@
 // FILE: /home/sigmund/RustroverProjects/petty/src/pipeline/worker.rs
+use crate::core::idf::{IRNode, InlineNode, SharedData};
+use crate::core::layout::{LayoutEngine, PositionedElement};
+use crate::core::style::stylesheet::Stylesheet;
 use crate::error::PipelineError;
 use log::{debug, info};
 use serde_json::Value;
@@ -7,8 +10,6 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
-use crate::core::idf::{IRNode, InlineNode, LayoutUnit, SharedData};
-use crate::core::layout::{LayoutEngine, PositionedElement};
 
 /// Represents the output of a single worker task: the original data context,
 /// the resulting pages of positioned elements, and all loaded resources.
@@ -26,56 +27,27 @@ pub(super) fn finish_layout_and_resource_loading(
     context_arc: Arc<Value>,
     resource_base_path: &Path,
     layout_engine: &LayoutEngine,
+    stylesheet: &Stylesheet,
     debug_mode: bool,
 ) -> Result<LaidOutSequence, PipelineError> {
     let total_start = Instant::now();
-    let tree = IRNode::Root(ir_nodes);
+    let tree = IRNode::Root(ir_nodes.clone()); // TODO: Avoid clone
 
     if debug_mode {
-        // When debug mode is enabled, dump the full IR tree to the debug logs.
-        // This allows developers to inspect the exact structure the layout engine
-        // will be operating on.
-        log::debug!(
-            "[WORKER-{}] Intermediate Representation (IR) tree dump:\n{:#?}",
-            worker_id,
-            &tree
-        );
+        log::debug!("[WORKER-{}] Intermediate Representation (IR) tree dump:\n{:#?}", worker_id, &tree);
     }
 
     let resource_start = Instant::now();
-    debug!(
-        "[WORKER-{}] Collecting and loading resources relative to '{}'.",
-        worker_id,
-        resource_base_path.display()
-    );
+    debug!("[WORKER-{}] Collecting and loading resources relative to '{}'.", worker_id, resource_base_path.display());
     let resources = collect_and_load_resources(&tree, resource_base_path)?;
-    debug!(
-        "[WORKER-{}] Finished loading {} resources in {:.2?}.",
-        worker_id,
-        resources.len(),
-        resource_start.elapsed()
-    );
-
-    let layout_unit = LayoutUnit {
-        tree,
-        context: Arc::clone(&context_arc),
-    };
+    debug!("[WORKER-{}] Finished loading {} resources in {:.2?}.", worker_id, resources.len(), resource_start.elapsed());
 
     let layout_start = Instant::now();
     debug!("[WORKER-{}] Paginating sequence tree.", worker_id);
-    let pages: Vec<Vec<PositionedElement>> = layout_engine.paginate_tree(layout_unit)?;
-    debug!(
-        "[WORKER-{}] Finished paginating sequence ({} pages) in {:.2?}.",
-        worker_id,
-        pages.len(),
-        layout_start.elapsed()
-    );
+    let pages: Vec<Vec<PositionedElement>> = layout_engine.paginate(stylesheet, ir_nodes)?;
+    debug!("[WORKER-{}] Finished paginating sequence ({} pages) in {:.2?}.", worker_id, pages.len(), layout_start.elapsed());
 
-    info!(
-        "[WORKER-{}] Finished processing sequence in {:.2?}.",
-        worker_id,
-        total_start.elapsed()
-    );
+    info!("[WORKER-{}] Finished processing sequence in {:.2?}.", worker_id, total_start.elapsed());
 
     Ok(LaidOutSequence {
         context: context_arc,
@@ -122,6 +94,7 @@ fn collect_image_uris(node: &IRNode, uris: &mut HashSet<String>) {
                 }
             }
         }
+        IRNode::PageBreak { .. } => {}
     }
 }
 
@@ -157,11 +130,7 @@ fn collect_and_load_resources(
                     resources.insert(uri, Arc::new(image_bytes));
                 }
                 Err(e) => {
-                    log::warn!(
-                        "Failed to load image resource '{}': {}",
-                        image_path.display(),
-                        e
-                    );
+                    log::warn!("Failed to load image resource '{}': {}", image_path.display(), e);
                 }
             }
         }

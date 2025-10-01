@@ -1,10 +1,11 @@
+// FILE: /home/sigmund/RustroverProjects/petty/src/parser/json/ast.rs
 //! Defines the Abstract Syntax Tree (AST) for the JSON template format as it is
 //! parsed from the source file by Serde. This is the **input** representation.
 
-use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use crate::core::style::dimension::Dimension;
 use crate::core::style::stylesheet::{ElementStyle, PageLayout};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 // --- Template Structure ---
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
@@ -60,6 +61,13 @@ pub enum JsonNode {
     Hyperlink(JsonHyperlink),
     InlineImage(JsonImage),
     LineBreak,
+    // New control-flow nodes
+    PageBreak {
+        master_name: Option<String>,
+    },
+    RenderTemplate {
+        name: String,
+    },
 }
 
 // --- Component Structs ---
@@ -159,10 +167,13 @@ pub struct JsonTemplateFile {
     pub _template: TemplateNode,
 }
 
-#[derive(Deserialize, Debug, Default)]
+#[derive(Deserialize, Debug, Default, Clone)]
+#[serde(rename_all = "camelCase")]
 pub struct StylesheetDef {
     #[serde(default)]
-    pub page: PageLayout,
+    pub page_masters: HashMap<String, PageLayout>,
     #[serde(default)]
     pub styles: HashMap<String, ElementStyle>,
+    #[serde(default)]
+    pub definitions: HashMap<String, TemplateNode>,
 }

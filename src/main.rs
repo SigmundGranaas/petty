@@ -34,7 +34,7 @@ fn main() -> Result<(), PipelineError> {
     println!("Building PDF generation pipeline...");
     // Use the correct builder method for XSLT files.
     let pipeline = PipelineBuilder::new()
-        .with_xslt_template_file(template_path)?
+        .with_template_file(template_path)?
         .build()?;
 
     println!("Generating PDF to {}...", output_path);

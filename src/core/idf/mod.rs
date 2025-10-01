@@ -7,22 +7,12 @@
 //! The layout engine's primary role is to process this tree, annotate it with
 //! measurements, and then generate positioned elements for rendering.
 
-use serde_json::Value;
-use std::sync::Arc;
 use crate::core::style::dimension::Dimension;
 use crate::core::style::stylesheet::ElementStyle;
+use std::sync::Arc;
 
 /// A thread-safe, shared byte buffer, typically used for resource data like images.
 pub type SharedData = Arc<Vec<u8>>;
-
-/// Represents the top-level unit of work for the layout engine. It pairs a complete
-/// `IRNode` tree with the specific data context that was used to generate it.
-pub struct LayoutUnit {
-    /// The root of the layout tree for a single `sequence`.
-    pub tree: IRNode,
-    /// A thread-safe reference to the JSON data context for this specific `sequence`.
-    pub context: Arc<Value>,
-}
 
 /// Helper macro to generate repetitive style accessor methods.
 macro_rules! impl_style_accessors {
@@ -50,7 +40,6 @@ macro_rules! impl_style_accessors {
         }
     };
 }
-
 
 /// The primary enum representing all possible block-level elements in a document layout.
 /// This forms the backbone of the `IRNode` tree.
@@ -112,6 +101,10 @@ pub enum IRNode {
         header: Option<Box<TableHeader>>,
         body: Box<TableBody>,
     },
+
+    /// Inserts a hard page break, optionally switching to a new page master.
+    /// If `master_name` is None, the current page master is used for the next page.
+    PageBreak { master_name: Option<String> },
 }
 
 impl_style_accessors!(
@@ -124,7 +117,6 @@ impl_style_accessors!(
     IRNode::ListItem,
     IRNode::Table
 );
-
 
 // --- Table Component Structs ---
 

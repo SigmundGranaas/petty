@@ -6,6 +6,7 @@ use crate::core::layout::text::{atomize_inlines, LayoutAtom};
 use crate::core::layout::{LayoutEngine, LayoutError, PositionedElement};
 use crate::core::style::dimension::Dimension;
 use crate::core::style::text::TextAlign;
+use std::any::Any;
 use std::sync::Arc;
 
 /// A `LayoutNode` implementation for paragraphs, capable of line-breaking and page-splitting.
@@ -31,6 +32,10 @@ impl ParagraphNode {
 impl LayoutNode for ParagraphNode {
     fn style(&self) -> &Arc<ComputedStyle> {
         &self.style
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 
     fn measure_content_height(&mut self, _engine: &LayoutEngine, available_width: f32) -> f32 {
@@ -156,7 +161,7 @@ impl LayoutNode for ParagraphNode {
     }
 }
 
-/// Commits a line of atoms to the LayoutContext. (Helper function, unchanged)
+/// Commits a line of atoms to the LayoutContext.
 fn commit_line_to_context(
     ctx: &mut LayoutContext,
     parent_style: Arc<ComputedStyle>,
@@ -164,15 +169,23 @@ fn commit_line_to_context(
     box_width: f32,
     is_last_line: bool,
 ) {
-    if line_atoms.is_empty() { return; }
-    while line_atoms.last().map_or(false, |a| a.is_space()) { line_atoms.pop(); }
-    if line_atoms.is_empty() { return; }
+    if line_atoms.is_empty() {
+        return;
+    }
+    while line_atoms.last().map_or(false, |a| a.is_space()) {
+        line_atoms.pop();
+    }
+    if line_atoms.is_empty() {
+        return;
+    }
     let total_content_width: f32 = line_atoms.iter().map(|a| a.width()).sum();
     let justify = !is_last_line && parent_style.text_align == TextAlign::Justify;
     let space_count = if justify { line_atoms.iter().filter(|a| a.is_space()).count() } else { 0 };
     let justification_space = if justify && space_count > 0 && total_content_width < box_width {
         (box_width - total_content_width) / space_count as f32
-    } else { 0.0 };
+    } else {
+        0.0
+    };
     let mut current_x = match parent_style.text_align {
         TextAlign::Left | TextAlign::Justify => 0.0,
         TextAlign::Center => (box_width - total_content_width).max(0.0) / 2.0,
@@ -192,8 +205,7 @@ fn commit_line_to_context(
                 };
                 let mut run_end_idx = atom_idx;
                 for i in atom_idx..line_atoms.len() {
-                    let (current_style, current_href, text_part, part_width) = match &line_atoms[i]
-                    {
+                    let (current_style, current_href, text_part, part_width) = match &line_atoms[i] {
                         LayoutAtom::Word { text, width, style, href } => (style, href, text.as_str(), *width),
                         LayoutAtom::Space { width, style, .. } => (style, &None, " ", *width),
                         _ => break,
@@ -201,29 +213,50 @@ fn commit_line_to_context(
                     if Arc::ptr_eq(current_style, base_style) && current_href == base_href {
                         run_text.push_str(text_part);
                         run_width += part_width;
-                        if line_atoms[i].is_space() { run_width += justification_space; }
+                        if line_atoms[i].is_space() {
+                            run_width += justification_space;
+                        }
                         run_end_idx = i;
-                    } else { break; }
+                    } else {
+                        break;
+                    }
                 }
                 ctx.push_element(PositionedElement {
-                    x: current_x, y: 0.0, width: run_width, height: base_style.line_height,
-                    element: crate::core::layout::LayoutElement::Text(crate::core::layout::TextElement { content: run_text, href: base_href.clone(), }),
+                    x: current_x,
+                    y: 0.0,
+                    width: run_width,
+                    height: base_style.line_height,
+                    element: crate::core::layout::LayoutElement::Text(crate::core::layout::TextElement {
+                        content: run_text,
+                        href: base_href.clone(),
+                    }),
                     style: base_style.clone(),
                 });
                 current_x += run_width;
                 atom_idx = run_end_idx + 1;
             }
-            LayoutAtom::Image { src, width, height, style, .. } => {
+            LayoutAtom::Image {
+                src,
+                width,
+                height,
+                style,
+                ..
+            } => {
                 let y_offset = parent_style.line_height - height;
                 ctx.push_element(PositionedElement {
-                    x: current_x, y: y_offset, width: *width, height: *height,
+                    x: current_x,
+                    y: y_offset,
+                    width: *width,
+                    height: *height,
                     element: crate::core::layout::LayoutElement::Image(crate::core::layout::ImageElement { src: src.clone() }),
                     style: style.clone(),
                 });
                 current_x += width;
                 atom_idx += 1;
             }
-            LayoutAtom::LineBreak => { atom_idx += 1; }
+            LayoutAtom::LineBreak => {
+                atom_idx += 1;
+            }
         }
     }
 }

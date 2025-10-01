@@ -74,7 +74,7 @@ fn main() -> Result<(), PipelineError> {
 
     // The builder now receives a guaranteed valid path.
     let pipeline = PipelineBuilder::new()
-        .with_xslt_template_file(template_path)?
+        .with_template_file(template_path)?
         .with_pdf_backend(PdfBackend::LopdfParallel)
         .with_debug(false)
         .build()?;

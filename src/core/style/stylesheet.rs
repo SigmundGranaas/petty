@@ -13,21 +13,23 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct Stylesheet {
-    pub page: PageLayout,
+    /// A map of all named page layouts defined in the template.
+    pub page_masters: HashMap<String, PageLayout>,
+    /// The name of the master to use for the first page.
+    pub default_page_master_name: Option<String>,
+    /// A map of all named element styles.
     pub styles: HashMap<String, Arc<ElementStyle>>,
 }
 
 impl From<StylesheetDef> for Stylesheet {
     fn from(def: StylesheetDef) -> Self {
+        let default_page_master_name = def.page_masters.keys().next().cloned();
         Self {
-            page: def.page,
-            styles: def
-                .styles
-                .into_iter()
-                .map(|(k, v)| (k, Arc::new(v)))
-                .collect(),
+            page_masters: def.page_masters,
+            default_page_master_name,
+            styles: def.styles.into_iter().map(|(k, v)| (k, Arc::new(v))).collect(),
         }
     }
 }
@@ -36,16 +38,13 @@ impl Stylesheet {
     /// Creates a new `Stylesheet` by parsing a raw XSLT string.
     /// This is the primary entry point for XSLT-based styling.
     pub fn from_xslt(xslt_content: &str) -> Result<Self, ParseError> {
-        // REPLACED: The entire monolithic state machine is replaced with a
-        // single call to the new, structured parser.
         crate::parser::stylesheet_parser::XsltParser::new(xslt_content).parse()
     }
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Deserialize, Debug, Clone, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PageLayout {
-    pub name: Option<String>,
     #[serde(default)]
     pub size: PageSize,
     #[serde(default)]
@@ -54,25 +53,6 @@ pub struct PageLayout {
     pub footer_text: Option<String>,
     pub footer_style: Option<String>,
 }
-
-impl Default for PageLayout {
-    fn default() -> Self {
-        Self {
-            name: None,
-            size: PageSize::A4,
-            margins: Some(Margins {
-                top: 72.0,    // 1 inch
-                right: 72.0,  // 1 inch
-                bottom: 72.0, // 1 inch
-                left: 72.0,   // 1 inch
-            }),
-            title: None,
-            footer_text: None,
-            footer_style: None,
-        }
-    }
-}
-
 
 #[derive(Deserialize, Serialize, Debug, Default, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]

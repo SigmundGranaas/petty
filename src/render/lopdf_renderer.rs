@@ -1,3 +1,4 @@
+// FILE: /home/sigmund/RustroverProjects/petty/src/render/lopdf_renderer.rs
 use super::renderer::DocumentRenderer;
 use super::streaming_writer::internal_writer::write_object;
 use super::streaming_writer::StreamingPdfWriter;
@@ -7,7 +8,7 @@ use crate::core::style::font::FontWeight;
 use crate::render::RenderError;
 use handlebars::Handlebars;
 use lopdf::content::{Content, Operation};
-use lopdf::{dictionary, Dictionary, Object, ObjectId, Stream};
+use lopdf::{dictionary, Dictionary, Object, ObjectId, Stream, StringFormat};
 use once_cell::sync::Lazy;
 use serde::Serialize;
 use serde_json::Value;
@@ -17,7 +18,6 @@ use std::sync::Arc;
 use crate::core::idf::SharedData;
 use crate::core::layout::{ComputedStyle, ImageElement, LayoutElement, LayoutEngine, PositionedElement, TextElement};
 use crate::core::style::color::Color;
-use crate::core::style::dimension::PageSize;
 use crate::core::style::stylesheet::{PageLayout, Stylesheet};
 use crate::core::style::text::TextAlign;
 
@@ -45,8 +45,8 @@ fn get_styled_font_name(style: &Arc<ComputedStyle>) -> String {
 }
 
 impl<W: Write + Send> LopdfDocumentRenderer<W> {
-    pub fn new(layout_engine: LayoutEngine) -> Result<Self, RenderError> {
-        let stylesheet = Arc::new(layout_engine.stylesheet.clone());
+    pub fn new(layout_engine: LayoutEngine, stylesheet: Stylesheet) -> Result<Self, RenderError> {
+        let stylesheet = Arc::new(stylesheet);
         let mut font_map = HashMap::new();
 
         // Build the map of descriptive font names to internal PDF font names (F1, F2, etc.)
@@ -63,12 +63,7 @@ impl<W: Write + Send> LopdfDocumentRenderer<W> {
     }
 
     pub(crate) fn get_page_dimensions_pt(page_layout: &PageLayout) -> (f32, f32) {
-        match page_layout.size {
-            PageSize::A4 => (595.0, 842.0),
-            PageSize::Letter => (612.0, 792.0),
-            PageSize::Legal => (612.0, 1008.0),
-            PageSize::Custom { width, height } => (width, height),
-        }
+        page_layout.size.dimensions_pt()
     }
 }
 
@@ -84,6 +79,7 @@ impl<W: Write + Send> DocumentRenderer<W> for LopdfDocumentRenderer<W> {
                     "Type" => "Font",
                     "Subtype" => "Type1",
                     "BaseFont" => family_name.clone(),
+                    "Encoding" => "WinAnsiEncoding",
                 };
                 // NOTE: A full implementation would require embedding the font program stream.
                 // This will work for standard fonts like Helvetica.
@@ -110,11 +106,12 @@ impl<W: Write + Send> DocumentRenderer<W> for LopdfDocumentRenderer<W> {
             RenderError::Other("begin_document must be called before render_page".into())
         })?;
 
-        let page_layout = &self.stylesheet.page;
+        let default_master_name = self.stylesheet.default_page_master_name.as_ref().unwrap();
+        let page_layout = self.stylesheet.page_masters.get(default_master_name).unwrap();
         let (page_width, page_height) = Self::get_page_dimensions_pt(page_layout);
 
         let mut page_ctx = PageContext::new(&self.layout_engine, page_height, &self.font_map);
-
+        page_ctx.stylesheet = Some(&self.stylesheet);
         for element in elements {
             page_ctx.draw_element(&element)?;
         }
@@ -169,6 +166,7 @@ pub fn render_lopdf_page_to_bytes(
     parent_pages_id: ObjectId,
     layout_engine: &LayoutEngine,
     template_engine: &Handlebars,
+    stylesheet: &Stylesheet,
 ) -> Result<Vec<u8>, RenderError> {
     let mut buffer = Vec::with_capacity(4096); // Start with a 4KB buffer
     let (page_width, page_height) =
@@ -179,11 +177,12 @@ pub fn render_lopdf_page_to_bytes(
     // In a full implementation, we would need to create a font map here too.
     let font_map = HashMap::new(); // Dummy for now.
     let mut page_ctx = PageContext::new(
-        layout_engine, // We only need the layout engine for footer text measurement
+        layout_engine,
         page_height,
         &font_map,
     );
-
+    // The layout engine is used for footer text measurement, and the stylesheet is needed for footer style.
+    page_ctx.stylesheet = Some(stylesheet);
     // Render main elements
     for element in &task.elements {
         page_ctx.draw_element(element)?;
@@ -235,15 +234,37 @@ pub fn render_lopdf_page_to_bytes(
     Ok(buffer)
 }
 
+/// Helper to convert a UTF-8 string to a byte vector using WinAnsiEncoding rules.
+fn to_win_ansi(s: &str) -> Vec<u8> {
+    let mut bytes = Vec::with_capacity(s.len());
+    for ch in s.chars() {
+        match ch {
+            '•' => bytes.push(149), // U+2022 BULLET
+            '–' => bytes.push(150), // U+2013 EN DASH
+            '—' => bytes.push(151), // U+2014 EM DASH
+            '‘' => bytes.push(145), // U+2018 LEFT SINGLE QUOTATION MARK
+            '’' => bytes.push(146), // U+2019 RIGHT SINGLE QUOTATION MARK
+            '“' => bytes.push(147), // U+201C LEFT DOUBLE QUOTATION MARK
+            '”' => bytes.push(148), // U+201D RIGHT DOUBLE QUOTATION MARK
+            // For other common non-ASCII chars, add mappings here.
+            // This is a simplified mapping. A full one is more complex.
+            c if c as u32 <= 127 => bytes.push(c as u8), // ASCII passthrough
+            _ => bytes.push(b'?'), // Placeholder for unsupported characters
+        }
+    }
+    bytes
+}
+
 struct PageContext<'a> {
     layout_engine: &'a LayoutEngine,
+    stylesheet: Option<&'a Stylesheet>,
     page_height: f32,
     content: Content,
     state: LopdfPageRenderState,
     font_map: &'a HashMap<String, String>,
 }
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, PartialEq)]
 struct LopdfPageRenderState {
     font_name: String,
     font_size: f32,
@@ -254,6 +275,7 @@ impl<'a> PageContext<'a> {
     fn new(layout_engine: &'a LayoutEngine, page_height: f32, font_map: &'a HashMap<String, String>) -> Self {
         Self {
             layout_engine,
+            stylesheet: None,
             page_height,
             content: Content { operations: vec![] },
             state: LopdfPageRenderState::default(),
@@ -371,9 +393,13 @@ impl<'a> PageContext<'a> {
         self.content
             .operations
             .push(Operation::new("Td", vec![el.x.into(), pdf_y.into()]));
+
+        let encoded_bytes = to_win_ansi(&text.content);
+        let text_object = Object::String(encoded_bytes, StringFormat::Literal);
+
         self.content.operations.push(Operation::new(
             "Tj",
-            vec![Object::string_literal(text.content.clone())],
+            vec![text_object],
         ));
         self.content.operations.push(Operation::new("ET", vec![]));
         Ok(())
@@ -402,11 +428,12 @@ impl<'a> PageContext<'a> {
         let default_margins = Margins::default();
         let margins = page_layout.margins.as_ref().unwrap_or(&default_margins);
         let style_sets = if let Some(style_name) = page_layout.footer_style.as_deref() {
-            self.layout_engine
-                .stylesheet
-                .styles
-                .get(style_name)
-                .map(|style_arc| vec![Arc::clone(style_arc)])
+            self.stylesheet
+                .and_then(|ss| {
+                    ss.styles
+                        .get(style_name)
+                        .map(|style_arc| vec![Arc::clone(style_arc)])
+                })
                 .unwrap_or_default()
         } else {
             vec![]
@@ -452,9 +479,13 @@ impl<'a> PageContext<'a> {
         self.content
             .operations
             .push(Operation::new("Td", vec![x.into(), y.into()]));
+
+        let encoded_bytes = to_win_ansi(&text);
+        let footer_text_object = Object::String(encoded_bytes, StringFormat::Literal);
+
         self.content
             .operations
-            .push(Operation::new("Tj", vec![Object::string_literal(text)]));
+            .push(Operation::new("Tj", vec![footer_text_object]));
         self.content.operations.push(Operation::new("ET", vec![]));
         Ok(())
     }

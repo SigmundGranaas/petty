@@ -18,6 +18,17 @@ pub struct Margins {
     pub left: f32,
 }
 
+impl Margins {
+    pub fn all(value: f32) -> Self {
+        Self {
+            top: value,
+            right: value,
+            bottom: value,
+            left: value,
+        }
+    }
+}
+
 impl<'de> Deserialize<'de> for Margins {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -35,7 +46,6 @@ impl<'de> Deserialize<'de> for Margins {
             where
                 E: de::Error,
             {
-                // REPLACED: Call the new, robust nom parser.
                 style_parsers::parse_shorthand_margins(value).map_err(E::custom)
             }
 
@@ -81,14 +91,20 @@ impl PageSize {
     pub fn set_width(&mut self, new_width: f32) {
         match self {
             PageSize::Custom { width, .. } => *width = new_width,
-            _ => *self = PageSize::Custom { width: new_width, height: self.dimensions_pt().1 },
+            _ => *self = PageSize::Custom {
+                width: new_width,
+                height: self.dimensions_pt().1,
+            },
         }
     }
 
     pub fn set_height(&mut self, new_height: f32) {
         match self {
             PageSize::Custom { height, .. } => *height = new_height,
-            _ => *self = PageSize::Custom { width: self.dimensions_pt().0, height: new_height },
+            _ => *self = PageSize::Custom {
+                width: self.dimensions_pt().0,
+                height: new_height,
+            },
         }
     }
 }

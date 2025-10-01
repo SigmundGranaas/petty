@@ -5,6 +5,7 @@ use crate::core::layout::nodes::block::BlockNode;
 use crate::core::layout::nodes::list_item::ListItemNode;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{LayoutEngine, LayoutError};
+use std::any::Any;
 use std::sync::Arc;
 
 /// A `LayoutNode` for list containers (`<ul>`, `<ol>`).
@@ -47,6 +48,10 @@ impl ListNode {
 impl LayoutNode for ListNode {
     fn style(&self) -> &Arc<ComputedStyle> {
         self.block.style()
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 
     fn measure(&mut self, engine: &LayoutEngine, available_width: f32) {

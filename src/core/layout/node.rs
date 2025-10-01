@@ -1,5 +1,6 @@
 // FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/node.rs
 use super::{geom, ComputedStyle, LayoutEngine, LayoutError, PositionedElement};
+use std::any::Any;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -41,7 +42,7 @@ impl<'a> LayoutContext<'a> {
 
     /// Returns the remaining vertical space available in this context.
     pub fn available_height(&self) -> f32 {
-        self.bounds.height - self.cursor.1
+        (self.bounds.height - self.cursor.1).max(0.0)
     }
 
     /// Pushes a drawable element onto the current page at the current cursor position.
@@ -117,4 +118,30 @@ pub trait LayoutNode: Debug + Send + Sync {
 
     /// Returns the computed style of the node.
     fn style(&self) -> &Arc<ComputedStyle>;
+
+    /// Checks if this node (or its first child) is an explicit page break.
+    /// If it is, it consumes the page break node and returns the new master name.
+    /// This allows the layout engine to react to page breaks discovered during pagination.
+    fn check_for_page_break(&mut self) -> Option<Option<String>> {
+        None
+    }
+
+    // Required for downcasting
+    fn as_any(&self) -> &dyn Any;
+}
+
+impl dyn LayoutNode {
+    pub fn is<T: Any>(&self) -> bool {
+        self.as_any().is::<T>()
+    }
+    pub fn downcast<T: Any>(self: Box<Self>) -> Result<Box<T>, Box<dyn LayoutNode>> {
+        if self.is::<T>() {
+            unsafe {
+                let raw: *mut dyn LayoutNode = Box::into_raw(self);
+                Ok(Box::from_raw(raw as *mut T))
+            }
+        } else {
+            Err(self)
+        }
+    }
 }
