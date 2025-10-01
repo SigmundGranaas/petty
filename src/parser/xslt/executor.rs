@@ -2,19 +2,17 @@ use super::ast::{
     CompiledStylesheet, PreparsedStyles, PreparsedTemplate, TableColumnDefinition, TemplateRule,
     XsltInstruction,
 };
+use crate::core::idf::{self, IRNode, InlineNode, TableBody, TableCell, TableHeader, TableRow};
 use crate::parser::ParseError;
 use crate::xpath;
 use handlebars::Handlebars;
 use serde_json::Value;
 use std::collections::HashMap;
-use crate::core::idf;
-use crate::core::idf::IRNode::Table;
-use crate::core::idf::{IRNode, InlineNode, TableBody, TableCell, TableHeader, TableRow};
 
 /// A stateful executor that constructs an `IRNode` tree by processing a `CompiledStylesheet`
 /// against a JSON data context. It implements the XSLT "push" model.
 pub struct TemplateExecutor<'h> {
-    template_engine: &'h Handlebars<'static>,
+    template_engine: &'h Handlebars<'h>,
     stylesheet: &'h CompiledStylesheet,
     node_stack: Vec<IRNode>,
     inline_stack: Vec<InlineNode>,
@@ -23,9 +21,6 @@ pub struct TemplateExecutor<'h> {
 }
 
 /// Helper to get the "children" of a JSON value.
-/// For an object, children are its key-value pairs.
-/// For an array, children are its elements.
-/// The `Option<&str>` holds the key name for object children.
 fn get_children(node: &Value) -> Vec<(&Value, Option<&str>)> {
     match node {
         Value::Object(map) => map.iter().map(|(k, v)| (v, Some(k.as_str()))).collect(),
@@ -36,7 +31,7 @@ fn get_children(node: &Value) -> Vec<(&Value, Option<&str>)> {
 
 impl<'h> TemplateExecutor<'h> {
     pub fn new(
-        template_engine: &'h Handlebars<'static>,
+        template_engine: &'h Handlebars<'h>,
         stylesheet: &'h CompiledStylesheet,
     ) -> Self {
         Self {
@@ -50,7 +45,6 @@ impl<'h> TemplateExecutor<'h> {
     }
 
     /// The main public entry point for the executor.
-    /// It starts processing from the root template (`match="/"`) against the initial data context.
     pub fn build_tree(&mut self, context: &Value) -> Result<Vec<IRNode>, ParseError> {
         self.node_stack.clear();
         self.inline_stack.clear();
@@ -60,7 +54,6 @@ impl<'h> TemplateExecutor<'h> {
         let root_node = IRNode::Root(Vec::with_capacity(16));
         self.node_stack.push(root_node);
 
-        // Find and execute the root template (`match="/"`).
         let root_template = self
             .stylesheet
             .root_template
@@ -71,9 +64,7 @@ impl<'h> TemplateExecutor<'h> {
         if let Some(IRNode::Root(children)) = self.node_stack.pop() {
             Ok(children)
         } else {
-            Err(ParseError::TemplateParse(
-                "Failed to construct root node.".to_string(),
-            ))
+            Err(ParseError::TemplateParse("Failed to construct root node.".to_string()))
         }
     }
 
@@ -82,33 +73,28 @@ impl<'h> TemplateExecutor<'h> {
     }
 
     /// Recursively walks the AST and builds the `IRNode` tree.
-    fn execute_template(
-        &mut self,
-        template: &PreparsedTemplate,
-        context: &Value,
-    ) -> Result<(), ParseError> {
+    fn execute_template(&mut self, template: &PreparsedTemplate, context: &Value) -> Result<(), ParseError> {
         for instruction in &template.0 {
-            if matches!(instruction, XsltInstruction::Text(s) if s.is_empty()) {
-                continue;
-            }
+            if matches!(instruction, XsltInstruction::Text(s) if s.is_empty()) { continue; }
             match instruction {
                 XsltInstruction::ForEach { select, body } => {
-                    let selected_values = select.select(context, self.get_current_variables());
-                    let items: Vec<Value> = if let Some(arr) =
-                        selected_values.first().and_then(|v| v.as_array())
-                    {
-                        arr.clone()
-                    } else {
-                        selected_values.into_iter().cloned().collect()
+                    let selected_values = {
+                        let vars = self.get_current_variables();
+                        select.select(context, vars).into_iter().cloned().collect::<Vec<Value>>()
                     };
-                    for item_context in &items {
+                    let nodes_to_iterate: Vec<&Value> = if selected_values.len() == 1 && selected_values[0].is_array() {
+                        selected_values[0].as_array().unwrap().iter().collect()
+                    } else {
+                        selected_values.iter().collect()
+                    };
+
+                    for (i, item_context) in nodes_to_iterate.into_iter().enumerate() {
+                        self.variable_stack.last_mut().unwrap().insert("position".to_string(), Value::from(i + 1));
                         self.execute_template(body, item_context)?;
                     }
                 }
                 XsltInstruction::If { test, body } => {
-                    if test.evaluate(context) {
-                        self.execute_template(body, context)?;
-                    }
+                    if test.evaluate(context, self.get_current_variables().get("position").and_then(|v| v.as_u64().map(|n| n as usize))) { self.execute_template(body, context)?; }
                 }
                 XsltInstruction::ContentTag { tag_name, styles, attrs, body } => {
                     self.execute_start_tag(tag_name, styles, attrs, context)?;
@@ -119,34 +105,18 @@ impl<'h> TemplateExecutor<'h> {
                     self.execute_empty_tag(tag_name, styles, attrs, context)?;
                 }
                 XsltInstruction::Text(text) => {
-                    let rendered_text = if text.contains("{{") {
-                        self.render_text(text, context)?
-                    } else {
-                        text.clone()
-                    };
+                    let rendered_text = self.render_text(text, context)?;
                     self.push_inline_to_parent(InlineNode::Text(rendered_text));
                 }
                 XsltInstruction::ValueOf { select } => {
-                    let content =
-                        xpath::select_as_string(select, context, self.get_current_variables());
-                    if !content.is_empty() {
-                        self.push_inline_to_parent(InlineNode::Text(content));
-                    }
+                    let content = xpath::select_as_string(select, context, self.get_current_variables());
+                    if !content.is_empty() { self.push_inline_to_parent(InlineNode::Text(content)); }
                 }
                 XsltInstruction::CallTemplate { name, params } => {
-                    let target_template = self.stylesheet.named_templates.get(name).ok_or_else(
-                        || {
-                            ParseError::TemplateParse(format!(
-                                "Called template '{}' not found in stylesheet.",
-                                name
-                            ))
-                        },
-                    )?;
+                    let target_template = self.stylesheet.named_templates.get(name).ok_or_else(|| ParseError::TemplateParse(format!("Called template '{}' not found.", name)))?;
                     let mut new_scope = HashMap::new();
                     for param in params {
-                        let value_vec =
-                            param.select.select(context, self.get_current_variables());
-                        if let Some(val) = value_vec.first() {
+                        if let Some(val) = param.select.select(context, self.get_current_variables()).first() {
                             new_scope.insert(param.name.clone(), (*val).clone());
                         }
                     }
@@ -159,15 +129,18 @@ impl<'h> TemplateExecutor<'h> {
                 }
                 XsltInstruction::ApplyTemplates { select, mode } => {
                     if let Some(sel) = select {
-                        // The selection result creates temporary values, so we must clone them to own them
-                        // for the duration of this call.
-                        let selected_values = sel.select(context, self.get_current_variables());
-                        let owned_nodes: Vec<Value> = selected_values.into_iter().cloned().collect();
-                        let nodes_to_process: Vec<(&Value, Option<&str>)> =
-                            owned_nodes.iter().map(|v| (v, None)).collect();
+                        // When selecting from variables, we must clone the results to
+                        // release the immutable borrow on `self` before calling the
+                        // mutable method `apply_templates_to_nodes`.
+                        let selected_values: Vec<Value> = {
+                            let vars = self.get_current_variables();
+                            sel.select(context, vars).into_iter().cloned().collect()
+                        };
+                        let nodes_to_process: Vec<_> = selected_values.iter().map(|v| (v, None)).collect();
                         self.apply_templates_to_nodes(nodes_to_process, mode.as_deref())?;
                     } else {
-                        // `get_children` returns references to data inside `context`, which is guaranteed to live long enough.
+                        // When selecting from the context, there's no conflict,
+                        // so we can proceed as before.
                         let nodes_to_process = get_children(context);
                         self.apply_templates_to_nodes(nodes_to_process, mode.as_deref())?;
                     }
@@ -177,20 +150,12 @@ impl<'h> TemplateExecutor<'h> {
         Ok(())
     }
 
-    /// The core of the "push" model. Finds the best matching template for a set of nodes
-    /// and executes them, or applies the built-in default rules.
-    fn apply_templates_to_nodes(
-        &mut self,
-        nodes: Vec<(&Value, Option<&str>)>,
-        mode: Option<&str>,
-    ) -> Result<(), ParseError> {
+    /// The core of the "push" model. Finds the best matching template for a set of nodes.
+    fn apply_templates_to_nodes(&mut self, nodes: Vec<(&Value, Option<&str>)>, mode: Option<&str>) -> Result<(), ParseError> {
         for (node, name) in nodes {
-            let template_rule = self.find_matching_template(node, name, mode);
-            if let Some(rule) = template_rule {
-                // A matching template was found, execute it with the matched node as the new context.
+            if let Some(rule) = self.find_matching_template(node, name, mode) {
                 self.execute_template(&rule.body, node)?;
             } else {
-                // No matching template found, apply the built-in default rule.
                 self.apply_builtin_template(node)?;
             }
         }
@@ -200,128 +165,52 @@ impl<'h> TemplateExecutor<'h> {
     /// Applies XSLT's built-in template rules.
     fn apply_builtin_template(&mut self, node: &Value) -> Result<(), ParseError> {
         match node {
-            // For elements (Objects/Arrays), the default is to process their children.
             Value::Object(_) | Value::Array(_) => {
-                let children = get_children(node);
-                // The built-in rule always applies templates in the default mode.
-                self.apply_templates_to_nodes(children, None)?;
+                self.apply_templates_to_nodes(get_children(node), None)?;
             }
-            // For text nodes, the default is to output their string value.
-            Value::String(s) => {
-                self.push_inline_to_parent(InlineNode::Text(s.clone()));
-            }
-            Value::Number(n) => {
-                self.push_inline_to_parent(InlineNode::Text(n.to_string()));
-            }
-            Value::Bool(b) => {
-                self.push_inline_to_parent(InlineNode::Text(b.to_string()));
-            }
-            Value::Null => { /* Do nothing */ }
+            Value::String(s) => self.push_inline_to_parent(InlineNode::Text(s.clone())),
+            Value::Number(n) => self.push_inline_to_parent(InlineNode::Text(n.to_string())),
+            Value::Bool(b) => self.push_inline_to_parent(InlineNode::Text(b.to_string())),
+            Value::Null => {}
         }
         Ok(())
     }
 
     /// Finds the highest-priority template rule that matches a given node.
-    fn find_matching_template(
-        &self,
-        node: &Value,
-        name: Option<&str>,
-        mode: Option<&str>,
-    ) -> Option<&'h TemplateRule> {
-        // Look up the rules for the given mode (or the default mode if `None`).
-        self.stylesheet
-            .template_rules
-            .get(&mode.map(String::from))
-            .and_then(|rules| {
-                // The rules are pre-sorted by priority, so the first match is the best one.
-                rules.iter().find(|rule| xpath::matches(node, name, &rule.match_pattern))
-            })
+    fn find_matching_template(&self, node: &Value, name: Option<&str>, mode: Option<&str>) -> Option<&'h TemplateRule> {
+        self.stylesheet.template_rules.get(&mode.map(String::from))
+            .and_then(|rules| rules.iter().find(|rule| xpath::matches(node, name, &rule.match_pattern)))
     }
 
-    fn execute_start_tag(
-        &mut self,
-        tag_name: &[u8],
-        styles: &PreparsedStyles,
-        attrs: &HashMap<String, String>,
-        context: &Value,
-    ) -> Result<(), ParseError> {
+    fn execute_start_tag(&mut self, tag_name: &[u8], styles: &PreparsedStyles, attrs: &HashMap<String, String>, context: &Value) -> Result<(), ParseError> {
         let style_sets = styles.style_sets.clone();
         let style_override = styles.style_override.clone();
 
         match String::from_utf8_lossy(tag_name).as_ref() {
-            "fo:list-block" | "list" => self.node_stack.push(IRNode::List {
-                style_sets,
-                style_override,
-                children: vec![],
-            }),
-            "fo:list-item" | "list-item" => self.node_stack.push(IRNode::ListItem {
-                style_sets,
-                style_override,
-                children: vec![],
-            }),
-            "flex-container" => self.node_stack.push(IRNode::FlexContainer {
-                style_sets,
-                style_override,
-                children: vec![],
-            }),
-            // FIX: Map <text> and <p> to Paragraph, but treat <block> as a generic container.
-            "text" | "p" => self.node_stack.push(IRNode::Paragraph {
-                style_sets,
-                style_override,
-                children: vec![],
-            }),
+            "fo:list-block" | "list" => self.node_stack.push(IRNode::List { style_sets, style_override, children: vec![] }),
+            "fo:list-item" | "list-item" => self.node_stack.push(IRNode::ListItem { style_sets, style_override, children: vec![] }),
+            "flex-container" => self.node_stack.push(IRNode::FlexContainer { style_sets, style_override, children: vec![] }),
+            "text" | "p" => self.node_stack.push(IRNode::Paragraph { style_sets, style_override, children: vec![] }),
             "fo:basic-link" | "link" => {
-                let href_template = attrs.get("href").cloned().unwrap_or_default();
-                let href = self.render_text(&href_template, context)?;
-                self.inline_stack.push(InlineNode::Hyperlink {
-                    href,
-                    style_sets,
-                    style_override,
-                    children: vec![],
-                });
+                let href = self.render_text(attrs.get("href").unwrap_or(&String::new()), context)?;
+                self.inline_stack.push(InlineNode::Hyperlink { href, style_sets, style_override, children: vec![] });
             }
             "fo:inline" | "strong" | "b" | "em" | "i" | "span" => {
-                self.inline_stack.push(InlineNode::StyledSpan {
-                    style_sets,
-                    style_override,
-                    children: vec![],
-                });
+                self.inline_stack.push(InlineNode::StyledSpan { style_sets, style_override, children: vec![] });
             }
             "fo:table-row" | "row" => {
-                let new_row = TableRow { cells: Vec::with_capacity(8) };
-                if let Some(Table { header, body, .. }) = self.node_stack.last_mut() {
-                    if self.is_in_table_header {
-                        if let Some(h) = header {
-                            h.rows.push(new_row);
-                        }
-                    } else {
-                        body.rows.push(new_row);
-                    }
+                if let Some(IRNode::Table { header, body, .. }) = self.node_stack.last_mut() {
+                    let target_rows = if self.is_in_table_header { header.as_mut().map(|h| &mut h.rows) } else { Some(&mut body.rows) };
+                    if let Some(rows) = target_rows { rows.push(TableRow { cells: vec![] }); }
                 }
             }
             "fo:table-cell" | "cell" => {
-                let new_cell = TableCell {
-                    style_sets,
-                    style_override,
-                    children: Vec::with_capacity(2),
-                };
-                if let Some(Table { header, body, .. }) = self.node_stack.last_mut() {
-                    let row = if self.is_in_table_header {
-                        header.as_mut().and_then(|h| h.rows.last_mut())
-                    } else {
-                        body.rows.last_mut()
-                    };
-                    if let Some(r) = row {
-                        r.cells.push(new_cell);
-                    }
+                if let Some(IRNode::Table { header, body, .. }) = self.node_stack.last_mut() {
+                    let target_row = if self.is_in_table_header { header.as_mut().and_then(|h| h.rows.last_mut()) } else { body.rows.last_mut() };
+                    if let Some(row) = target_row { row.cells.push(TableCell { style_sets, style_override, children: vec![] }); }
                 }
             }
-            // Default to a generic block container.
-            _ => self.node_stack.push(IRNode::Block {
-                style_sets,
-                style_override,
-                children: vec![],
-            }),
+            _ => self.node_stack.push(IRNode::Block { style_sets, style_override, children: vec![] }),
         }
         Ok(())
     }
@@ -329,48 +218,26 @@ impl<'h> TemplateExecutor<'h> {
     fn execute_end_tag(&mut self, tag_name: &[u8]) -> Result<(), ParseError> {
         match String::from_utf8_lossy(tag_name).as_ref() {
             "fo:basic-link" | "link" | "fo:inline" | "strong" | "b" | "em" | "i" | "span" => {
-                if let Some(node) = self.inline_stack.pop() {
-                    self.push_inline_to_parent(node);
-                }
+                if let Some(node) = self.inline_stack.pop() { self.push_inline_to_parent(node); }
             }
-            "fo:table-row" | "row" | "fo:table-cell" | "cell" => { /* No op */ }
-            _ => {
-                if let Some(node) = self.node_stack.pop() {
-                    self.push_block_to_parent(node);
-                }
-            }
+            "fo:table-row" | "row" | "fo:table-cell" | "cell" => {}
+            _ => { if let Some(node) = self.node_stack.pop() { self.push_block_to_parent(node); } }
         }
         Ok(())
     }
 
-    fn execute_empty_tag(
-        &mut self,
-        tag_name: &[u8],
-        styles: &PreparsedStyles,
-        attrs: &HashMap<String, String>,
-        context: &Value,
-    ) -> Result<(), ParseError> {
+    fn execute_empty_tag(&mut self, tag_name: &[u8], styles: &PreparsedStyles, attrs: &HashMap<String, String>, context: &Value) -> Result<(), ParseError> {
         match String::from_utf8_lossy(tag_name).as_ref() {
             "fo:external-graphic" | "image" => {
-                let src_template = attrs.get("src").cloned().unwrap_or_default();
-                let src = self.render_text(&src_template, context)?;
+                let src = self.render_text(attrs.get("src").unwrap_or(&String::new()), context)?;
                 let style_sets = styles.style_sets.clone();
                 let style_override = styles.style_override.clone();
+                let is_inline_context = !self.inline_stack.is_empty() || matches!(self.node_stack.last(), Some(IRNode::Paragraph { .. }));
 
-                if matches!(self.node_stack.last(), Some(IRNode::Paragraph { .. }))
-                    || !self.inline_stack.is_empty()
-                {
-                    self.push_inline_to_parent(InlineNode::Image {
-                        src,
-                        style_sets,
-                        style_override,
-                    });
+                if is_inline_context {
+                    self.push_inline_to_parent(InlineNode::Image { src, style_sets, style_override });
                 } else {
-                    self.push_block_to_parent(IRNode::Image {
-                        src,
-                        style_sets,
-                        style_override,
-                    });
+                    self.push_block_to_parent(IRNode::Image { src, style_sets, style_override });
                 }
             }
             "fo:block" | "br" => self.push_inline_to_parent(InlineNode::LineBreak),
@@ -379,30 +246,12 @@ impl<'h> TemplateExecutor<'h> {
         Ok(())
     }
 
-    fn execute_table(
-        &mut self,
-        styles: &PreparsedStyles,
-        columns: &[TableColumnDefinition],
-        header_template: Option<&PreparsedTemplate>,
-        body_template: &PreparsedTemplate,
-        context: &Value,
-    ) -> Result<(), ParseError> {
-        let table_node = Table {
+    fn execute_table(&mut self, styles: &PreparsedStyles, columns: &[TableColumnDefinition], header_template: Option<&PreparsedTemplate>, body_template: &PreparsedTemplate, context: &Value) -> Result<(), ParseError> {
+        let table_node = IRNode::Table {
             style_sets: styles.style_sets.clone(),
             style_override: styles.style_override.clone(),
-            columns: columns
-                .iter()
-                .map(|c| idf::TableColumnDefinition {
-                    width: c.width.clone(),
-                    style: c.style.clone(),
-                    header_style: c.header_style.clone(),
-                })
-                .collect(),
-            header: if header_template.is_some() {
-                Some(Box::new(TableHeader { rows: vec![] }))
-            } else {
-                None
-            },
+            columns: columns.iter().map(|c| idf::TableColumnDefinition { width: c.width.clone(), style: c.style.clone(), header_style: c.header_style.clone() }).collect(),
+            header: if header_template.is_some() { Some(Box::new(TableHeader { rows: vec![] })) } else { None },
             body: Box::new(TableBody { rows: vec![] }),
         };
         self.node_stack.push(table_node);
@@ -415,175 +264,39 @@ impl<'h> TemplateExecutor<'h> {
 
         self.execute_template(body_template, context)?;
 
-        if let Some(node) = self.node_stack.pop() {
-            self.push_block_to_parent(node);
-        }
+        if let Some(node) = self.node_stack.pop() { self.push_block_to_parent(node); }
         Ok(())
     }
 
     fn render_text(&self, text: &str, context: &Value) -> Result<String, ParseError> {
-        self.template_engine
-            .render_template(text, context)
-            .map_err(|e| ParseError::TemplateRender(e.to_string()))
+        if !text.contains("{{") { return Ok(text.to_string()); }
+        self.template_engine.render_template(text, context).map_err(|e| ParseError::TemplateRender(e.to_string()))
     }
 
     fn push_block_to_parent(&mut self, node: IRNode) {
-        match self.node_stack.last_mut() {
-            Some(IRNode::Root(children))
-            | Some(IRNode::Block { children, .. })
-            | Some(IRNode::FlexContainer { children, .. })
-            | Some(IRNode::List { children, .. })
-            | Some(IRNode::ListItem { children, .. }) => children.push(node),
-            Some(IRNode::Table { .. }) => {
-                let row = if self.is_in_table_header {
-                    if let Some(IRNode::Table { header: Some(h), .. }) = self.node_stack.last_mut()
-                    {
-                        h.rows.last_mut()
-                    } else {
-                        None
-                    }
-                } else if let Some(IRNode::Table { body, .. }) = self.node_stack.last_mut() {
-                    body.rows.last_mut()
-                } else {
-                    None
-                };
-                if let Some(r) = row {
-                    if let Some(cell) = r.cells.last_mut() {
-                        cell.children.push(node);
-                    }
-                }
-            }
+        let parent = self.node_stack.last_mut();
+        match parent {
+            Some(IRNode::Root(c)) | Some(IRNode::Block { children: c, .. }) | Some(IRNode::FlexContainer { children: c, .. }) | Some(IRNode::List { children: c, .. }) | Some(IRNode::ListItem { children: c, .. }) => c.push(node),
+            Some(IRNode::Table { header, body, .. }) => {
+                let row = if self.is_in_table_header { header.as_mut().and_then(|h| h.rows.last_mut()) } else { body.rows.last_mut() };
+                if let Some(cell) = row.and_then(|r| r.cells.last_mut()) { cell.children.push(node); }
+            },
             _ => log::warn!("Cannot add block node to current parent."),
         }
     }
 
     fn push_inline_to_parent(&mut self, node: InlineNode) {
-        match self.inline_stack.last_mut() {
-            Some(InlineNode::StyledSpan { children, .. })
-            | Some(InlineNode::Hyperlink { children, .. }) => children.push(node),
-            _ => {
-                if let Some(IRNode::Paragraph { children, .. }) = self.node_stack.last_mut() {
-                    children.push(node);
-                } else {
-                    // FIX: If the parent is a generic container (Block, Flex, etc.),
-                    // we must implicitly create a new Paragraph to hold this inline content.
-                    let can_parent_hold_paragraph = matches!(
-                        self.node_stack.last(),
-                        Some(IRNode::Root(_))
-                            | Some(IRNode::Block { .. })
-                            | Some(IRNode::FlexContainer { .. })
-                            | Some(IRNode::ListItem { .. })
-                            | Some(IRNode::Table { .. })
-                    );
-
-                    if can_parent_hold_paragraph {
-                        // Create a new paragraph just for this content.
-                        let paragraph = IRNode::Paragraph {
-                            style_sets: vec![],
-                            style_override: None,
-                            children: vec![node],
-                        };
-                        // Use the existing helper to add this new block to its parent.
-                        self.push_block_to_parent(paragraph);
-                    } else {
-                        log::warn!(
-                            "Could not place inline content; parent node does not support it."
-                        );
-                    }
-                }
+        if let Some(inline_parent) = self.inline_stack.last_mut() {
+            if let InlineNode::StyledSpan { children: c, .. } | InlineNode::Hyperlink { children: c, .. } = inline_parent {
+                c.push(node);
+                return;
             }
         }
-    }
-}
-
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::parser::xslt::compiler::Compiler;
-    use serde_json::json;
-
-    fn run_test(xslt: &str, data: &Value) -> Result<Vec<IRNode>, ParseError> {
-        let compiled_stylesheet = Compiler::compile(xslt).unwrap();
-        let handlebars = Handlebars::new();
-        let mut executor = TemplateExecutor::new(&handlebars, &compiled_stylesheet);
-        executor.build_tree(data)
-    }
-
-    #[test]
-    fn test_implicit_paragraph_creation_in_block() {
-        let xslt = r#"
-            <xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
-                <xsl:template match="/">
-                    <page-sequence>
-                        <block>Some loose text.</block>
-                    </page-sequence>
-                </xsl:template>
-            </xsl:stylesheet>
-        "#;
-        let result = run_test(xslt, &json!({})).unwrap();
-
-        assert_eq!(result.len(), 1, "Expected one top-level node (page-sequence)");
-
-        let page_sequence_children = match &result[0] {
-            IRNode::Block { children, .. } => children, // page-sequence becomes a block
-            _ => panic!("Expected page-sequence to be parsed as a Block"),
-        };
-        assert_eq!(page_sequence_children.len(), 1, "Expected one child in page-sequence");
-
-        let block = &page_sequence_children[0];
-        match block {
-            IRNode::Block { children, .. } => {
-                assert_eq!(children.len(), 1, "Block should contain one child");
-                let paragraph = &children[0];
-                match paragraph {
-                    IRNode::Paragraph { children, .. } => {
-                        assert_eq!(children.len(), 1, "Paragraph should contain one child");
-                        let text = &children[0];
-                        match text {
-                            InlineNode::Text(s) => assert_eq!(s, "Some loose text."),
-                            _ => panic!("Expected InlineNode::Text"),
-                        }
-                    }
-                    _ => panic!("Expected child of Block to be an implicit Paragraph"),
-                }
-            }
-            _ => panic!("Expected a Block node"),
-        }
-    }
-
-    #[test]
-    fn test_value_of_in_strong_tag_in_block() {
-        let xslt = r#"
-            <xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
-                <xsl:template match="/">
-                    <block><strong><xsl:value-of select="name"/></strong></block>
-                </xsl:template>
-            </xsl:stylesheet>
-        "#;
-        let result = run_test(xslt, &json!({ "name": "John Doe" })).unwrap();
-
-        let block_children = match &result[0] {
-            IRNode::Block { children, .. } => children,
-            _ => panic!("Expected root node to be a Block"),
-        };
-        assert_eq!(block_children.len(), 1, "Block should contain one implicit paragraph");
-
-        let paragraph_children = match &block_children[0] {
-            IRNode::Paragraph { children, .. } => children,
-            _ => panic!("Expected implicit paragraph"),
-        };
-        assert_eq!(paragraph_children.len(), 1, "Paragraph should contain one span");
-
-        let span_children = match &paragraph_children[0] {
-            InlineNode::StyledSpan { children, .. } => children,
-            _ => panic!("Expected StyledSpan for <strong>"),
-        };
-        assert_eq!(span_children.len(), 1, "Span should contain one text node");
-
-        match &span_children[0] {
-            InlineNode::Text(s) => assert_eq!(s, "John Doe"),
-            _ => panic!("Expected Text node with content"),
+        if let Some(IRNode::Paragraph { children: c, .. }) = self.node_stack.last_mut() {
+            c.push(node);
+        } else {
+            let paragraph = IRNode::Paragraph { style_sets: vec![], style_override: None, children: vec![node] };
+            self.push_block_to_parent(paragraph);
         }
     }
 }

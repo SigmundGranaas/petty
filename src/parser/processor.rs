@@ -1,6 +1,6 @@
+use crate::core::idf::LayoutUnit;
 use crate::error::PipelineError;
 use serde_json::Value;
-use crate::core::idf::LayoutUnit;
 
 /// A trait for processing a template and data into a stream of `LayoutUnit`s.
 ///

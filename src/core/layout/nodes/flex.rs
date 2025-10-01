@@ -1,4 +1,5 @@
 // FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/flex.rs
+// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/flex.rs
 use crate::core::idf::IRNode;
 use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult};
 use crate::core::layout::style::ComputedStyle;
@@ -243,9 +244,12 @@ fn resolve_flex_basis(
         _ => {
             // Auto basis means size is determined by content.
             if is_horiz {
-                // This is an approximation. True horizontal content sizing is complex.
-                // We'll use the child's measured height as a rough guide for width.
-                node.measure_content_height(engine, f32::INFINITY)
+                // BUGFIX: Using height to determine width is incorrect. For block-like
+                // elements without an intrinsic width (like a table with auto columns),
+                // the basis should be the available container size. While this prevents
+                // shrink-to-fit for `justify-content`, it ensures the element is visible
+                // and correctly sized relative to its parent, which is a safer default.
+                container_main_size
             } else {
                 node.measure_content_height(engine, container_main_size)
             }

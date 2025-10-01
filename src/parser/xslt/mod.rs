@@ -1,34 +1,25 @@
 // FILE: src/parser/xslt/mod.rs
-// src/parser/xslt/mod.rs
 pub mod ast;
 pub mod compiler;
 pub mod executor;
-pub(crate) mod util;
+pub mod util;
 
+use crate::core::idf::IRNode;
 use crate::parser::ParseError;
-use ast::{PreparsedTemplate, XsltInstruction};
+use handlebars::Handlebars;
+use serde_json::Value;
 
-/// Finds the `<page-sequence>` tag within a compiled root template and
-/// returns its body. This is used by the "pull" model to define the template
-/// for each item in a sequence.
-///
-/// **DEPRECATED:** This function is part of the old "pull" model. The new "push" model
-/// starts execution from the root template (`match="/"`) directly. This function is
-/// kept for backward compatibility during the transition but will be removed.
-pub fn find_and_extract_sequence_body(
-    root_template: &PreparsedTemplate,
-) -> Result<PreparsedTemplate, ParseError> {
-    for instruction in &root_template.0 {
-        if let XsltInstruction::ContentTag {
-            tag_name, body, ..
-        } = instruction
-        {
-            if tag_name == b"page-sequence" {
-                return Ok(body.clone());
-            }
-        }
-    }
-    // In the new model, page-sequence is no longer strictly required at the top level.
-    // If it's missing, we can assume the entire root template is the sequence body.
-    Ok(root_template.clone())
+/// The main public entry point for the XSLT parser module.
+/// It orchestrates the compile and execute phases for an XSLT template.
+pub fn process_xslt<'h>(
+    xslt_content: &str,
+    data: &Value,
+    handlebars: &'h Handlebars<'h>,
+) -> Result<Vec<IRNode>, ParseError> {
+    // Phase 1: Compile the XSLT source into an executable structure.
+    let compiled_stylesheet = compiler::Compiler::compile(xslt_content)?;
+
+    // Phase 2: Execute the compiled stylesheet against the data context.
+    let mut executor = executor::TemplateExecutor::new(handlebars, &compiled_stylesheet);
+    executor.build_tree(data)
 }

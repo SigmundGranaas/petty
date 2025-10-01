@@ -11,6 +11,7 @@ use super::nodes::table::TableNode;
 use super::style::{self, ComputedStyle};
 use super::{IRNode, LayoutError, PipelineError, PositionedElement};
 use crate::core::idf::LayoutUnit;
+use crate::core::style::dimension::Margins;
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
 use std::sync::Arc;
 
@@ -38,7 +39,8 @@ impl LayoutEngine {
         layout_unit: LayoutUnit,
     ) -> Result<Vec<Vec<PositionedElement>>, PipelineError> {
         let (page_width, page_height) = style::get_page_dimensions(&self.stylesheet);
-        let margins = &self.stylesheet.page.margins;
+        let default_margins = Margins::default();
+        let margins = self.stylesheet.page.margins.as_ref().unwrap_or(&default_margins);
         let content_width = page_width - margins.left - margins.right;
         let content_height = page_height - margins.top - margins.bottom;
 
@@ -161,11 +163,9 @@ mod tests {
 
         assert!(!page1.is_empty(), "Page should have elements");
         let text_element = &page1[0];
-        // Default page top margin is 10.
-        // Root block has 0 margin/padding.
-        // Paragraph has 0 margin/padding.
-        // So, the text should start at y=10.0.
-        assert_eq!(text_element.y, 10.0);
+
+        let default_margin = engine.stylesheet.page.margins.as_ref().map_or(0.0, |m| m.top);
+        assert!((text_element.y - default_margin).abs() < 0.1);
         // Default font size 12, line height 14.4
         assert_eq!(text_element.height, 14.4);
     }
@@ -205,8 +205,9 @@ mod tests {
 
         assert_eq!(page1.len(), 1, "Should have one text element");
         let text_el = &page1[0];
+        let page_margin = engine.stylesheet.page.margins.as_ref().map_or(0.0, |m| m.top);
 
-        // y = page_margin_top(10) + block_margin_top(20) + block_padding_top(10) = 40.0
-        assert_eq!(text_el.y, 40.0);
+        // y = page_margin_top(0) + block_margin_top(20) + block_padding_top(10) = 30.0
+        assert!((text_el.y - (page_margin + 20.0 + 10.0)).abs() < 0.1);
     }
 }

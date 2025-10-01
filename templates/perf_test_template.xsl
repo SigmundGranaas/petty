@@ -156,14 +156,6 @@
                     </xsl:for-each>
                 </tbody>
             </table>
-
-            <!--
-            IMPROVEMENT 2: Summary Block Layout.
-            The original used a flex-container to right-align a fixed-width (45%) block,
-            which looked awkward. This version makes the summary table a direct child of the
-            flex-container. The table's width will now be determined by its content, creating a
-            tighter, cleaner look, which is then correctly right-aligned by the flex container.
-            -->
             <flex-container use-attribute-sets="summary-flex-container">
                 <table>
                     <columns>
@@ -173,16 +165,15 @@
                     <tbody>
                         <row>
                             <cell use-attribute-sets="summary-label"><text>Subtotal:</text></cell>
-                            <!-- Switched to dot notation for Handlebars, which is more standard for JSON. -->
-                            <cell use-attribute-sets="summary-value"><text>{{formatCurrency summary.total}}</text></cell>
+                            <cell use-attribute-sets="summary-value"><text>{{summary.total}}</text></cell>
                         </row>
                         <row>
                             <cell use-attribute-sets="summary-label"><text>Tax (8%):</text></cell>
-                            <cell use-attribute-sets="summary-value"><text>{{formatCurrency summary.tax}}</text></cell>
+                            <cell use-attribute-sets="summary-value"><text>{{summary.tax}}</text></cell>
                         </row>
                         <row>
-                            <cell use-attribute-sets="summary-total-label"><text>Grand Total:</text></cell>
-                            <cell use-attribute-sets="summary-total-value"><text>{{formatCurrency summary.grand_total}}</text></cell>
+                            <cell use-attribute-sets="summary-label"><text>Grand Total:</text></cell>
+                            <cell use-attribute-sets="summary-value"><text>{{summary.grand_total}}</text></cell>
                         </row>
                     </tbody>
                 </table>

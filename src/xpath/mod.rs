@@ -86,14 +86,23 @@ pub enum Condition {
     Equals(Selection, Value),
     /// A logical OR between two conditions.
     Or(Box<Condition>, Box<Condition>),
+    /// A check on the current loop position: `position() mod M = R`.
+    PositionMod(u32, u32),
 }
 
 impl Condition {
     /// Evaluates the compiled condition against a JSON context.
-    pub fn evaluate(&self, context: &Value) -> bool {
+    pub fn evaluate(&self, context: &Value, loop_position: Option<usize>) -> bool {
         // For now, conditions don't use variables, but this could be extended.
         let variables = HashMap::new();
         match self {
+            Condition::PositionMod(modulus, result) => {
+                if *modulus == 0 {
+                    return false;
+                }
+                // XSLT position is 1-based.
+                loop_position.map_or(false, |p| (p as u32 % modulus) == *result)
+            }
             Condition::Exists(selection) => {
                 let results = selection.select(context, &variables);
                 !results.is_empty()
@@ -109,7 +118,7 @@ impl Condition {
                 };
                 selected_value_str == literal_str
             }
-            Condition::Or(c1, c2) => c1.evaluate(context) || c2.evaluate(context),
+            Condition::Or(c1, c2) => c1.evaluate(context, loop_position) || c2.evaluate(context, loop_position),
         }
     }
 }
@@ -131,6 +140,17 @@ fn parse_or_expr(expr: &str) -> Result<Condition, ParseError> {
 }
 
 fn parse_equality_expr(expr: &str) -> Result<Condition, ParseError> {
+    // Special case for the common `position() mod N = R` pattern.
+    let trimmed_expr = expr.trim();
+    if let Some(rest) = trimmed_expr.strip_prefix("position() mod ") {
+        if let Some((mod_val_str, eq_val_str)) = rest.split_once(" = ") {
+            let modulus: u32 = mod_val_str.trim().parse().map_err(|_| ParseError::XPathParse(expr.to_string(), "Invalid modulus in position() check".into()))?;
+            let result: u32 = eq_val_str.trim().parse().map_err(|_| ParseError::XPathParse(expr.to_string(), "Invalid result in position() check".into()))?;
+            // In XSLT, `position() mod 2 = 0` is not what people expect. `position() mod 2 = 1` is odd, but `position() mod 2 = 0` for even is correct in a 1-based index system.
+            return Ok(Condition::PositionMod(modulus, result));
+        }
+    }
+
     if let Some((lhs_path, rhs_str)) = expr.split_once(" = ") {
         let lhs_path = lhs_path.trim();
         let rhs_str = rhs_str.trim();
@@ -195,15 +215,15 @@ mod tests {
     fn test_parse_and_evaluate_condition() {
         let data = get_test_data();
         // Existence
-        assert!(parse_condition("name").unwrap().evaluate(&data));
-        assert!(!parse_condition("nonexistent").unwrap().evaluate(&data));
+        assert!(parse_condition("name").unwrap().evaluate(&data, None));
+        assert!(!parse_condition("nonexistent").unwrap().evaluate(&data, None));
         // Equality
-        assert!(parse_condition("type = 'partner'").unwrap().evaluate(&data));
-        assert!(parse_condition("rating = 4.5").unwrap().evaluate(&data));
-        assert!(!parse_condition("type = 'customer'").unwrap().evaluate(&data));
+        assert!(parse_condition("type = 'partner'").unwrap().evaluate(&data, None));
+        assert!(parse_condition("rating = 4.5").unwrap().evaluate(&data, None));
+        assert!(!parse_condition("type = 'customer'").unwrap().evaluate(&data, None));
         // OR logic
         let or_cond = parse_condition("type = 'customer' or rating = 4.5").unwrap();
-        assert!(or_cond.evaluate(&data));
+        assert!(or_cond.evaluate(&data, None));
     }
 
     #[test]
@@ -226,7 +246,6 @@ mod tests {
         // Name tests
         assert!(matches(item_node, Some("item"), "item"));
         assert!(!matches(item_node, Some("item"), "wrong_name"));
-        // FIX: The `desc_node`'s real name is "description". The test was incorrectly passing "item".
         assert!(!matches(desc_node, Some("description"), "item")); // Node name is "description", pattern is "item"
 
         // Wildcard tests
@@ -237,5 +256,14 @@ mod tests {
         // Text node tests
         assert!(matches(desc_node, Some("description"), "text()"));
         assert!(!matches(item_node, Some("item"), "text()"));
+    }
+
+    #[test]
+    fn test_position_mod_condition() {
+        let data = json!({});
+        let cond = parse_condition("position() mod 2 = 1").unwrap();
+        assert!(cond.evaluate(&data, Some(1)));
+        assert!(!cond.evaluate(&data, Some(2)));
+        assert!(cond.evaluate(&data, Some(3)));
     }
 }

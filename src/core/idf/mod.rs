@@ -130,7 +130,7 @@ impl_style_accessors!(
 
 /// Represents the definition of a single column in a table, containing
 /// information needed for layout calculation.
-#[derive(Debug, Clone, PartialEq, Default)] // Added Default derive
+#[derive(Debug, Clone, PartialEq, Default)]
 pub struct TableColumnDefinition {
     pub width: Option<Dimension>,
     // These string styles will be resolved by the TreeBuilder, not the layout engine.

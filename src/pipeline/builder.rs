@@ -58,9 +58,14 @@ impl PipelineBuilder {
         xslt_content: &str,
         resource_base_path: Option<&Path>,
     ) -> Result<Self, PipelineError> {
+        // The Compiler now performs a single, unified parse of the XSLT.
         let compiled_stylesheet = Compiler::compile(xslt_content).map_err(PipelineError::from)?;
-        let mut stylesheet = Stylesheet::from_xslt(xslt_content)?;
-        stylesheet.styles = compiled_stylesheet.styles.clone();
+
+        // The final Stylesheet is constructed entirely from the compiler's output.
+        let stylesheet = Stylesheet {
+            page: compiled_stylesheet.page.clone(),
+            styles: compiled_stylesheet.styles.clone(),
+        };
         let base_path = resource_base_path
             .unwrap_or_else(|| Path::new(""))
             .to_path_buf();

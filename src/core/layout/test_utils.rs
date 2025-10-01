@@ -24,12 +24,12 @@ pub fn create_test_engine_with_page(width: f32, height: f32, margin: f32) -> Lay
     let stylesheet = Stylesheet {
         page: PageLayout {
             size: PageSize::Custom { width, height },
-            margins: Margins {
+            margins: Some(Margins {
                 top: margin,
                 right: margin,
                 bottom: margin,
                 left: margin,
-            },
+            }),
             ..Default::default()
         },
         ..Default::default()

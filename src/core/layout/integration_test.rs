@@ -40,12 +40,12 @@ fn test_nested_blocks_with_padding_and_margin() {
     let text_element = &page1[0];
 
     // Expected Y position breakdown:
-    // Page margin top: 10.0 (from default stylesheet in create_test_engine)
+    // Page margin top: 72.0 (from default stylesheet in create_test_engine)
     // Outer block margin top: 5.0
     // Outer block padding top: 2.0
     // Inner paragraph margin top: 10.0
-    // Total Y = 10.0 + 5.0 + 2.0 + 10.0 = 27.0
-    let expected_y = 27.0;
+    // Total Y = 72.0 + 5.0 + 2.0 + 10.0 = 89.0
+    let expected_y = 89.0;
 
     assert!(
         (text_element.y - expected_y).abs() < 0.01,

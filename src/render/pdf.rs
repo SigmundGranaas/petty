@@ -16,7 +16,7 @@ use std::io;
 use std::sync::Arc;
 use crate::core::idf::SharedData;
 use crate::core::layout::{ComputedStyle, LayoutEngine, PositionedElement};
-use crate::core::style::dimension::PageSize;
+use crate::core::style::dimension::{Margins, PageSize};
 use crate::core::style::font::FontWeight;
 use crate::core::style::stylesheet::{PageLayout, Stylesheet};
 use crate::core::style::text::TextAlign;
@@ -237,6 +237,8 @@ impl<W: io::Write + Send> PdfDocumentRenderer<W> {
 
         // Manual replacement for legacy placeholders for now.
         let final_text = rendered_text;
+        let default_margins = Margins::default();
+        let margins = page_layout.margins.as_ref().unwrap_or(&default_margins);
 
         let (page_width_pt, _) = Self::get_page_dimensions_pt(page_layout);
         let font_id = self
@@ -260,15 +262,15 @@ impl<W: io::Write + Send> PdfDocumentRenderer<W> {
             font: font_id.clone(),
         });
 
-        let y = page_layout.margins.bottom - style.font_size;
+        let y = margins.bottom - style.font_size;
         let line_width = self.layout_engine.measure_text_width(&final_text, &style);
-        let content_width = page_width_pt - page_layout.margins.left - page_layout.margins.right;
+        let content_width = page_width_pt - margins.left - margins.right;
 
-        let mut x = page_layout.margins.left;
+        let mut x = margins.left;
         match style.text_align {
-            TextAlign::Right => x = page_width_pt - page_layout.margins.right - line_width,
+            TextAlign::Right => x = page_width_pt - margins.right - line_width,
             TextAlign::Center => {
-                x = page_layout.margins.left + (content_width - line_width) / 2.0
+                x = margins.left + (content_width - line_width) / 2.0
             }
             _ => {}
         }
@@ -401,6 +403,8 @@ pub(crate) fn render_footer_to_ops<W: io::Write + Send>(
     } else {
         vec![]
     };
+    let default_margins = Margins::default();
+    let margins = page_layout.margins.as_ref().unwrap_or(&default_margins);
 
     let style =
         layout_engine.compute_style(&style_sets, None, &layout_engine.get_default_style());
@@ -431,14 +435,14 @@ pub(crate) fn render_footer_to_ops<W: io::Write + Send>(
         font: font_id.clone(),
     });
 
-    let y = page_layout.margins.bottom - style.font_size;
+    let y = margins.bottom - style.font_size;
     let line_width = layout_engine.measure_text_width(&final_text, &style);
-    let content_width = page_width_pt - page_layout.margins.left - page_layout.margins.right;
+    let content_width = page_width_pt - margins.left - margins.right;
 
-    let mut x = page_layout.margins.left;
+    let mut x = margins.left;
     match style.text_align {
-        TextAlign::Right => x = page_width_pt - page_layout.margins.right - line_width,
-        TextAlign::Center => x = page_layout.margins.left + (content_width - line_width) / 2.0,
+        TextAlign::Right => x = page_width_pt - margins.right - line_width,
+        TextAlign::Center => x = margins.left + (content_width - line_width) / 2.0,
         _ => {}
     }
 

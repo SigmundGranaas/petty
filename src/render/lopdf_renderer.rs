@@ -2,6 +2,7 @@ use super::renderer::DocumentRenderer;
 use super::streaming_writer::internal_writer::write_object;
 use super::streaming_writer::StreamingPdfWriter;
 
+use crate::core::style::dimension::Margins;
 use crate::core::style::font::FontWeight;
 use crate::render::RenderError;
 use handlebars::Handlebars;
@@ -109,8 +110,8 @@ impl<W: Write + Send> DocumentRenderer<W> for LopdfDocumentRenderer<W> {
             RenderError::Other("begin_document must be called before render_page".into())
         })?;
 
-        let page_layout = self.stylesheet.page.clone();
-        let (page_width, page_height) = Self::get_page_dimensions_pt(&page_layout);
+        let page_layout = &self.stylesheet.page;
+        let (page_width, page_height) = Self::get_page_dimensions_pt(page_layout);
 
         let mut page_ctx = PageContext::new(&self.layout_engine, page_height, &self.font_map);
 
@@ -124,7 +125,7 @@ impl<W: Write + Send> DocumentRenderer<W> for LopdfDocumentRenderer<W> {
                 context,
                 template_engine,
                 footer_template,
-                &page_layout,
+                page_layout,
                 page_num,
             )?;
         }
@@ -330,7 +331,6 @@ impl<'a> PageContext<'a> {
                         styled_font_name, style.font_family
                     );
                 }
-                // --- FIX: Borrow the static string ---
                 self.font_map.get(style.font_family.as_str()).unwrap_or(&DEFAULT_LOPDF_FONT_NAME)
             }
         };
@@ -399,6 +399,8 @@ impl<'a> PageContext<'a> {
         page_layout: &PageLayout,
         page_num: usize,
     ) -> Result<(), RenderError> {
+        let default_margins = Margins::default();
+        let margins = page_layout.margins.as_ref().unwrap_or(&default_margins);
         let style_sets = if let Some(style_name) = page_layout.footer_style.as_deref() {
             self.layout_engine
                 .stylesheet
@@ -435,16 +437,16 @@ impl<'a> PageContext<'a> {
         self.set_fill_color(&style.color);
 
         let line_width = self.layout_engine.measure_text_width(&text, &style);
-        let y = page_layout.margins.bottom - style.font_size;
+        let y = margins.bottom - style.font_size;
         let x = match style.text_align {
-            TextAlign::Left => page_layout.margins.left,
-            TextAlign::Right => page_width - page_layout.margins.right - line_width,
+            TextAlign::Left => margins.left,
+            TextAlign::Right => page_width - margins.right - line_width,
             TextAlign::Center => {
                 let content_width =
-                    page_width - page_layout.margins.left - page_layout.margins.right;
-                page_layout.margins.left + (content_width - line_width) / 2.0
+                    page_width - margins.left - margins.right;
+                margins.left + (content_width - line_width) / 2.0
             }
-            TextAlign::Justify => page_layout.margins.left,
+            TextAlign::Justify => margins.left,
         };
 
         self.content

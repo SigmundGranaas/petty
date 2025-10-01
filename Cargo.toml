@@ -8,6 +8,8 @@ edition = "2024"
 lopdf = "0.36.0"
 printpdf = { version = "0.8.2", features = ["png"] }
 
+nom = "7.1"
+
 # Data processing
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

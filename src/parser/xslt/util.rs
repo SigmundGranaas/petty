@@ -5,7 +5,7 @@ use quick_xml::events::BytesStart;
 pub(super) type OwnedAttributes = Vec<(Vec<u8>, Vec<u8>)>;
 
 /// Parses all attributes from a `BytesStart` event into an owned `Vec`.
-pub(super) fn get_owned_attributes(e: &BytesStart) -> Result<OwnedAttributes, ParseError> {
+pub(crate) fn get_owned_attributes(e: &BytesStart) -> Result<OwnedAttributes, ParseError> {
     e.attributes()
         .map(|attr_res| {
             let attr = attr_res?;
@@ -15,7 +15,7 @@ pub(super) fn get_owned_attributes(e: &BytesStart) -> Result<OwnedAttributes, Pa
 }
 
 /// Helper function to convert a byte position to a line and column number.
-pub(super) fn get_line_col_from_pos(xml_str: &str, pos: usize) -> (usize, usize) {
+pub(crate) fn get_line_col_from_pos(xml_str: &str, pos: usize) -> (usize, usize) {
     let before = &xml_str[..pos.min(xml_str.len())];
     let line = before.lines().count();
     let col = before.lines().last().map_or(0, |l| l.chars().count()) + 1;
