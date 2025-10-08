@@ -7,10 +7,11 @@ use crate::core::layout::{LayoutEngine, LayoutError, PositionedElement};
 use crate::core::style::dimension::Dimension;
 use crate::core::style::text::TextAlign;
 use std::any::Any;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// A `LayoutNode` implementation for paragraphs, capable of line-breaking and page-splitting.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct ParagraphNode {
     atoms: Vec<LayoutAtom>,
     style: Arc<ComputedStyle>,
@@ -26,6 +27,17 @@ impl ParagraphNode {
         };
         let atoms = atomize_inlines(engine, inlines, &style, None);
         Self { atoms, style }
+    }
+
+    /// Prepends text to the paragraph's atoms, useful for list markers.
+    pub fn prepend_text(&mut self, text: &str, engine: &LayoutEngine) {
+        let word = LayoutAtom::Word {
+            text: text.to_string(),
+            width: engine.measure_text_width(text, &self.style),
+            style: self.style.clone(),
+            href: None,
+        };
+        self.atoms.insert(0, word);
     }
 }
 
@@ -46,119 +58,138 @@ impl LayoutNode for ParagraphNode {
         if self.atoms.is_empty() {
             return self.style.margin.top + self.style.margin.bottom;
         }
+        let lines = break_atoms_into_line_ranges(&self.atoms, available_width);
+        let content_height = lines.len() as f32 * self.style.line_height;
 
-        let mut remaining_atoms = self.atoms.as_slice();
-        let mut total_height = 0.0;
-        let line_height = self.style.line_height;
-
-        while !remaining_atoms.is_empty() {
-            let mut line_buffer_width = 0.0;
-            let mut break_idx = 0;
-
-            for (i, atom) in remaining_atoms.iter().enumerate() {
-                if let LayoutAtom::LineBreak = atom {
-                    break_idx = i + 1;
-                    break;
-                }
-                if line_buffer_width > 0.0 && (line_buffer_width + atom.width()) > available_width {
-                    break_idx = i;
-                    break;
-                }
-                line_buffer_width += atom.width();
-                break_idx = i + 1;
-            }
-
-            total_height += line_height;
-            remaining_atoms = &remaining_atoms[break_idx..];
-        }
-
-        self.style.margin.top + total_height + self.style.margin.bottom
+        self.style.margin.top + content_height + self.style.margin.bottom
     }
 
     fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
+        // --- Vertical Margin Collapsing ---
+        let margin_to_add = self.style.margin.top.max(ctx.last_v_margin);
+
         if self.atoms.is_empty() {
+            ctx.advance_cursor(margin_to_add);
+            ctx.last_v_margin = self.style.margin.bottom;
             return Ok(LayoutResult::Full);
         }
 
-        let total_margin = self.style.margin.top + self.style.margin.bottom;
-        if total_margin > ctx.available_height() && !ctx.is_empty() {
-            return Ok(LayoutResult::Partial(Box::new(ParagraphNode {
-                atoms: std::mem::take(&mut self.atoms),
-                style: self.style.clone(),
-            })));
+        if !ctx.is_empty() && margin_to_add > ctx.available_height() {
+            return Ok(LayoutResult::Partial(Box::new(self.clone())));
         }
 
-        ctx.advance_cursor(self.style.margin.top);
-
+        // Apply the collapsed margin by advancing the cursor.
+        ctx.advance_cursor(margin_to_add);
+        // The margin has been "used," so reset it for any subsequent children.
+        ctx.last_v_margin = 0.0;
+        
         let available_width = ctx.bounds.width;
-        let mut remaining_atoms = self.atoms.as_slice();
-        let mut first_line_on_page = true;
+        let all_line_ranges = break_atoms_into_line_ranges(&self.atoms, available_width);
+        let total_lines = all_line_ranges.len();
+        let line_height = self.style.line_height;
 
-        loop {
-            let line_height = self.style.line_height;
-            if line_height > ctx.available_height() && !first_line_on_page {
-                let remainder = Box::new(ParagraphNode {
-                    atoms: remaining_atoms.to_vec(),
-                    style: self.style.clone(),
-                });
-                // Before returning, we need to account for the parent's bottom margin
-                ctx.advance_cursor(self.style.margin.bottom);
-                return Ok(LayoutResult::Partial(remainder));
+        let mut lines_that_fit = (ctx.available_height() / line_height).floor() as usize;
+        if ctx.is_empty() && lines_that_fit == 0 && total_lines > 0 {
+            lines_that_fit = 1;
+        }
+        lines_that_fit = lines_that_fit.min(total_lines);
+
+        // --- Orphans Control ---
+        // If a break would occur, and it would leave fewer than `orphans` lines on this page,
+        // force the entire paragraph to the next page.
+        if !ctx.is_empty() && total_lines > lines_that_fit && lines_that_fit < self.style.orphans {
+            return Ok(LayoutResult::Partial(Box::new(self.clone())));
+        }
+
+        // --- Widows Control ---
+        if lines_that_fit < total_lines && lines_that_fit > 0 {
+            let remaining_lines_count = total_lines - lines_that_fit;
+            if remaining_lines_count < self.style.widows {
+                let lines_to_move = (self.style.widows - remaining_lines_count).min(lines_that_fit);
+                lines_that_fit -= lines_to_move;
             }
+        }
 
-            let mut line_buffer: Vec<LayoutAtom> = Vec::with_capacity(30);
-            let mut current_line_width = 0.0;
-            let mut break_idx = 0;
-
-            for (i, atom) in remaining_atoms.iter().enumerate() {
-                if let LayoutAtom::LineBreak = atom {
-                    break_idx = i + 1;
-                    break;
-                }
-                if line_buffer.is_empty() && atom.is_space() {
-                    break_idx = i + 1;
-                    continue;
-                }
-                if !line_buffer.is_empty() && (current_line_width + atom.width()) > available_width {
-                    break_idx = i;
-                    break;
-                }
-                line_buffer.push(atom.clone());
-                current_line_width += atom.width();
-                break_idx = i + 1;
-            }
-
-            if line_buffer.is_empty() && !remaining_atoms.is_empty() {
-                if let LayoutAtom::Word { .. } | LayoutAtom::Image { .. } = &remaining_atoms[0] {
-                    line_buffer.push(remaining_atoms[0].clone());
-                    break_idx = 1;
-                }
-            }
-
-            if line_buffer.is_empty() {
-                break; // No more content to lay out
-            }
-
-            let is_last_line_of_paragraph = break_idx >= remaining_atoms.len();
+        for i in 0..lines_that_fit {
+            let range = &all_line_ranges[i];
+            let line_atoms = self.atoms[range.clone()].to_vec();
+            let is_last_line_of_paragraph = i == total_lines - 1;
             commit_line_to_context(
                 ctx,
                 self.style.clone(),
-                line_buffer,
+                line_atoms,
                 available_width,
                 is_last_line_of_paragraph,
             );
             ctx.advance_cursor(line_height);
-            first_line_on_page = false;
-
-            if break_idx >= remaining_atoms.len() {
-                break;
-            }
-            remaining_atoms = &remaining_atoms[break_idx..];
         }
 
-        ctx.advance_cursor(self.style.margin.bottom);
-        Ok(LayoutResult::Full)
+        if lines_that_fit >= total_lines {
+            ctx.last_v_margin = self.style.margin.bottom;
+            Ok(LayoutResult::Full)
+        } else {
+            let remainder_start_idx = all_line_ranges[lines_that_fit].start;
+            let remainder_atoms = self.atoms[remainder_start_idx..].to_vec();
+            let remainder = Box::new(ParagraphNode {
+                atoms: remainder_atoms,
+                style: self.style.clone(),
+            });
+            Ok(LayoutResult::Partial(remainder))
+        }
     }
+}
+
+fn break_atoms_into_line_ranges(atoms: &[LayoutAtom], available_width: f32) -> Vec<Range<usize>> {
+    if atoms.is_empty() {
+        return vec![];
+    }
+    let mut lines = Vec::new();
+    let mut current_pos = 0;
+
+    while current_pos < atoms.len() {
+        let mut line_start = current_pos;
+        while line_start < atoms.len() && atoms[line_start].is_space() {
+            line_start += 1;
+        }
+        if line_start >= atoms.len() {
+            break;
+        }
+
+        let mut line_buffer_width = 0.0;
+        let mut potential_break_idx = line_start;
+        let mut line_end = line_start;
+        let mut next_pos = line_start;
+
+        for i in line_start..atoms.len() {
+            let atom = &atoms[i];
+            if let LayoutAtom::LineBreak = atom {
+                line_end = i;
+                next_pos = i + 1;
+                break;
+            }
+
+            if !atom.is_space() && line_buffer_width > 0.0 && (line_buffer_width + atom.width()) > available_width {
+                if potential_break_idx > line_start {
+                    line_end = potential_break_idx;
+                    next_pos = potential_break_idx;
+                } else {
+                    line_end = i;
+                    next_pos = i;
+                }
+                break;
+            }
+            line_buffer_width += atom.width();
+            if atom.is_space() {
+                potential_break_idx = i;
+            }
+            line_end = i + 1;
+            next_pos = i + 1;
+        }
+
+        lines.push(line_start..line_end);
+        current_pos = next_pos;
+    }
+    lines
 }
 
 /// Commits a line of atoms to the LayoutContext.
@@ -229,6 +260,7 @@ fn commit_line_to_context(
                     element: crate::core::layout::LayoutElement::Text(crate::core::layout::TextElement {
                         content: run_text,
                         href: base_href.clone(),
+                        text_decoration: base_style.text_decoration.clone(),
                     }),
                     style: base_style.clone(),
                 });

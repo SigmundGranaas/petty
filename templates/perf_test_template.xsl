@@ -53,7 +53,6 @@
 
     <xsl:attribute-set name="td-odd">
         <xsl:attribute name="padding">7pt 6pt</xsl:attribute>
-        <xsl:attribute name="font-size">10pt</xsl:attribute>
         <xsl:attribute name="border-bottom">1pt solid #ECEFF1</xsl:attribute>
         <xsl:attribute name="color">#263238</xsl:attribute>
     </xsl:attribute-set>
@@ -77,7 +76,6 @@
     <xsl:attribute-set name="summary-label">
         <xsl:attribute name="text-align">right</xsl:attribute>
         <xsl:attribute name="padding">5pt 10pt</xsl:attribute>
-        <xsl:attribute name="font-size">11pt</xsl:attribute>
         <xsl:attribute name="font-weight">bold</xsl:attribute>
         <xsl:attribute name="color">#555</xsl:attribute>
     </xsl:attribute-set>
@@ -89,7 +87,6 @@
     </xsl:attribute-set>
 
     <xsl:attribute-set name="summary-total-label" use-attribute-sets="summary-label">
-        <xsl:attribute name="font-size">14pt</xsl:attribute>
         <xsl:attribute name="font-weight">bold</xsl:attribute>
         <xsl:attribute name="color">#0D47A1</xsl:attribute>
         <xsl:attribute name="border-top">1.5pt solid #263238</xsl:attribute>
@@ -98,6 +95,7 @@
 
     <xsl:attribute-set name="summary-total-value" use-attribute-sets="summary-total-label">
         <xsl:attribute name="padding">10pt 6pt 5pt 6pt</xsl:attribute>
+        <xsl:attribute name="font-weight">normal</xsl:attribute>
     </xsl:attribute-set>
 
     <xsl:attribute-set name="footer">
@@ -135,23 +133,12 @@
                     </row>
                 </header>
                 <tbody>
-                    <!-- Simplified the selection path from "./items" to "items". -->
                     <xsl:for-each select="items">
                         <row>
-                            <xsl:choose>
-                                <xsl:when test="position() mod 2 = 1">
-                                    <cell use-attribute-sets="td-odd"><text><xsl:value-of select="description"/></text></cell>
-                                    <cell use-attribute-sets="td-odd-right"><text><xsl:value-of select="quantity"/></text></cell>
-                                    <cell use-attribute-sets="td-odd-right"><text>{{formatCurrency price}}</text></cell>
-                                    <cell use-attribute-sets="td-odd-right"><text>{{formatCurrency line_total}}</text></cell>
-                                </xsl:when>
-                                <xsl:otherwise>
-                                    <cell use-attribute-sets="td-even"><text><xsl:value-of select="description"/></text></cell>
-                                    <cell use-attribute-sets="td-even-right"><text><xsl:value-of select="quantity"/></text></cell>
-                                    <cell use-attribute-sets="td-even-right"><text>{{formatCurrency price}}</text></cell>
-                                    <cell use-attribute-sets="td-even-right"><text>{{formatCurrency line_total}}</text></cell>
-                                </xsl:otherwise>
-                            </xsl:choose>
+                            <cell use-attribute-sets="td-odd"><text><xsl:value-of select="description"/></text></cell>
+                            <cell use-attribute-sets="td-odd-right"><text><xsl:value-of select="quantity"/></text></cell>
+                            <cell use-attribute-sets="td-odd-right"><text>{{price}}</text></cell>
+                            <cell use-attribute-sets="td-odd-right"><text>{{line_total}}</text></cell>
                         </row>
                     </xsl:for-each>
                 </tbody>
@@ -172,8 +159,8 @@
                             <cell use-attribute-sets="summary-value"><text>{{summary.tax}}</text></cell>
                         </row>
                         <row>
-                            <cell use-attribute-sets="summary-label"><text>Grand Total:</text></cell>
-                            <cell use-attribute-sets="summary-value"><text>{{summary.grand_total}}</text></cell>
+                            <cell use-attribute-sets="summary-total-label"><text>Grand Total:</text></cell>
+                            <cell use-attribute-sets="summary-total-value"><text>{{summary.grand_total}}</text></cell>
                         </row>
                     </tbody>
                 </table>

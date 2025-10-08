@@ -1,8 +1,9 @@
 use super::color::Color;
-use crate::parser::style_parsers;
-use serde::{de, Deserialize, Deserializer, Serialize};
+use crate::parser::ParseError;
+use serde::{Deserialize, Serialize};
+use std::str::FromStr;
 
-#[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub enum BorderStyle {
     None,
@@ -12,31 +13,31 @@ pub enum BorderStyle {
     Double,
 }
 
-#[derive(Serialize, Debug, Clone, PartialEq)]
+impl FromStr for BorderStyle {
+    type Err = ParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "none" => Ok(BorderStyle::None),
+            "solid" => Ok(BorderStyle::Solid),
+            "dashed" => Ok(BorderStyle::Dashed),
+            "dotted" => Ok(BorderStyle::Dotted),
+            "double" => Ok(BorderStyle::Double),
+            _ => Err(ParseError::TemplateParse(format!("Invalid border style: '{}'", s))),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Border {
     pub width: f32,
     pub style: BorderStyle,
     pub color: Color,
 }
 
-impl<'de> Deserialize<'de> for Border {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        #[derive(Deserialize)]
-        #[serde(untagged)]
-        enum BorderDef {
-            Str(String),
-            Map { width: f32, style: BorderStyle, color: Color },
-        }
-
-        match BorderDef::deserialize(deserializer)? {
-            BorderDef::Str(s) => {
-                // REPLACED: Call the new, robust nom parser.
-                style_parsers::run_parser(style_parsers::parse_border, &s).map_err(de::Error::custom)
-            }
-            BorderDef::Map { width, style, color } => Ok(Border { width, style, color }),
-        }
+impl From<(f32, &str, Color)> for Border {
+    fn from((width, style_str, color): (f32, &str, Color)) -> Self {
+        let style = BorderStyle::from_str(style_str).unwrap_or(BorderStyle::Solid);
+        Self { width, style, color }
     }
 }

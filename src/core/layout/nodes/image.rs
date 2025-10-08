@@ -71,7 +71,7 @@ impl LayoutNode for ImageNode {
             return Err(LayoutError::ElementTooLarge(total_height, ctx.bounds.height));
         }
 
-        if total_height > ctx.available_height() && !ctx.is_empty() {
+        if total_height > ctx.available_height() && (!ctx.is_empty() || ctx.cursor.1 > 0.0) {
             return Ok(LayoutResult::Partial(Box::new(self.clone())));
         }
 

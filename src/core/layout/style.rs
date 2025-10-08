@@ -4,9 +4,9 @@ use crate::core::style::color::Color;
 use crate::core::style::dimension::{Dimension, Margins};
 use crate::core::style::flex::{AlignItems, AlignSelf, FlexDirection, FlexWrap, JustifyContent};
 use crate::core::style::font::{FontStyle, FontWeight};
-use crate::core::style::list::ListStyleType;
+use crate::core::style::list::{ListStylePosition, ListStyleType};
 use crate::core::style::stylesheet::ElementStyle;
-use crate::core::style::text::TextAlign;
+use crate::core::style::text::{TextAlign, TextDecoration};
 use std::sync::Arc;
 
 /// A fully resolved style with no optional values, ready for layout.
@@ -18,25 +18,36 @@ pub struct ComputedStyle {
     pub font_style: FontStyle,
     pub line_height: f32,
     pub text_align: TextAlign,
+    pub text_decoration: TextDecoration,
+    pub widows: usize,
+    pub orphans: usize,
     pub color: Color,
     pub margin: Margins,
     pub padding: Margins,
     pub width: Option<Dimension>,
     pub height: Option<Dimension>,
     pub background_color: Option<Color>,
-    pub border: Option<Border>,
+    pub border_top: Option<Border>,
+    pub border_right: Option<Border>,
     pub border_bottom: Option<Border>,
+    pub border_left: Option<Border>,
 
     // List properties
     pub list_style_type: ListStyleType,
+    pub list_style_position: ListStylePosition,
+
+    // Table properties
+    pub border_spacing: f32,
 
     // Flexbox container properties
     pub flex_direction: FlexDirection,
     pub flex_wrap: FlexWrap,
     pub justify_content: JustifyContent,
     pub align_items: AlignItems,
+    pub align_content: JustifyContent, // Uses same values as justify
 
     // Flexbox item properties
+    pub order: i32,
     pub flex_grow: f32,
     pub flex_shrink: f32,
     pub flex_basis: Dimension,
@@ -52,6 +63,9 @@ impl Default for ComputedStyle {
             font_style: FontStyle::Normal,
             line_height: 14.4, // 12.0 * 1.2
             text_align: TextAlign::Left,
+            text_decoration: TextDecoration::None,
+            widows: 2,
+            orphans: 2,
             color: Color {
                 r: 0,
                 g: 0,
@@ -63,13 +77,19 @@ impl Default for ComputedStyle {
             width: None,
             height: None,
             background_color: None,
-            border: None,
+            border_top: None,
+            border_right: None,
             border_bottom: None,
+            border_left: None,
             list_style_type: ListStyleType::default(),
+            list_style_position: ListStylePosition::default(),
+            border_spacing: 0.0,
             flex_direction: FlexDirection::default(),
             flex_wrap: FlexWrap::default(),
             justify_content: JustifyContent::default(),
             align_items: AlignItems::default(),
+            align_content: JustifyContent::FlexStart,
+            order: 0,
             flex_grow: 0.0,
             flex_shrink: 1.0,
             flex_basis: Dimension::Auto,
@@ -95,12 +115,16 @@ pub fn compute_style(
     computed.width = None;
     computed.height = None;
     computed.background_color = None;
-    computed.border = None;
+    computed.border_top = None;
+    computed.border_right = None;
     computed.border_bottom = None;
+    computed.border_left = None;
+    computed.order = 0;
     computed.flex_grow = 0.0;
     computed.flex_shrink = 1.0;
     computed.flex_basis = Dimension::Auto;
     computed.align_self = AlignSelf::Auto;
+    computed.border_spacing = 0.0;
 
     // 3. Apply all pre-resolved named styles in order.
     for style_def in style_sets {
@@ -143,6 +167,15 @@ fn apply_element_style(computed: &mut ComputedStyle, style_def: &ElementStyle) {
     if let Some(ta) = &style_def.text_align {
         computed.text_align = ta.clone();
     }
+    if let Some(td) = &style_def.text_decoration {
+        computed.text_decoration = td.clone();
+    }
+    if let Some(w) = style_def.widows {
+        computed.widows = w;
+    }
+    if let Some(o) = style_def.orphans {
+        computed.orphans = o;
+    }
     if let Some(c) = &style_def.color {
         computed.color = c.clone();
     }
@@ -161,14 +194,33 @@ fn apply_element_style(computed: &mut ComputedStyle, style_def: &ElementStyle) {
     if let Some(bg) = &style_def.background_color {
         computed.background_color = Some(bg.clone());
     }
+    // Border shorthand and overrides
     if let Some(b) = &style_def.border {
-        computed.border = Some(b.clone());
+        computed.border_top = Some(b.clone());
+        computed.border_right = Some(b.clone());
+        computed.border_bottom = Some(b.clone());
+        computed.border_left = Some(b.clone());
+    }
+    if let Some(b) = &style_def.border_top {
+        computed.border_top = Some(b.clone());
+    }
+    if let Some(b) = &style_def.border_right {
+        computed.border_right = Some(b.clone());
     }
     if let Some(b) = &style_def.border_bottom {
         computed.border_bottom = Some(b.clone());
     }
+    if let Some(b) = &style_def.border_left {
+        computed.border_left = Some(b.clone());
+    }
     if let Some(lst) = &style_def.list_style_type {
         computed.list_style_type = lst.clone();
+    }
+    if let Some(lsp) = &style_def.list_style_position {
+        computed.list_style_position = lsp.clone();
+    }
+    if let Some(bs) = style_def.border_spacing {
+        computed.border_spacing = bs;
     }
     if let Some(d) = &style_def.flex_direction {
         computed.flex_direction = d.clone();
@@ -182,6 +234,9 @@ fn apply_element_style(computed: &mut ComputedStyle, style_def: &ElementStyle) {
     if let Some(ai) = &style_def.align_items {
         computed.align_items = ai.clone();
     }
+    if let Some(o) = style_def.order {
+        computed.order = o;
+    }
     if let Some(g) = style_def.flex_grow {
         computed.flex_grow = g;
     }
@@ -193,41 +248,5 @@ fn apply_element_style(computed: &mut ComputedStyle, style_def: &ElementStyle) {
     }
     if let Some(s) = &style_def.align_self {
         computed.align_self = s.clone();
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::style::color::Color;
-    use crate::core::style::stylesheet::ElementStyle;
-
-    #[test]
-    fn test_default_style() {
-        let default = get_default_style();
-        assert_eq!(default.font_size, 12.0);
-        assert_eq!(default.line_height, 14.4);
-    }
-
-    #[test]
-    fn test_style_application() {
-        let parent_style = get_default_style();
-        let style_set = vec![Arc::new(ElementStyle {
-            font_size: Some(20.0),
-            color: Some(Color {
-                r: 255,
-                g: 0,
-                b: 0,
-                a: 1.0,
-            }),
-            ..Default::default()
-        })];
-
-        let computed = compute_style(&style_set, None, &parent_style);
-
-        assert_eq!(computed.font_size, 20.0);
-        assert_eq!(computed.line_height, 24.0); // 20.0 * 1.2
-        assert_eq!(computed.color.r, 255);
-        assert_eq!(*computed.font_family, "Helvetica"); // Inherited
     }
 }

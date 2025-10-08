@@ -2,6 +2,7 @@
 //! Defines the concrete, drawable elements that are the output of the layout engine.
 
 use crate::core::layout::ComputedStyle;
+use crate::core::style::text::TextDecoration;
 use std::sync::Arc;
 
 /// A simple, geometry-aware data structure representing a single drawable item.
@@ -43,6 +44,8 @@ pub struct TextElement {
     pub content: String,
     /// If present, this text is a hyperlink to the given URL.
     pub href: Option<String>,
+    /// Specifies any decoration, like an underline.
+    pub text_decoration: TextDecoration,
 }
 
 /// Represents a simple rectangle, typically used for backgrounds, borders, or rules.

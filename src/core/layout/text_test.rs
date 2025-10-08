@@ -87,3 +87,95 @@ fn test_text_alignment_center() {
         text_el.x
     );
 }
+
+#[test]
+fn test_widow_control() {
+    // Page content height 50. Line height 14.4. Can fit 3 lines (43.2 used).
+    // A 4-line paragraph would normally break after line 3, leaving 1 line (a widow) on page 2.
+    // With widows: 2, it should instead break after line 2, moving 2 lines to page 2.
+    let stylesheet = Stylesheet {
+        page_masters: HashMap::from([(
+            "master".to_string(),
+            PageLayout {
+                size: PageSize::Custom { width: 500.0, height: 70.0 },
+                margins: Some(Margins::all(10.0)), // content height = 50
+                ..Default::default()
+            },
+        )]),
+        default_page_master_name: Some("master".to_string()),
+        ..Default::default()
+    };
+
+    // Use the helper which correctly creates LineBreak nodes
+    let mut para = create_paragraph("Line 1\nLine 2\nLine 3\nLine 4");
+    if let IRNode::Paragraph { ref mut style_override, .. } = para {
+        *style_override = Some(ElementStyle { widows: Some(2), ..Default::default() });
+    } else {
+        panic!("Expected a paragraph node");
+    }
+
+    let pages = paginate_test_nodes(stylesheet, vec![para]).unwrap();
+
+    assert_eq!(pages.len(), 2, "Expected paragraph to split into two pages");
+
+    // Page 1 should only have 2 lines due to widow control.
+    let page1 = &pages[0];
+    assert_eq!(page1.len(), 2, "Page 1 should have 2 lines");
+    assert!(find_first_text_box_with_content(page1, "Line 1").is_some());
+    assert!(find_first_text_box_with_content(page1, "Line 2").is_some());
+    assert!(find_first_text_box_with_content(page1, "Line 3").is_none());
+
+    // Page 2 should have the remaining 2 lines.
+    let page2 = &pages[1];
+    assert_eq!(page2.len(), 2, "Page 2 should have 2 lines");
+    assert!(find_first_text_box_with_content(page2, "Line 3").is_some());
+    assert!(find_first_text_box_with_content(page2, "Line 4").is_some());
+}
+
+#[test]
+fn test_orphan_control() {
+    // Page content height 50. Line height 14.4. Can fit 3 lines.
+    // We have a 2-line para, then a 3-line para.
+    // After the 2-line para (2 * 14.4 = 28.8), 50 - 28.8 = 21.2 space left.
+    // Only 1 line of the second para fits.
+    // With orphans: 2, this is not allowed (1 < 2). The second para should be pushed entirely to page 2.
+    // The second page (height 50) is large enough to hold the 3-line paragraph (3 * 14.4 = 43.2).
+    let stylesheet = Stylesheet {
+        page_masters: HashMap::from([(
+            "master".to_string(),
+            PageLayout {
+                size: PageSize::Custom { width: 500.0, height: 70.0 }, // content height = 50
+                margins: Some(Margins::all(10.0)),
+                ..Default::default()
+            },
+        )]),
+        default_page_master_name: Some("master".to_string()),
+        ..Default::default()
+    };
+
+    let mut para2 = create_paragraph("Orphan 1\nOrphan 2\nOrphan 3"); // 3 lines
+    if let IRNode::Paragraph { ref mut style_override, .. } = para2 {
+        *style_override = Some(ElementStyle { orphans: Some(2), widows: Some(1), ..Default::default() });
+    } else {
+        panic!("Expected a paragraph node");
+    }
+
+    let nodes = vec![
+        create_paragraph("Before 1\nBefore 2"), // 2 lines
+        para2,
+    ];
+
+    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+
+    assert_eq!(pages.len(), 2, "Expected content to split into two pages");
+
+    let page1 = &pages[0];
+    assert!(find_first_text_box_with_content(page1, "Before 2").is_some());
+    assert!(find_first_text_box_with_content(page1, "Orphan 1").is_none(), "Orphan control should have pushed the second paragraph");
+
+    let page2 = &pages[1];
+    assert!(find_first_text_box_with_content(page2, "Orphan 1").is_some());
+    assert!(find_first_text_box_with_content(page2, "Orphan 3").is_some());
+    let orphan1 = find_first_text_box_with_content(page2, "Orphan 1").unwrap();
+    assert_eq!(orphan1.y, 10.0, "Second paragraph should start at the top of page 2");
+}

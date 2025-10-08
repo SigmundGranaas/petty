@@ -1,4 +1,3 @@
-// FILE: src/xpath/mod.rs
 // src/xpath/mod.rs
 use crate::parser::ParseError;
 use serde_json::Value;

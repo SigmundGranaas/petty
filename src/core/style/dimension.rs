@@ -1,6 +1,6 @@
 //! Defines primitives for size, position, and spacing.
 use crate::parser::style_parsers;
-use serde::{de, Deserialize, Deserializer, Serialize};
+use serde::{de, ser::SerializeMap, Deserialize, Deserializer, Serialize, Serializer};
 
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -25,6 +25,22 @@ impl Margins {
             right: value,
             bottom: value,
             left: value,
+        }
+    }
+    pub fn x(value: f32) -> Self {
+        Self {
+            top: 0f32,
+            right: value,
+            bottom: 0f32,
+            left: value,
+        }
+    }
+    pub fn y(value: f32) -> Self {
+        Self {
+            top: value,
+            right: 0f32,
+            bottom: value,
+            left: 0f32,
         }
     }
 }
@@ -70,12 +86,31 @@ impl<'de> Deserialize<'de> for Margins {
     }
 }
 
-#[derive(Serialize, Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PageSize {
     A4,
     Letter,
     Legal,
     Custom { width: f32, height: f32 },
+}
+
+impl Serialize for PageSize {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match self {
+            PageSize::A4 => serializer.serialize_str("A4"),
+            PageSize::Letter => serializer.serialize_str("Letter"),
+            PageSize::Legal => serializer.serialize_str("Legal"),
+            PageSize::Custom { width, height } => {
+                let mut map = serializer.serialize_map(Some(2))?;
+                map.serialize_entry("width", width)?;
+                map.serialize_entry("height", height)?;
+                map.end()
+            }
+        }
+    }
 }
 
 impl PageSize {

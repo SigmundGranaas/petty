@@ -36,6 +36,8 @@ mod integration_test;
 #[cfg(test)]
 mod list_test;
 #[cfg(test)]
+mod style_test;
+#[cfg(test)]
 mod test_utils;
 #[cfg(test)]
 mod text_test;

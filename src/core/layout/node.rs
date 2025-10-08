@@ -1,6 +1,7 @@
 // FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/node.rs
 use super::{geom, ComputedStyle, LayoutEngine, LayoutError, PositionedElement};
 use std::any::Any;
+use std::cell::RefCell;
 use std::fmt::Debug;
 use std::sync::Arc;
 
@@ -17,7 +18,9 @@ pub struct LayoutContext<'a> {
     /// The current "pen position" on the canvas, relative to `bounds.x` and `bounds.y`.
     pub cursor: (f32, f32),
     /// The collection of drawable elements being generated for the current page.
-    pub elements: &'a mut Vec<PositionedElement>,
+    pub elements: &'a RefCell<Vec<PositionedElement>>,
+    /// The bottom margin of the previously laid-out block-level sibling, for margin collapsing.
+    pub last_v_margin: f32,
 }
 
 impl<'a> LayoutContext<'a> {
@@ -25,13 +28,14 @@ impl<'a> LayoutContext<'a> {
     pub fn new(
         engine: &'a LayoutEngine,
         bounds: geom::Rect,
-        elements: &'a mut Vec<PositionedElement>,
+        elements: &'a RefCell<Vec<PositionedElement>>,
     ) -> Self {
         Self {
             engine,
             bounds,
             cursor: (0.0, 0.0),
             elements,
+            last_v_margin: 0.0,
         }
     }
 
@@ -54,7 +58,7 @@ impl<'a> LayoutContext<'a> {
         let mut final_element = element;
         final_element.x += self.bounds.x + self.cursor.0;
         final_element.y += self.bounds.y + self.cursor.1;
-        self.elements.push(final_element);
+        self.elements.borrow_mut().push(final_element);
     }
 
     /// Pushes a drawable element at a specific coordinate relative to the context's origin.
@@ -64,12 +68,12 @@ impl<'a> LayoutContext<'a> {
     pub fn push_element_at(&mut self, mut element: PositionedElement, x: f32, y: f32) {
         element.x += self.bounds.x + x;
         element.y += self.bounds.y + y;
-        self.elements.push(element);
+        self.elements.borrow_mut().push(element);
     }
 
     /// Checks if any elements have been added to the current page.
     pub fn is_empty(&self) -> bool {
-        self.elements.is_empty()
+        self.elements.borrow().is_empty()
     }
 }
 
@@ -83,12 +87,33 @@ pub enum LayoutResult {
     Partial(Box<dyn LayoutNode>),
 }
 
+/// A helper trait for cloning trait objects.
+pub trait CloneLayoutNode {
+    fn clone_box(&self) -> Box<dyn LayoutNode>;
+}
+
+impl<T> CloneLayoutNode for T
+where
+    T: 'static + LayoutNode + Clone,
+{
+    fn clone_box(&self) -> Box<dyn LayoutNode> {
+        Box::new(self.clone())
+    }
+}
+
+impl Clone for Box<dyn LayoutNode> {
+    fn clone(&self) -> Box<dyn LayoutNode> {
+        self.clone_box()
+    }
+}
+
+
 /// The central trait that governs all layout.
 ///
 /// Every layoutable element (block, paragraph, table) will have a corresponding
 /// struct that implements this trait. The design enables a single, cooperative,
 /// stateful layout pass that handles pagination naturally.
-pub trait LayoutNode: Debug + Send + Sync {
+pub trait LayoutNode: Debug + Send + Sync + CloneLayoutNode {
     /// Lays out the node within the given context.
     ///
     /// It is the node's responsibility to:

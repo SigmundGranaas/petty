@@ -1,3 +1,4 @@
+// FILE: /home/sigmund/RustroverProjects/petty/src/core/idf/mod.rs
 //! Defines the Intermediate Representation (IR) for the Petty PDF engine.
 //!
 //! The IR is a semantic layout tree (`IRNode`) that represents a single, self-contained
@@ -82,6 +83,8 @@ pub enum IRNode {
     List {
         style_sets: Vec<Arc<ElementStyle>>,
         style_override: Option<ElementStyle>,
+        /// The starting number for an ordered list. Defaults to 1.
+        start: Option<usize>,
         /// Children are expected to be `IRNode::ListItem`.
         children: Vec<IRNode>,
     },
@@ -150,13 +153,28 @@ pub struct TableRow {
 
 /// Represents a single cell within a `TableRow`. A cell can contain any
 /// block-level `IRNode` elements, allowing for nested structures.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct TableCell {
     pub style_sets: Vec<Arc<ElementStyle>>,
     pub style_override: Option<ElementStyle>,
     /// Cell content is block-level, allowing for complex nested layouts.
     pub children: Vec<IRNode>,
+    pub colspan: usize,
+    pub rowspan: usize,
 }
+
+impl Default for TableCell {
+    fn default() -> Self {
+        Self {
+            style_sets: Default::default(),
+            style_override: Default::default(),
+            children: Default::default(),
+            colspan: 1,
+            rowspan: 1,
+        }
+    }
+}
+
 
 // --- Inline Content Enum ---
 

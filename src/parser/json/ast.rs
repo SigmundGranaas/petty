@@ -63,6 +63,7 @@ pub enum JsonNode {
     LineBreak,
     // New control-flow nodes
     PageBreak {
+        #[serde(rename = "masterName", skip_serializing_if = "Option::is_none")]
         master_name: Option<String>,
     },
     RenderTemplate {
@@ -76,10 +77,13 @@ pub enum JsonNode {
 #[serde(rename_all = "camelCase")]
 pub struct JsonContainer {
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub style_names: Vec<String>,
     #[serde(default)]
+    #[serde(skip_serializing_if = "is_default")]
     pub style_override: ElementStyle,
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<TemplateNode>,
 }
 
@@ -87,10 +91,13 @@ pub struct JsonContainer {
 #[serde(rename_all = "camelCase")]
 pub struct JsonParagraph {
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub style_names: Vec<String>,
     #[serde(default)]
+    #[serde(skip_serializing_if = "is_default")]
     pub style_override: ElementStyle,
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<TemplateNode>,
 }
 
@@ -99,8 +106,10 @@ pub struct JsonParagraph {
 pub struct JsonImage {
     pub src: String,
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub style_names: Vec<String>,
     #[serde(default)]
+    #[serde(skip_serializing_if = "is_default")]
     pub style_override: ElementStyle,
 }
 
@@ -108,10 +117,13 @@ pub struct JsonImage {
 #[serde(rename_all = "camelCase")]
 pub struct JsonInlineContainer {
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub style_names: Vec<String>,
     #[serde(default)]
+    #[serde(skip_serializing_if = "is_default")]
     pub style_override: ElementStyle,
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<TemplateNode>,
 }
 
@@ -120,10 +132,13 @@ pub struct JsonInlineContainer {
 pub struct JsonHyperlink {
     pub href: String,
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub style_names: Vec<String>,
     #[serde(default)]
+    #[serde(skip_serializing_if = "is_default")]
     pub style_override: ElementStyle,
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub children: Vec<TemplateNode>,
 }
 
@@ -131,11 +146,15 @@ pub struct JsonHyperlink {
 #[serde(rename_all = "camelCase")]
 pub struct JsonTable {
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub style_names: Vec<String>,
     #[serde(default)]
+    #[serde(skip_serializing_if = "is_default")]
     pub style_override: ElementStyle,
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub columns: Vec<JsonTableColumn>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub header: Option<JsonTableHeader>,
     pub body: JsonTableBody,
 }
@@ -143,8 +162,11 @@ pub struct JsonTable {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonTableColumn {
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub width: Option<Dimension>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub style: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub header_style: Option<String>,
 }
 
@@ -156,24 +178,33 @@ pub struct JsonTableHeader {
 #[derive(Deserialize, Serialize, Debug, Default, Clone)]
 pub struct JsonTableBody {
     #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rows: Vec<TemplateNode>,
 }
 
 // --- Top-level Template and Stylesheet ---
 
-#[derive(Deserialize, Debug)]
+#[derive(Deserialize, Serialize, Debug)]
 pub struct JsonTemplateFile {
     pub _stylesheet: StylesheetDef,
     pub _template: TemplateNode,
 }
 
-#[derive(Deserialize, Debug, Default, Clone)]
+#[derive(Deserialize, Serialize, Debug, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct StylesheetDef {
     #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub page_masters: HashMap<String, PageLayout>,
     #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub styles: HashMap<String, ElementStyle>,
     #[serde(default)]
+    #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub definitions: HashMap<String, TemplateNode>,
+}
+
+/// Helper for serde to skip serializing default empty values for cleaner JSON.
+fn is_default<T: Default + PartialEq>(t: &T) -> bool {
+    *t == T::default()
 }

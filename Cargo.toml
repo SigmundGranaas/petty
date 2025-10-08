@@ -61,3 +61,7 @@ path = "examples/xslt_financial_report.rs"
 [[example]]
 name = "json_report"
 path = "examples/json_report.rs"
+
+[[example]]
+name = "compiled_performance_test"
+path = "examples/compiled_performance_test.rs"

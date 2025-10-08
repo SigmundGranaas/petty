@@ -5,9 +5,10 @@ use crate::error::PipelineError;
 use crate::parser::json::processor::JsonParser;
 use crate::parser::processor::{CompiledTemplate, TemplateParser};
 use crate::parser::xslt::processor::XsltParser;
+use crate::templating::Template;
 use std::fs;
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 /// A builder for creating a `DocumentPipeline`.
@@ -49,6 +50,25 @@ impl PipelineBuilder {
         Ok(self)
     }
 
+    /// Configures the pipeline with a programmatically-built `Template` object.
+    /// This is the entry point for the code-based builder API.
+    /// This also discovers and loads fonts from the `./assets/fonts` directory.
+    pub fn with_template_object(mut self, template: Template) -> Result<Self, PipelineError> {
+        let template_source = template.to_json().map_err(|e| {
+            PipelineError::Config(format!("Failed to serialize template object to JSON: {}", e))
+        })?;
+
+        let parser = JsonParser;
+        // For a template object, the resource base path is the current working directory.
+        let resource_base_path = PathBuf::new();
+
+        self.compiled_template = Some(parser.parse(&template_source, resource_base_path)?);
+        // Since there's no file, we only search for fonts in standard locations like ./assets/fonts
+        self.font_manager = Some(Arc::new(Self::create_font_manager(None)?));
+
+        Ok(self)
+    }
+
     /// Selects the PDF rendering backend to use.
     pub fn with_pdf_backend(self, backend: PdfBackend) -> Self {
         Self {
@@ -65,7 +85,7 @@ impl PipelineBuilder {
     /// Consumes the builder and creates the `DocumentPipeline`.
     pub fn build(mut self) -> Result<DocumentPipeline, PipelineError> {
         let compiled_template = self.compiled_template.take().ok_or_else(|| {
-            PipelineError::Config("No template has been configured. Use `with_template_file`.".to_string())
+            PipelineError::Config("No template has been configured. Use `with_template_file` or `with_template_object`.".to_string())
         })?;
 
         let font_manager = self.font_manager.take().unwrap_or_else(|| {

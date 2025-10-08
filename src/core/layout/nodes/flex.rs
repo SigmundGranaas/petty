@@ -2,17 +2,16 @@
 use crate::core::idf::IRNode;
 use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult};
 use crate::core::layout::style::ComputedStyle;
-use crate::core::layout::{geom, LayoutEngine, LayoutError, PositionedElement};
+use crate::core::layout::{geom, LayoutEngine, LayoutError};
 use crate::core::style::dimension::Dimension;
 use crate::core::style::flex::{AlignItems, AlignSelf, FlexDirection, FlexWrap, JustifyContent};
 use std::any::Any;
 use std::sync::Arc;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct FlexNode {
     children: Vec<Box<dyn LayoutNode>>,
     style: Arc<ComputedStyle>,
-    // Measurement results
     lines: Vec<FlexLine>,
 }
 
@@ -46,11 +45,9 @@ impl LayoutNode for FlexNode {
     }
 
     fn measure(&mut self, engine: &LayoutEngine, available_width: f32) {
-        // First, let all children measure themselves.
         for child in &mut self.children {
             child.measure(engine, available_width);
         }
-        // Now resolve the flex lines based on their measured sizes.
         self.lines = resolve_flex_lines(engine, &mut self.children, &self.style, available_width);
     }
 
@@ -59,39 +56,68 @@ impl LayoutNode for FlexNode {
     }
 
     fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
+        // --- Vertical Margin Collapsing ---
+        let margin_to_add = self.style.margin.top.max(ctx.last_v_margin);
+        if !ctx.is_empty() && margin_to_add > ctx.available_height() {
+            return Ok(LayoutResult::Partial(Box::new(self.clone())));
+        }
+        ctx.advance_cursor(margin_to_add);
+        ctx.last_v_margin = 0.0;
+
         let is_horiz = is_horizontal(&self.style.flex_direction);
-        let container_main_size = if is_horiz { ctx.bounds.width } else { f32::INFINITY };
+        let is_reverse = is_main_reverse(&self.style.flex_direction);
+        let container_main_size = if is_horiz { ctx.bounds.width } else { ctx.bounds.height };
+        let container_cross_size = if is_horiz { ctx.bounds.height } else { ctx.bounds.width };
+
+        let total_lines_cross_size: f32 = self.lines.iter().map(|line| line.cross_size).sum();
+        let free_cross_space = container_cross_size - total_lines_cross_size;
+
+        let (mut cross_cursor, line_spacing) =
+            calculate_main_axis_alignment(free_cross_space, self.lines.len(), &self.style.align_content);
 
         let mut child_idx_offset = 0;
 
-        for (line_idx, line) in self.lines.iter().enumerate() {
+        for line in &self.lines {
+            // *** FIX: Check for page break *before* processing the line. ***
+            // This ensures ctx.available_height() is correct based on previous lines' consumption.
             if line.cross_size > ctx.available_height() && !ctx.is_empty() {
                 let remaining_children = self.children.drain(child_idx_offset..).collect();
-                let mut remaining_lines = self.lines.drain(line_idx..).collect::<Vec<_>>();
-
-                // FIX: Re-index the items in the remaining lines to be relative to the new,
-                // smaller children vector.
-                for remaining_line in &mut remaining_lines {
-                    for item in &mut remaining_line.items {
-                        item.index -= child_idx_offset;
-                    }
-                }
-
-                let remainder_node = FlexNode {
+                let mut remainder_node = FlexNode {
                     children: remaining_children,
                     style: self.style.clone(),
-                    lines: remaining_lines,
+                    lines: vec![],
                 };
+                remainder_node.measure(ctx.engine, ctx.bounds.width);
                 return Ok(LayoutResult::Partial(Box::new(remainder_node)));
             }
 
+            // --- Layout the current line ---
+            let mut effective_justify = self.style.justify_content.clone();
+            if is_reverse {
+                effective_justify = match effective_justify {
+                    JustifyContent::FlexStart => JustifyContent::FlexEnd,
+                    JustifyContent::FlexEnd => JustifyContent::FlexStart,
+                    _ => effective_justify,
+                };
+            }
+
             let free_space = container_main_size - line.main_size;
-            let (mut main_cursor, spacing) =
-                calculate_main_axis_alignment(free_space, line.items.len(), &self.style.justify_content);
+            let (mut main_cursor, item_spacing) =
+                calculate_main_axis_alignment(free_space, line.items.len(), &effective_justify);
 
             for item in &line.items {
-                let item_cross_offset =
+                main_cursor += if is_reverse { item.main_margin_end } else { item.main_margin_start };
+
+                let cross_offset_within_line =
                     calculate_cross_axis_alignment(item, line.cross_size, &self.style.align_items);
+
+                let item_cross_offset = cross_cursor
+                    + cross_offset_within_line
+                    + if is_cross_reverse(&self.style.flex_wrap) {
+                    item.cross_margin_end
+                } else {
+                    item.cross_margin_start
+                };
 
                 let (x, y, width, height) = if is_horiz {
                     (main_cursor, item_cross_offset, item.main_size, item.cross_size)
@@ -110,22 +136,26 @@ impl LayoutNode for FlexNode {
                     engine: ctx.engine,
                     bounds: child_bounds,
                     cursor: (0.0, 0.0),
-                    elements: unsafe { &mut *(ctx.elements as *mut Vec<PositionedElement>) },
+                    elements: ctx.elements,
+                    last_v_margin: 0.0,
                 };
 
-                match self.children[item.index].layout(&mut child_ctx) {
-                    Ok(_) => { /* Continue */ }
-                    Err(e) => {
-                        log::warn!("Skipping flex item that failed to lay out: {}", e);
-                    }
+                match self.children[item.original_index].layout(&mut child_ctx) {
+                    Ok(_) => {}
+                    Err(e) => log::warn!("Skipping flex item that failed to lay out: {}", e),
                 }
-                main_cursor += item.main_size + spacing;
+                main_cursor += item.main_size
+                    + item_spacing
+                    + if is_reverse { item.main_margin_start } else { item.main_margin_end };
             }
 
+            // *** FIX: Advance cursor and trackers *after* processing the line. ***
             ctx.advance_cursor(line.cross_size);
+            cross_cursor += line.cross_size + line_spacing;
             child_idx_offset += line.items.len();
         }
 
+        ctx.last_v_margin = self.style.margin.bottom;
         Ok(LayoutResult::Full)
     }
 }
@@ -134,11 +164,15 @@ impl LayoutNode for FlexNode {
 
 #[derive(Clone, Debug)]
 struct FlexItem {
-    index: usize,
+    original_index: usize,
     style: Arc<ComputedStyle>,
     flex_basis: f32,
     main_size: f32,
     cross_size: f32,
+    main_margin_start: f32,
+    main_margin_end: f32,
+    cross_margin_start: f32,
+    cross_margin_end: f32,
 }
 
 #[derive(Clone, Debug)]
@@ -152,6 +186,14 @@ fn is_horizontal(direction: &FlexDirection) -> bool {
     matches!(direction, FlexDirection::Row | FlexDirection::RowReverse)
 }
 
+fn is_main_reverse(direction: &FlexDirection) -> bool {
+    matches!(direction, FlexDirection::RowReverse | FlexDirection::ColumnReverse)
+}
+
+fn is_cross_reverse(wrap: &FlexWrap) -> bool {
+    matches!(wrap, FlexWrap::WrapReverse)
+}
+
 fn resolve_flex_lines(
     engine: &LayoutEngine,
     children: &mut [Box<dyn LayoutNode>],
@@ -161,35 +203,48 @@ fn resolve_flex_lines(
     let is_horiz = is_horizontal(&style.flex_direction);
     let available_main_size = if is_horiz { available_width } else { f32::INFINITY };
 
-    let items: Vec<FlexItem> = children
+    let mut items: Vec<FlexItem> = children
         .iter_mut()
         .enumerate()
         .map(|(i, child_node)| {
             let item_style = child_node.style().clone();
-
             let flex_basis = resolve_flex_basis(engine, child_node, &item_style, available_main_size, is_horiz);
-
             let cross_size = child_node.measure_content_height(engine, if is_horiz { flex_basis } else { available_width });
 
+            let (main_margin_start, main_margin_end, cross_margin_start, cross_margin_end) = if is_horiz {
+                (item_style.margin.left, item_style.margin.right, item_style.margin.top, item_style.margin.bottom)
+            } else {
+                (item_style.margin.top, item_style.margin.bottom, item_style.margin.left, item_style.margin.right)
+            };
+
             FlexItem {
-                index: i,
+                original_index: i,
                 style: item_style,
                 flex_basis,
                 main_size: flex_basis,
                 cross_size: if is_horiz { cross_size } else { flex_basis },
+                main_margin_start,
+                main_margin_end,
+                cross_margin_start,
+                cross_margin_end,
             }
         })
         .collect();
 
-    // Line breaking logic
+    items.sort_by_key(|item| item.style.order);
+    if is_main_reverse(&style.flex_direction) {
+        items.reverse();
+    }
+
     let mut lines = Vec::new();
     let mut current_line_items = Vec::new();
     let mut current_line_main_size = 0.0;
 
     for item in items {
+        let item_total_main = item.main_size + item.main_margin_start + item.main_margin_end;
         if style.flex_wrap != FlexWrap::NoWrap
             && !current_line_items.is_empty()
-            && current_line_main_size + item.main_size > available_main_size
+            && current_line_main_size + item_total_main > available_main_size
         {
             lines.push(FlexLine {
                 items: std::mem::take(&mut current_line_items),
@@ -198,7 +253,7 @@ fn resolve_flex_lines(
             });
             current_line_main_size = 0.0;
         }
-        current_line_main_size += item.main_size;
+        current_line_main_size += item_total_main;
         current_line_items.push(item);
     }
     if !current_line_items.is_empty() {
@@ -209,16 +264,19 @@ fn resolve_flex_lines(
         });
     }
 
-    if style.flex_wrap == FlexWrap::WrapReverse {
+    if is_cross_reverse(&style.flex_wrap) {
         lines.reverse();
     }
 
-    // Resolve flexible lengths and final cross sizes for each line.
     for line in &mut lines {
         resolve_flexible_lengths(line, available_main_size);
-        line.cross_size = line.items.iter().map(|i| i.cross_size).fold(0.0, f32::max);
+        let max_cross_margin = line
+            .items
+            .iter()
+            .map(|i| i.cross_margin_start + i.cross_margin_end)
+            .fold(0.0, f32::max);
+        line.cross_size = line.items.iter().map(|i| i.cross_size).fold(0.0, f32::max) + max_cross_margin;
     }
-
     lines
 }
 
@@ -233,7 +291,7 @@ fn resolve_flex_basis(
     let size_prop = if is_horiz { &style.width } else { &style.height };
 
     let resolved_basis_dim = if style.flex_basis == Dimension::Auto {
-        size_prop.as_ref()
+        size_prop.as_ref().or(Some(basis_prop))
     } else {
         Some(basis_prop)
     };
@@ -242,13 +300,8 @@ fn resolve_flex_basis(
         Some(Dimension::Pt(val)) => *val,
         Some(Dimension::Percent(p)) => container_main_size * (p / 100.0),
         _ => {
-            // Auto basis means size is determined by content.
             if is_horiz {
-                // BUGFIX: Using height to determine width is incorrect. For block-like
-                // elements without an intrinsic width (like a table with auto columns),
-                // the basis should be the available container size. While this prevents
-                // shrink-to-fit for `justify-content`, it ensures the element is visible
-                // and correctly sized relative to its parent, which is a safer default.
+                // Heuristic for horizontal blocks without intrinsic width.
                 container_main_size
             } else {
                 node.measure_content_height(engine, container_main_size)
@@ -258,25 +311,43 @@ fn resolve_flex_basis(
 }
 
 fn resolve_flexible_lengths(line: &mut FlexLine, available_main_size: f32) {
-    let initial_main_size: f32 = line.items.iter().map(|i| i.main_size).sum();
+    let initial_main_size: f32 = line
+        .items
+        .iter()
+        .map(|i| i.main_size + i.main_margin_start + i.main_margin_end)
+        .sum();
     let remaining_space = available_main_size - initial_main_size;
+
+    if remaining_space.abs() < 0.1 {
+        line.main_size = initial_main_size;
+        return;
+    }
+
     if remaining_space > 0.0 {
         let total_grow: f32 = line.items.iter().map(|i| i.style.flex_grow).sum();
         if total_grow > 0.0 {
             for item in &mut line.items {
-                item.main_size += remaining_space * (item.style.flex_grow / total_grow);
+                if item.style.flex_grow > 0.0 {
+                    item.main_size += remaining_space * (item.style.flex_grow / total_grow);
+                }
             }
         }
     } else if remaining_space < 0.0 {
         let total_shrink: f32 = line.items.iter().map(|i| i.style.flex_shrink * i.flex_basis).sum();
         if total_shrink > 0.0 {
             for item in &mut line.items {
-                let shrink_ratio = (item.style.flex_shrink * item.flex_basis) / total_shrink;
-                item.main_size += remaining_space * shrink_ratio;
+                if item.style.flex_shrink > 0.0 {
+                    let shrink_ratio = (item.style.flex_shrink * item.flex_basis) / total_shrink;
+                    item.main_size += remaining_space * shrink_ratio;
+                }
             }
         }
     }
-    line.main_size = line.items.iter().map(|i| i.main_size).sum();
+    line.main_size = line
+        .items
+        .iter()
+        .map(|i| i.main_size + i.main_margin_start + i.main_margin_end)
+        .sum();
 }
 
 fn calculate_main_axis_alignment(
@@ -284,7 +355,7 @@ fn calculate_main_axis_alignment(
     item_count: usize,
     justify: &JustifyContent,
 ) -> (f32, f32) {
-    if free_space <= 0.0 {
+    if free_space <= 0.0 || item_count == 0 {
         return (0.0, 0.0);
     }
     match justify {
@@ -310,17 +381,26 @@ fn calculate_main_axis_alignment(
 }
 
 fn calculate_cross_axis_alignment(item: &FlexItem, line_cross_size: f32, container_align: &AlignItems) -> f32 {
+    let item_total_cross_size = item.cross_size + item.cross_margin_start + item.cross_margin_end;
     let align = match &item.style.align_self {
         AlignSelf::Auto => container_align,
         AlignSelf::Stretch => &AlignItems::Stretch,
         AlignSelf::FlexStart => &AlignItems::FlexStart,
         AlignSelf::FlexEnd => &AlignItems::FlexEnd,
         AlignSelf::Center => &AlignItems::Center,
-        AlignSelf::Baseline => &AlignItems::Baseline,
+        AlignSelf::Baseline => {
+            log::warn!("align-self: baseline is not supported, falling back to flex-start");
+            &AlignItems::FlexStart
+        }
     };
     match align {
-        AlignItems::Stretch | AlignItems::FlexStart | AlignItems::Baseline => 0.0,
-        AlignItems::FlexEnd => line_cross_size - item.cross_size,
-        AlignItems::Center => (line_cross_size - item.cross_size) / 2.0,
+        AlignItems::Stretch => {
+            // Stretching is handled by the parent giving the child the full cross size.
+            // Here, we just align to the start.
+            0.0
+        }
+        AlignItems::FlexStart | AlignItems::Baseline => 0.0,
+        AlignItems::FlexEnd => line_cross_size - item_total_cross_size,
+        AlignItems::Center => (line_cross_size - item_total_cross_size) / 2.0,
     }
 }

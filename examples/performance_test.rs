@@ -30,19 +30,28 @@ fn generate_perf_test_data_iter(
             .map(|_| {
                 let quantity = rng.random_range(1..=10);
                 let price: f64 = rng.random_range(10.0..500.0);
-                let line_total = quantity as f64 * price;
+                // Round price to 2 decimal places
+                let price_rounded = (price * 100.0).round() / 100.0;
+                // Calculate and round line_total to be safe from floating point inaccuracies
+                let line_total = (quantity as f64 * price_rounded * 100.0).round() / 100.0;
                 total += line_total;
                 json!({
                     "description": MOCK_ITEMS.choose(&mut rng).unwrap_or(&""),
-                    "quantity": quantity, "price": price, "line_total": line_total
+                    "quantity": quantity, "price": price_rounded, "line_total": line_total
                 })
             })
             .collect();
+
+        // Round all summary values to 2 decimal places for consistent financial data
+        let subtotal = (total * 100.0).round() / 100.0;
+        let tax = (subtotal * 0.08 * 100.0).round() / 100.0;
+        let grand_total = subtotal + tax;
+
         json!({
             "id": 10000 + i,
             "user": { "name": MOCK_USERS.choose(&mut rng).unwrap_or(&""), "account": format!("ACC-{}", rng.random_range(100000..999999)) },
             "items": items,
-            "summary": { "total": total, "tax": total * 0.08, "grand_total": total * 1.08 }
+            "summary": { "total": subtotal, "tax": tax, "grand_total": grand_total }
         })
     })
 }

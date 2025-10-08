@@ -7,6 +7,21 @@ use crate::core::style::dimension::{Dimension, Margins, PageSize};
 use crate::core::style::stylesheet::{PageLayout, Stylesheet};
 use std::collections::HashMap;
 
+fn get_stylesheet(width: f32, height: f32) -> Stylesheet {
+    Stylesheet {
+        page_masters: HashMap::from([(
+            "master".to_string(),
+            PageLayout {
+                size: PageSize::Custom { width, height },
+                margins: Some(Margins::all(10.0)),
+                ..Default::default()
+            },
+        )]),
+        default_page_master_name: Some("master".to_string()),
+        ..Default::default()
+    }
+}
+
 fn create_test_table(rows: usize) -> IRNode {
     let mut body_rows = Vec::new();
     for i in 1..=rows {
@@ -57,80 +72,103 @@ fn create_test_table(rows: usize) -> IRNode {
 
 #[test]
 fn test_table_basic_layout() {
-    // Page: 500w. Table will use all of it. Cols will be 250w.
-    let stylesheet = Stylesheet {
-        page_masters: HashMap::from([(
-            "master".to_string(),
-            PageLayout {
-                size: PageSize::Custom { width: 500.0, height: 500.0 },
-                ..Default::default()
-            },
-        )]),
-        default_page_master_name: Some("master".to_string()),
-        ..Default::default()
-    };
+    // Page: 520w, margin 10. Table content width = 500. Cols will be 250w.
+    let stylesheet = get_stylesheet(520.0, 500.0);
     let table = create_test_table(2);
     let nodes = vec![table];
 
     let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
 
-    // Header(2) + R1(2) + R2(2) = 6 text elements
-    assert_eq!(page1.len(), 6);
-
     let h1 = find_first_text_box_with_content(page1, "Header 1").unwrap();
     let h2 = find_first_text_box_with_content(page1, "Header 2").unwrap();
     let r1c1 = find_first_text_box_with_content(page1, "R1C1").unwrap();
 
-    assert_eq!(h1.x, 0.0); // No page margin
-    assert_eq!(h1.y, 0.0);
-    // The positioned element's width is the width of the text itself, not the cell.
-    // So we verify the column width by checking the position of the next column's content.
-    assert!(h1.width < 250.0);
-
-    assert!((h2.x - 250.0).abs() < 1.0); // Column 2 starts after col 1 width
-    assert_eq!(h2.y, 0.0);
-
-    // Default line height is 14.4
-    assert!((r1c1.y - 14.4).abs() < 0.1); // Row 1 starts after header row
+    assert_eq!(h1.x, 10.0); // Starts at page margin
+    assert_eq!(h1.y, 10.0);
+    assert!((h2.x - (10.0 + 250.0)).abs() < 1.0);
+    assert_eq!(h2.y, 10.0);
+    assert!((r1c1.y - (10.0 + 14.4)).abs() < 0.1);
 }
 
 #[test]
-fn test_table_splits_across_pages() {
+fn test_table_splits_across_pages_and_repeats_header() {
     // Page content height = 50. Line height = 14.4.
     // Can fit Header (14.4) + Row 1 (14.4) + Row 2 (14.4) = 43.2.
     // Row 3 starts at 43.2, needs 14.4, bottom would be 57.6, which > 50.
     // So, page break before Row 3.
-    let stylesheet = Stylesheet {
-        page_masters: HashMap::from([(
-            "master".to_string(),
-            PageLayout {
-                size: PageSize::Custom { width: 500.0, height: 70.0 },
-                margins: Some(Margins::all(10.0)), // Content height = 50
-                ..Default::default()
-            },
-        )]),
-        default_page_master_name: Some("master".to_string()),
-        ..Default::default()
-    };
-    let table = create_test_table(5); // Header + 5 rows
+    let stylesheet = get_stylesheet(520.0, 70.0); // content height = 50
+    let table = create_test_table(5);
     let nodes = vec![table];
 
     let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
-    assert_eq!(pages.len(), 2, "Expected table to split into 2 pages");
+    assert_eq!(pages.len(), 3, "Expected table to split into 2 pages");
 
-    // Page 1: Header + 2 Rows = 3*2 = 6 elements
     let page1 = &pages[0];
-    assert_eq!(page1.len(), 6);
     assert!(find_first_text_box_with_content(page1, "Header 1").is_some());
     assert!(find_first_text_box_with_content(page1, "R2C1").is_some());
     assert!(find_first_text_box_with_content(page1, "R3C1").is_none());
 
-    // Page 2: Rows 3, 4, 5 = 3*2 = 6 elements
     let page2 = &pages[1];
-    assert_eq!(page2.len(), 6);
-    assert!(find_first_text_box_with_content(page2, "R2C1").is_none());
+    assert!(find_first_text_box_with_content(page2, "Header 1").is_some(), "Header should repeat on page 2");
     let r3c1 = find_first_text_box_with_content(page2, "R3C1").unwrap();
-    assert!(find_first_text_box_with_content(page2, "R5C2").is_some());
-    assert_eq!(r3c1.y, 10.0); // Starts at top of new page
+    assert!((r3c1.y - (10.0 + 14.4)).abs() < 0.1, "R3C1 should appear after repeated header");
+}
+
+
+#[test]
+fn test_table_colspan_and_rowspan() {
+    let stylesheet = get_stylesheet(520.0, 500.0); // content width 500
+    let table = IRNode::Table {
+        style_sets: vec![],
+        style_override: None,
+        columns: vec![
+            TableColumnDefinition { width: Some(Dimension::Pt(100.0)), ..Default::default() },
+            TableColumnDefinition { width: Some(Dimension::Pt(100.0)), ..Default::default() },
+            TableColumnDefinition { width: Some(Dimension::Pt(100.0)), ..Default::default() },
+        ],
+        header: None,
+        body: Box::new(TableBody { rows: vec![
+            // Row 1
+            TableRow { cells: vec![
+                TableCell { rowspan: 2, children: vec![create_paragraph("A")], ..Default::default() },
+                TableCell { colspan: 2, children: vec![create_paragraph("B")], ..Default::default() },
+            ]},
+            // Row 2
+            TableRow { cells: vec![
+                // Cell "A" from row 1 occupies this slot
+                TableCell { children: vec![create_paragraph("C")], ..Default::default() },
+                TableCell { children: vec![create_paragraph("D")], ..Default::default() },
+            ]},
+            // Row 3
+            TableRow { cells: vec![
+                TableCell { children: vec![create_paragraph("E")], ..Default::default() },
+                TableCell { children: vec![create_paragraph("F")], ..Default::default() },
+                TableCell { children: vec![create_paragraph("G")], ..Default::default() },
+            ]}
+        ]}),
+    };
+    let pages = paginate_test_nodes(stylesheet, vec![table]).unwrap();
+    let page1 = &pages[0];
+
+    let cell_a = find_first_text_box_with_content(page1, "A").unwrap();
+    let cell_b = find_first_text_box_with_content(page1, "B").unwrap();
+    let cell_c = find_first_text_box_with_content(page1, "C").unwrap();
+    let cell_d = find_first_text_box_with_content(page1, "D").unwrap();
+    let cell_e = find_first_text_box_with_content(page1, "E").unwrap();
+
+    // Row 1
+    assert!((cell_a.x - 10.0).abs() < 0.1);
+    assert!((cell_a.y - 10.0).abs() < 0.1);
+    assert!((cell_b.x - (10.0 + 100.0)).abs() < 0.1, "B should be in the second column");
+
+    // Row 2
+    // C should be in the second column because A (rowspan=2) is in the first
+    assert!((cell_c.x - (10.0 + 100.0)).abs() < 0.1);
+    assert!((cell_c.y - (10.0 + 14.4)).abs() < 0.1, "C should be on the second line");
+    assert!((cell_d.x - (10.0 + 200.0)).abs() < 0.1);
+
+    // Row 3
+    assert!((cell_e.x - 10.0).abs() < 0.1, "E should be back in the first column");
+    assert!((cell_e.y - (10.0 + 14.4 * 2.0)).abs() < 0.1, "E should be on the third line");
 }

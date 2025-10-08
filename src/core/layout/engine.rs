@@ -1,5 +1,4 @@
 // FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/engine.rs
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/engine.rs
 use super::fonts::FontManager;
 use super::geom;
 use super::node::{LayoutContext, LayoutNode, LayoutResult};
@@ -13,6 +12,7 @@ use super::nodes::table::TableNode;
 use super::style::{self, ComputedStyle};
 use super::{IRNode, PipelineError, PositionedElement};
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
+use std::cell::RefCell;
 use std::sync::Arc;
 
 /// The main layout engine. It is responsible for orchestrating the multi-pass
@@ -56,7 +56,7 @@ impl LayoutEngine {
             let content_width = page_width - margins.left - margins.right;
             let content_height = page_height - margins.top - margins.bottom;
 
-            let mut page_elements = Vec::new();
+            let page_elements_cell = RefCell::new(Vec::new());
             let bounds = geom::Rect {
                 x: margins.left,
                 y: margins.top,
@@ -67,12 +67,17 @@ impl LayoutEngine {
             // Before layout, perform the measurement pass on the current work item.
             work_item.measure(self, content_width);
 
-            let mut ctx = LayoutContext::new(self, bounds, &mut page_elements);
+            let mut ctx = LayoutContext::new(self, bounds, &page_elements_cell);
 
             // Layout this page
             let result = work_item.layout(&mut ctx)?;
 
-            if !page_elements.is_empty() || pages.is_empty() {
+            let page_elements = page_elements_cell.into_inner();
+
+            // A page should be added if it's the first one, or if it contains any content.
+            // This prevents creating empty pages in the middle of a document when an element
+            // that doesn't fit causes a page break without rendering anything.
+            if pages.is_empty() || !page_elements.is_empty() {
                 pages.push(page_elements);
             }
 
@@ -129,92 +134,5 @@ impl LayoutEngine {
 
     pub fn measure_text_width(&self, text: &str, style: &Arc<ComputedStyle>) -> f32 {
         self.font_manager.measure_text(text, style)
-    }
-}
-
-// Integration tests can go here, verifying the whole process.
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::idf::InlineNode;
-    use crate::core::style::dimension::Margins;
-    use crate::core::style::stylesheet::PageLayout;
-
-    fn create_test_engine() -> LayoutEngine {
-        let mut font_manager = FontManager::new();
-        font_manager.load_fallback_font().unwrap();
-        LayoutEngine::new(Arc::new(font_manager))
-    }
-
-    #[test]
-    fn test_paginate_simple_paragraph() {
-        let engine = create_test_engine();
-        let mut stylesheet = Stylesheet::default();
-        stylesheet.page_masters.insert("master".to_string(), PageLayout::default());
-        stylesheet.default_page_master_name = Some("master".to_string());
-
-        let ir_nodes = vec![IRNode::Paragraph {
-            style_sets: vec![],
-            style_override: None,
-            children: vec![InlineNode::Text("Hello World".to_string())],
-        }];
-
-        let mut pages = engine.paginate(&stylesheet, ir_nodes).unwrap();
-        let page1 = pages.remove(0);
-
-        assert!(!page1.is_empty(), "Page should have elements");
-        let text_element = &page1[0];
-
-        let default_margin = stylesheet.page_masters["master"].margins.as_ref().map_or(0.0, |m| m.top);
-        assert!((text_element.y - default_margin).abs() < 0.1);
-        // Default font size 12, line height 14.4
-        assert_eq!(text_element.height, 14.4);
-    }
-
-    #[test]
-    fn test_block_with_margin_and_padding() {
-        let engine = create_test_engine();
-        let mut stylesheet = Stylesheet::default();
-        stylesheet.page_masters.insert(
-            "master".to_string(),
-            PageLayout {
-                margins: Some(Margins::default()),
-                ..Default::default()
-            },
-        );
-        stylesheet.default_page_master_name = Some("master".to_string());
-
-        let block_style_override = ElementStyle {
-            margin: Some(Margins {
-                top: 20.0,
-                bottom: 20.0,
-                ..Default::default()
-            }),
-            padding: Some(Margins {
-                top: 10.0,
-                bottom: 10.0,
-                ..Default::default()
-            }),
-            ..Default::default()
-        };
-        let ir_nodes = vec![IRNode::Block {
-            style_sets: vec![],
-            style_override: Some(block_style_override),
-            children: vec![IRNode::Paragraph {
-                style_sets: vec![],
-                style_override: None,
-                children: vec![InlineNode::Text("Inside".to_string())],
-            }],
-        }];
-
-        let mut pages = engine.paginate(&stylesheet, ir_nodes).unwrap();
-        let page1 = pages.remove(0);
-
-        assert_eq!(page1.len(), 1, "Should have one text element");
-        let text_el = &page1[0];
-        let page_margin = stylesheet.page_masters["master"].margins.as_ref().map_or(0.0, |m| m.top);
-
-        // y = page_margin_top(0) + block_margin_top(20) + block_padding_top(10) = 30.0
-        assert!((text_el.y - (page_margin + 20.0 + 10.0)).abs() < 0.1);
     }
 }

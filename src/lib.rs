@@ -9,13 +9,13 @@
 // `render`:   Renders positioned elements to a concrete format (e.g., PDF).
 // `xpath`:    A simple data selector for JSON, mimicking XPath.
 
-mod core;
+pub mod core;
 mod error;
 mod parser;
 mod pipeline;
 mod render;
 mod xpath;
-
+pub mod templating;
 // --- Public API ---
 // By exposing only these top-level items, we provide a clean and focused
 // public interface for users of the library.

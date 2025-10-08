@@ -78,7 +78,7 @@ impl<'h, 's, 'd> TemplateExecutor<'h, 's, 'd> {
             JsonInstruction::PageBreak { master_name } => self.push_block_to_parent(IRNode::PageBreak { master_name: master_name.clone() }),
             JsonInstruction::Block { styles, children } => self.execute_container(IRNode::Block { style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone(), children: vec![] }, children, context)?,
             JsonInstruction::FlexContainer { styles, children } => self.execute_container(IRNode::FlexContainer { style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone(), children: vec![] }, children, context)?,
-            JsonInstruction::List { styles, children } => self.execute_container(IRNode::List { style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone(), children: vec![] }, children, context)?,
+            JsonInstruction::List { styles, children } => self.execute_container(IRNode::List { style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone(), start: None, children: vec![] }, children, context)?,
             JsonInstruction::ListItem { styles, children } => self.execute_container(IRNode::ListItem { style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone(), children: vec![] }, children, context)?,
             JsonInstruction::Paragraph { styles, children } => self.execute_container(IRNode::Paragraph { style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone(), children: vec![] }, children, context)?,
             JsonInstruction::Image { styles, src_template } => self.push_block_to_parent(IRNode::Image { src: self.render_text(src_template, context)?, style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone() }),
@@ -185,7 +185,7 @@ impl TryFrom<IRNode> for TableCell {
     type Error = ParseError;
     fn try_from(node: IRNode) -> Result<Self, Self::Error> {
         if let IRNode::Block { style_sets, style_override, children } = node {
-            Ok(TableCell { style_sets, style_override, children })
+            Ok(TableCell { style_sets, style_override, children, colspan: 1, rowspan: 1})
         } else {
             Err(ParseError::TemplateParse(format!("Expected Block to convert to TableCell, got {:?}", node)))
         }

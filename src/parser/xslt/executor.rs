@@ -184,7 +184,7 @@ impl<'h> TemplateExecutor<'h> {
         let style_override = styles.style_override.clone();
 
         match String::from_utf8_lossy(tag_name).as_ref() {
-            "fo:list-block" | "list" => self.node_stack.push(IRNode::List { style_sets, style_override, children: vec![] }),
+            "fo:list-block" | "list" => self.node_stack.push(IRNode::List { style_sets, style_override, start: None, children: vec![] }),
             "fo:list-item" | "list-item" => self.node_stack.push(IRNode::ListItem { style_sets, style_override, children: vec![] }),
             "flex-container" => self.node_stack.push(IRNode::FlexContainer { style_sets, style_override, children: vec![] }),
             "text" | "p" => self.node_stack.push(IRNode::Paragraph { style_sets, style_override, children: vec![] }),
@@ -207,7 +207,7 @@ impl<'h> TemplateExecutor<'h> {
                 if let Some(IRNode::Table { header, body, .. }) = self.node_stack.last_mut() {
                     let target_row = if self.is_in_table_header { header.as_mut().and_then(|h| h.rows.last_mut()) } else { body.rows.last_mut() };
                     if let Some(row) = target_row {
-                        row.cells.push(TableCell { style_sets, style_override, children: vec![] });
+                        row.cells.push(TableCell { style_sets, style_override, children: vec![], colspan: 1, rowspan: 1 });
                     }
                 }
             }
