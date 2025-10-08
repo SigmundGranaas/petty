@@ -1,6 +1,7 @@
 // FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/list_item.rs
 use crate::core::idf::IRNode;
 use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult};
+use crate::core::layout::nodes::block::draw_background_and_borders;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{geom, LayoutElement, LayoutEngine, LayoutError, PositionedElement, TextElement};
 use crate::core::style::dimension::Dimension;
@@ -33,7 +34,7 @@ impl ListItemNode {
             _ => panic!("ListItemNode must be created from an IRNode::ListItem"),
         };
 
-        // FIX: When a list item itself contains a list, we must create that child
+        // When a list item itself contains a list, we must create that child
         // ListNode with an incremented depth. The generic `build_layout_node_tree`
         // does not know about list depth, so we handle that case specifically here.
         let mut children: Vec<Box<dyn LayoutNode>> = ir_children
@@ -113,24 +114,56 @@ impl LayoutNode for ListItemNode {
     }
 
     fn measure(&mut self, engine: &LayoutEngine, available_width: f32) {
+        // List items behave like blocks; their children's available width is reduced
+        // by the list item's own padding and borders.
+        let border_left_width = self.style.border_left.as_ref().map_or(0.0, |b| b.width);
+        let border_right_width = self.style.border_right.as_ref().map_or(0.0, |b| b.width);
+        const MARKER_SPACING_FACTOR: f32 = 0.4;
+        let is_outside_marker = self.style.list_style_position == ListStylePosition::Outside;
+        let indent = if is_outside_marker && !self.marker_text.is_empty() {
+            engine.measure_text_width(&self.marker_text, &self.style) + self.style.font_size * MARKER_SPACING_FACTOR
+        } else {
+            0.0
+        };
+
+        let child_available_width = available_width
+            - self.style.padding.left
+            - self.style.padding.right
+            - border_left_width
+            - border_right_width
+            - indent;
+
         for child in &mut self.children {
-            child.measure(engine, available_width);
+            child.measure(engine, child_available_width);
         }
     }
     fn measure_content_height(&mut self, engine: &LayoutEngine, available_width: f32) -> f32 {
         if let Some(Dimension::Pt(h)) = self.style.height {
-            return h; // List item height doesn't include its margins
+            return h;
         }
-        self.children
+        let border_top_width = self.style.border_top.as_ref().map_or(0.0, |b| b.width);
+        let border_bottom_width = self.style.border_bottom.as_ref().map_or(0.0, |b| b.width);
+
+        let content_height: f32 = self
+            .children
             .iter_mut()
             .map(|c| c.measure_content_height(engine, available_width))
-            .sum()
+            .sum();
+
+        border_top_width
+            + self.style.padding.top
+            + content_height
+            + self.style.padding.bottom
+            + border_bottom_width
     }
     fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
         const MARKER_SPACING_FACTOR: f32 = 0.4;
         let is_outside_marker = self.style.list_style_position == ListStylePosition::Outside;
 
+        let block_start_y_in_ctx = ctx.cursor.1;
+
         // --- 1. Handle Marker Layout for 'outside' markers ---
+        // This happens before the box model is applied to the content.
         let indent = if is_outside_marker && !self.marker_text.is_empty() {
             let marker_available_height = self.style.line_height;
             if marker_available_height > ctx.available_height() && !ctx.is_empty() {
@@ -142,7 +175,7 @@ impl LayoutNode for ListItemNode {
 
             let marker_box = PositionedElement {
                 x: 0.0,
-                y: 0.0,
+                y: self.style.border_top.as_ref().map_or(0.0, |b| b.width) + self.style.padding.top,
                 width: marker_width,
                 height: self.style.line_height,
                 element: LayoutElement::Text(TextElement {
@@ -152,37 +185,43 @@ impl LayoutNode for ListItemNode {
                 }),
                 style: self.style.clone(),
             };
-            ctx.push_element(marker_box);
+            ctx.push_element_at(marker_box, 0.0, block_start_y_in_ctx);
             marker_width + marker_spacing
         } else {
             0.0
         };
 
+        // --- 2. Layout Children within a proper box model ---
+        let border_top_width = self.style.border_top.as_ref().map_or(0.0, |b| b.width);
+        let border_bottom_width = self.style.border_bottom.as_ref().map_or(0.0, |b| b.width);
+        let border_left_width = self.style.border_left.as_ref().map_or(0.0, |b| b.width);
+        let border_right_width = self.style.border_right.as_ref().map_or(0.0, |b| b.width);
 
-        // --- 2. Layout Children ---
+        ctx.advance_cursor(border_top_width + self.style.padding.top);
         let content_start_y_in_ctx = ctx.cursor.1;
+
         let child_bounds = geom::Rect {
-            x: ctx.bounds.x + self.style.padding.left + indent,
-            y: ctx.bounds.y + content_start_y_in_ctx + self.style.padding.top,
-            width: ctx.bounds.width - self.style.padding.left - self.style.padding.right - indent,
-            height: ctx.available_height() - self.style.padding.top,
+            x: ctx.bounds.x + border_left_width + self.style.padding.left + indent,
+            y: ctx.bounds.y + content_start_y_in_ctx,
+            width: ctx.bounds.width - self.style.padding.left - self.style.padding.right - border_left_width - border_right_width - indent,
+            height: ctx.available_height(),
         };
+
         let mut child_ctx = LayoutContext {
             engine: ctx.engine,
             bounds: child_bounds,
             cursor: (0.0, 0.0),
             elements: ctx.elements,
-            last_v_margin: 0.0,
+            last_v_margin: 0.0, // List items create a new block formatting context
         };
 
         for (i, child) in self.children.iter_mut().enumerate() {
             match child.layout(&mut child_ctx)? {
                 LayoutResult::Full => continue,
                 LayoutResult::Partial(remainder) => {
-                    let height_used_by_children = child_ctx.cursor.1;
-                    let total_height = (self.style.padding.top + height_used_by_children + self.style.padding.bottom)
-                        .max(self.style.line_height);
-                    ctx.advance_cursor(total_height);
+                    let content_height = child_ctx.cursor.1;
+                    draw_background_and_borders(ctx, &self.style, block_start_y_in_ctx, content_height);
+                    ctx.cursor.1 = content_start_y_in_ctx + content_height + self.style.padding.bottom + border_bottom_width;
 
                     let mut remaining_children = vec![remainder];
                     remaining_children.extend(self.children.drain((i + 1)..));
@@ -197,11 +236,9 @@ impl LayoutNode for ListItemNode {
             }
         }
 
-        let height_used_by_children = child_ctx.cursor.1;
-        let line_height = if is_outside_marker { self.style.line_height } else { 0.0 };
-        let total_height =
-            (self.style.padding.top + height_used_by_children + self.style.padding.bottom).max(line_height);
-        ctx.advance_cursor(total_height);
+        let content_height = child_ctx.cursor.1;
+        draw_background_and_borders(ctx, &self.style, block_start_y_in_ctx, content_height);
+        ctx.cursor.1 = content_start_y_in_ctx + content_height + self.style.padding.bottom + border_bottom_width;
 
         Ok(LayoutResult::Full)
     }

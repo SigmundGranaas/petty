@@ -48,17 +48,28 @@ impl<W: io::Write + Send> PdfDocumentRenderer<W> {
         let mut fonts = HashMap::new();
         let mut default_font_id: Option<FontId> = None;
 
-        for (family_name, font_data) in layout_engine.font_manager.font_data.iter() {
-            let mut warnings = Vec::new();
-            let font = ParsedFont::from_bytes(font_data, 0, &mut warnings).ok_or_else(|| {
-                RenderError::InternalPdfError(format!("Failed to parse font {}", family_name))
-            })?;
-            let font_id = doc.add_font(&font);
-            fonts.insert(family_name.clone(), font_id.clone());
-            if family_name.eq_ignore_ascii_case("helvetica") {
-                default_font_id = Some(font_id);
-            }
+        // --- FIX: Load fonts from the FontManager's database ---
+        for face in layout_engine.font_manager.db().faces() {
+            let face_post_script_name = face.post_script_name.clone();
+            let face_index = face.index;
+            layout_engine.font_manager.db().with_face_data(face.id, |font_data, _| {
+                let mut warnings = Vec::new();
+                match ParsedFont::from_bytes(font_data, face_index as usize, &mut warnings) {
+                    Some(parsed_font) => {
+                        let font_id = doc.add_font(&parsed_font);
+                        // Key by the unique PostScript name (e.g., "Helvetica-Bold")
+                        fonts.insert(face_post_script_name.clone(), font_id.clone());
+                        if face_post_script_name.eq_ignore_ascii_case("helvetica") {
+                            default_font_id = Some(font_id);
+                        }
+                    }
+                    None => {
+                        log::warn!("Failed to parse font for embedding: {}", face_post_script_name);
+                    }
+                }
+            });
         }
+
 
         let default_font = default_font_id.or_else(|| fonts.values().next().cloned()).ok_or_else(|| {
             RenderError::InternalPdfError("No fonts were loaded, cannot create PDF.".to_string())
@@ -218,7 +229,11 @@ impl<W: io::Write + Send> PdfDocumentRenderer<W> {
         let margins = page_layout.margins.as_ref().unwrap_or(&default_margins);
 
         let (page_width_pt, _) = Self::get_page_dimensions_pt(page_layout);
-        let font_id = self.fonts.get(style.font_family.as_str()).unwrap_or(&self.default_font);
+        // --- FIX: Font selection logic ---
+        let styled_font_name = get_styled_font_name(&style);
+        let font_id = self.fonts.get(&styled_font_name).unwrap_or(&self.default_font);
+        // --- END FIX ---
+
         let color = Rgb::new(
             style.color.r as f32 / 255.0,
             style.color.g as f32 / 255.0,
@@ -310,10 +325,13 @@ pub(crate) struct RenderContext<'a> {
     pub(crate) page_height_pt: f32,
 }
 
+/// Generates the specific font family name based on style (e.g., "Helvetica-Bold").
+/// This is used to look up the pre-loaded font in the document's font map.
 pub(crate) fn get_styled_font_name(style: &Arc<ComputedStyle>) -> String {
     let family = &style.font_family;
     match style.font_weight {
         FontWeight::Bold | FontWeight::Black => format!("{}-Bold", family),
+        // Add other weights here if you have corresponding font files (e.g., Helvetica-Light)
         _ => family.to_string(),
     }
 }
@@ -377,7 +395,11 @@ pub(crate) fn render_footer_to_ops<W: io::Write + Send>(
     let final_text = rendered_text;
 
     let (page_width_pt, _) = PdfDocumentRenderer::<W>::get_page_dimensions_pt(page_layout);
-    let font_id = fonts.get(style.font_family.as_str()).unwrap_or(default_font);
+    // --- FIX: Font selection logic ---
+    let styled_font_name = get_styled_font_name(&style);
+    let font_id = fonts.get(&styled_font_name).unwrap_or(default_font);
+    // --- END FIX ---
+
     let color = Rgb::new(
         style.color.r as f32 / 255.0,
         style.color.g as f32 / 255.0,

@@ -1,6 +1,6 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/elements.rs
 //! Defines the concrete, drawable elements that are the output of the layout engine.
 
+use crate::core::layout::geom;
 use crate::core::layout::ComputedStyle;
 use crate::core::style::text::TextDecoration;
 use std::sync::Arc;
@@ -17,6 +17,21 @@ pub struct PositionedElement {
     pub height: f32,
     pub element: LayoutElement,
     pub style: Arc<ComputedStyle>,
+}
+
+impl PositionedElement {
+    /// Creates a partial `PositionedElement` from a `Rect`.
+    /// The `element` and `style` fields must be filled in by the caller.
+    pub fn from_rect(rect: geom::Rect) -> Self {
+        Self {
+            x: rect.x,
+            y: rect.y,
+            width: rect.width,
+            height: rect.height,
+            element: LayoutElement::Rectangle(RectElement), // Placeholder
+            style: Arc::new(ComputedStyle::default()),      // Placeholder
+        }
+    }
 }
 
 /// An enum representing the different types of drawable elements.

@@ -1,6 +1,7 @@
 // FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/flex.rs
 use crate::core::idf::IRNode;
 use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult};
+use crate::core::layout::nodes::block::draw_background_and_borders;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{geom, LayoutEngine, LayoutError};
 use crate::core::style::dimension::Dimension;
@@ -45,18 +46,58 @@ impl LayoutNode for FlexNode {
     }
 
     fn measure(&mut self, engine: &LayoutEngine, available_width: f32) {
+        let border_left_width = self.style.border_left.as_ref().map_or(0.0, |b| b.width);
+        let border_right_width = self.style.border_right.as_ref().map_or(0.0, |b| b.width);
+        let child_available_width = available_width
+            - self.style.padding.left
+            - self.style.padding.right
+            - border_left_width
+            - border_right_width;
+
         for child in &mut self.children {
-            child.measure(engine, available_width);
+            child.measure(engine, child_available_width);
         }
-        self.lines = resolve_flex_lines(engine, &mut self.children, &self.style, available_width);
+        self.lines = resolve_flex_lines(engine, &mut self.children, &self.style, child_available_width);
     }
 
     fn measure_content_height(&mut self, _engine: &LayoutEngine, _available_width: f32) -> f32 {
-        self.lines.iter().map(|line| line.cross_size).sum()
+        let border_top_width = self.style.border_top.as_ref().map_or(0.0, |b| b.width);
+        let border_bottom_width = self.style.border_bottom.as_ref().map_or(0.0, |b| b.width);
+        let content_height: f32 = self.lines.iter().map(|line| line.cross_size).sum();
+
+        self.style.margin.top
+            + border_top_width
+            + self.style.padding.top
+            + content_height
+            + self.style.padding.bottom
+            + border_bottom_width
+            + self.style.margin.bottom
+    }
+
+    fn measure_intrinsic_width(&self, engine: &LayoutEngine) -> f32 {
+        let border_left_width = self.style.border_left.as_ref().map_or(0.0, |b| b.width);
+        let border_right_width = self.style.border_right.as_ref().map_or(0.0, |b| b.width);
+        let own_width =
+            self.style.padding.left + self.style.padding.right + border_left_width + border_right_width;
+
+        let is_horiz = is_horizontal(&self.style.flex_direction);
+        if is_horiz {
+            // For a row, the intrinsic width is the sum of the children's intrinsic widths.
+            let children_width: f32 = self.children.iter().map(|c| c.measure_intrinsic_width(engine)).sum();
+            children_width + own_width
+        } else {
+            // For a column, it's the max of the children's intrinsic widths.
+            let children_width: f32 = self
+                .children
+                .iter()
+                .map(|c| c.measure_intrinsic_width(engine))
+                .fold(0.0, f32::max);
+            children_width + own_width
+        }
     }
 
     fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
-        // --- Vertical Margin Collapsing ---
+        // --- Box Model Setup ---
         let margin_to_add = self.style.margin.top.max(ctx.last_v_margin);
         if !ctx.is_empty() && margin_to_add > ctx.available_height() {
             return Ok(LayoutResult::Partial(Box::new(self.clone())));
@@ -64,34 +105,62 @@ impl LayoutNode for FlexNode {
         ctx.advance_cursor(margin_to_add);
         ctx.last_v_margin = 0.0;
 
+        let border_top_width = self.style.border_top.as_ref().map_or(0.0, |b| b.width);
+        let border_bottom_width = self.style.border_bottom.as_ref().map_or(0.0, |b| b.width);
+        let border_left_width = self.style.border_left.as_ref().map_or(0.0, |b| b.width);
+        let border_right_width = self.style.border_right.as_ref().map_or(0.0, |b| b.width);
+
+        let block_start_y_in_ctx = ctx.cursor.1;
+        ctx.advance_cursor(border_top_width + self.style.padding.top);
+        let content_start_y_in_ctx = ctx.cursor.1;
+
+        // --- Flex Layout Logic ---
+        let child_bounds = geom::Rect {
+            x: ctx.bounds.x + border_left_width + self.style.padding.left,
+            y: ctx.bounds.y + content_start_y_in_ctx,
+            width: ctx.bounds.width
+                - self.style.padding.left
+                - self.style.padding.right
+                - border_left_width
+                - border_right_width,
+            height: ctx.available_height(),
+        };
+
         let is_horiz = is_horizontal(&self.style.flex_direction);
         let is_reverse = is_main_reverse(&self.style.flex_direction);
-        let container_main_size = if is_horiz { ctx.bounds.width } else { ctx.bounds.height };
-        let container_cross_size = if is_horiz { ctx.bounds.height } else { ctx.bounds.width };
+        let container_main_size = child_bounds.width; // Use content-box width
+        let container_cross_size = child_bounds.height;
 
         let total_lines_cross_size: f32 = self.lines.iter().map(|line| line.cross_size).sum();
         let free_cross_space = container_cross_size - total_lines_cross_size;
-
         let (mut cross_cursor, line_spacing) =
             calculate_main_axis_alignment(free_cross_space, self.lines.len(), &self.style.align_content);
 
         let mut child_idx_offset = 0;
+        let mut lines_on_this_page = 0;
+        let mut content_height_on_this_page = 0.0;
 
         for line in &self.lines {
-            // *** FIX: Check for page break *before* processing the line. ***
-            // This ensures ctx.available_height() is correct based on previous lines' consumption.
-            if line.cross_size > ctx.available_height() && !ctx.is_empty() {
+            if line.cross_size > (child_bounds.height - content_height_on_this_page) && lines_on_this_page > 0 {
                 let remaining_children = self.children.drain(child_idx_offset..).collect();
+                draw_background_and_borders(ctx, &self.style, block_start_y_in_ctx, content_height_on_this_page);
+                ctx.cursor.1 = content_start_y_in_ctx
+                    + content_height_on_this_page
+                    + self.style.padding.bottom
+                    + border_bottom_width;
+                // Since flex items don't have collapsing margins with the container, last_v_margin is not set from children.
+
                 let mut remainder_node = FlexNode {
                     children: remaining_children,
                     style: self.style.clone(),
-                    lines: vec![],
+                    lines: vec![], // Will be recalculated
                 };
                 remainder_node.measure(ctx.engine, ctx.bounds.width);
                 return Ok(LayoutResult::Partial(Box::new(remainder_node)));
             }
+            lines_on_this_page += 1;
+            content_height_on_this_page += line.cross_size;
 
-            // --- Layout the current line ---
             let mut effective_justify = self.style.justify_content.clone();
             if is_reverse {
                 effective_justify = match effective_justify {
@@ -107,13 +176,8 @@ impl LayoutNode for FlexNode {
 
             for item in &line.items {
                 main_cursor += if is_reverse { item.main_margin_end } else { item.main_margin_start };
-
-                let cross_offset_within_line =
-                    calculate_cross_axis_alignment(item, line.cross_size, &self.style.align_items);
-
-                let item_cross_offset = cross_cursor
-                    + cross_offset_within_line
-                    + if is_cross_reverse(&self.style.flex_wrap) {
+                let cross_offset_within_line = calculate_cross_axis_alignment(item, line.cross_size, &self.style.align_items);
+                let item_cross_offset = cross_cursor + cross_offset_within_line + if is_cross_reverse(&self.style.flex_wrap) {
                     item.cross_margin_end
                 } else {
                     item.cross_margin_start
@@ -125,36 +189,36 @@ impl LayoutNode for FlexNode {
                     (item_cross_offset, main_cursor, item.cross_size, item.main_size)
                 };
 
-                let child_bounds = geom::Rect {
-                    x: ctx.bounds.x + x,
-                    y: ctx.bounds.y + ctx.cursor.1 + y,
+                let item_bounds = geom::Rect {
+                    x: child_bounds.x + x,
+                    y: child_bounds.y + y,
                     width,
                     height,
                 };
 
-                let mut child_ctx = LayoutContext {
+                let mut item_ctx = LayoutContext {
                     engine: ctx.engine,
-                    bounds: child_bounds,
+                    bounds: item_bounds,
                     cursor: (0.0, 0.0),
                     elements: ctx.elements,
                     last_v_margin: 0.0,
                 };
 
-                match self.children[item.original_index].layout(&mut child_ctx) {
+                match self.children[item.original_index].layout(&mut item_ctx) {
                     Ok(_) => {}
                     Err(e) => log::warn!("Skipping flex item that failed to lay out: {}", e),
                 }
-                main_cursor += item.main_size
-                    + item_spacing
-                    + if is_reverse { item.main_margin_start } else { item.main_margin_end };
+                main_cursor += item.main_size + item_spacing + if is_reverse { item.main_margin_start } else { item.main_margin_end };
             }
-
-            // *** FIX: Advance cursor and trackers *after* processing the line. ***
-            ctx.advance_cursor(line.cross_size);
             cross_cursor += line.cross_size + line_spacing;
             child_idx_offset += line.items.len();
         }
 
+        draw_background_and_borders(ctx, &self.style, block_start_y_in_ctx, content_height_on_this_page);
+        ctx.cursor.1 = content_start_y_in_ctx
+            + content_height_on_this_page
+            + self.style.padding.bottom
+            + border_bottom_width;
         ctx.last_v_margin = self.style.margin.bottom;
         Ok(LayoutResult::Full)
     }
@@ -208,7 +272,7 @@ fn resolve_flex_lines(
         .enumerate()
         .map(|(i, child_node)| {
             let item_style = child_node.style().clone();
-            let flex_basis = resolve_flex_basis(engine, child_node, &item_style, available_main_size, is_horiz);
+            let flex_basis = resolve_flex_basis(engine, child_node.as_mut(), &item_style, available_main_size, is_horiz);
             let cross_size = child_node.measure_content_height(engine, if is_horiz { flex_basis } else { available_width });
 
             let (main_margin_start, main_margin_end, cross_margin_start, cross_margin_end) = if is_horiz {
@@ -282,7 +346,7 @@ fn resolve_flex_lines(
 
 fn resolve_flex_basis(
     engine: &LayoutEngine,
-    node: &mut Box<dyn LayoutNode>,
+    node: &mut dyn LayoutNode,
     style: &Arc<ComputedStyle>,
     container_main_size: f32,
     is_horiz: bool,
@@ -299,11 +363,12 @@ fn resolve_flex_basis(
     match resolved_basis_dim {
         Some(Dimension::Pt(val)) => *val,
         Some(Dimension::Percent(p)) => container_main_size * (p / 100.0),
-        _ => {
+        _ => { // This is Dimension::Auto
             if is_horiz {
-                // Heuristic for horizontal blocks without intrinsic width.
-                container_main_size
+                // For 'auto', we need the intrinsic width of the content.
+                node.measure_intrinsic_width(engine)
             } else {
+                // For vertical flex, we need the intrinsic height.
                 node.measure_content_height(engine, container_main_size)
             }
         }

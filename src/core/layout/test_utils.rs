@@ -1,10 +1,8 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/test_utils.rs
 #![cfg(test)]
 
 use crate::core::idf::{IRNode, InlineNode};
 use crate::core::layout::engine::LayoutEngine;
 use crate::core::layout::fonts::FontManager;
-use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{LayoutElement, PositionedElement, TextElement};
 use crate::core::style::stylesheet::Stylesheet;
 use crate::error::PipelineError;
@@ -13,7 +11,8 @@ use std::sync::Arc;
 /// Creates a default layout engine for testing purposes.
 pub fn create_test_engine() -> LayoutEngine {
     let mut font_manager = FontManager::new();
-    font_manager.load_fallback_font().unwrap();
+    // FIX: load_fallback_font now returns (), so no unwrap is needed.
+    font_manager.load_fallback_font();
     LayoutEngine::new(Arc::new(font_manager))
 }
 
@@ -45,14 +44,6 @@ pub fn create_paragraph(text: &str) -> IRNode {
     }
 }
 
-/// Creates a base computed style for use in tests.
-pub fn get_base_style() -> Arc<ComputedStyle> {
-    let engine = create_test_engine();
-    let mut style = (*engine.get_default_style()).clone();
-    style.font_size = 10.0;
-    style.line_height = 12.0;
-    Arc::new(style)
-}
 
 /// Finds the first drawable text element on a page that contains the given substring.
 pub fn find_first_text_box_with_content<'a>(

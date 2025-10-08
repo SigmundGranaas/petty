@@ -1,18 +1,17 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/templating/table.rs
 use crate::core::style::dimension::Dimension;
 use crate::core::style::stylesheet::ElementStyle;
 use crate::parser::json::ast::{
     JsonContainer, JsonNode, JsonTable, JsonTableBody, JsonTableColumn, JsonTableHeader, TemplateNode,
 };
 use crate::templating::node::TemplateBuilder;
+use crate::templating::style::impl_styled_widget;
 
 /// Builder for a table cell. A cell is a block-level container.
 #[derive(Default, Clone)]
 pub struct Cell {
-    style_names: Vec<String>, // Added for style_name support
+    style_names: Vec<String>,
     style_override: ElementStyle,
     children: Vec<Box<dyn TemplateBuilder>>,
-    // Note: colspan/rowspan would be added here if needed
 }
 
 impl Cell {
@@ -25,14 +24,8 @@ impl Cell {
         self
     }
 
-    // FIX: Implement style_name method
     pub fn style_name(mut self, name: &str) -> Self {
         self.style_names.push(name.to_string());
-        self
-    }
-
-    pub fn with_override(mut self, style: ElementStyle) -> Self {
-        self.style_override = style;
         self
     }
 }
@@ -47,6 +40,8 @@ impl TemplateBuilder for Cell {
         }))
     }
 }
+
+impl_styled_widget!(Cell);
 
 /// Builder for a table row.
 #[derive(Default, Clone)]
@@ -122,11 +117,6 @@ impl Table {
         self
     }
 
-    pub fn with_override(mut self, style: ElementStyle) -> Self {
-        self.style_override = style;
-        self
-    }
-
     pub fn column(mut self, column: Column) -> Self {
         self.columns.push(column);
         self
@@ -151,6 +141,8 @@ impl Table {
         self
     }
 }
+
+impl_styled_widget!(Table);
 
 impl TemplateBuilder for Table {
     fn build(self: Box<Self>) -> TemplateNode {

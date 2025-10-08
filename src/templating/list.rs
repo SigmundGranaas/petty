@@ -1,9 +1,8 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/templating/list.rs
-
 use crate::core::style::stylesheet::ElementStyle;
 use crate::parser::json::ast::{JsonContainer, JsonNode, TemplateNode};
 use crate::templating::builders::ListItem;
 use crate::templating::node::TemplateBuilder;
+use crate::templating::style::impl_styled_widget;
 
 /// Builder for a `<List>` node.
 #[derive(Default, Clone)]
@@ -28,11 +27,6 @@ impl List {
         self.style_names.push(name.to_string());
         self
     }
-
-    pub fn with_override(mut self, style: ElementStyle) -> Self {
-        self.style_override = style;
-        self
-    }
 }
 
 impl TemplateBuilder for List {
@@ -44,3 +38,5 @@ impl TemplateBuilder for List {
         }))
     }
 }
+
+impl_styled_widget!(List);

@@ -1,4 +1,3 @@
-// src/core/font.rs
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

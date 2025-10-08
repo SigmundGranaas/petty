@@ -5,9 +5,57 @@ use super::ast::{self, ControlNode, JsonNode, TemplateNode};
 use crate::core::idf::TableColumnDefinition;
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
 use crate::parser::ParseError;
+use crate::xpath::{self, Selection};
 use itertools::Itertools;
 use std::collections::HashMap;
 use std::sync::Arc;
+
+// --- Custom Expression Parser (Replaces Handlebars for JSON) ---
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum ExpressionPart {
+    Static(String),
+    /// A JSON Pointer path to a dynamic value.
+    Dynamic(String),
+}
+
+/// A pre-compiled string that is either static or a series of parts.
+#[derive(Debug, Clone, PartialEq)]
+pub enum CompiledString {
+    Static(String),
+    Dynamic(Vec<ExpressionPart>),
+}
+
+/// Parses a template string like "Hello {{ user.name }}" into parts.
+pub fn parse_expression(text: &str) -> Result<CompiledString, ParseError> {
+    if !text.contains("{{") {
+        return Ok(CompiledString::Static(text.to_string()));
+    }
+
+    let mut parts = Vec::new();
+    let mut last_end = 0;
+    for (start, part) in text.match_indices("{{") {
+        if start > last_end {
+            parts.push(ExpressionPart::Static(text[last_end..start].to_string()));
+        }
+        let end_marker = "}}";
+        let end = text[start..]
+            .find(end_marker)
+            .ok_or_else(|| ParseError::TemplateParse("Unclosed {{ expression".to_string()))?;
+        let inner = text[start + 2..start + end].trim();
+        // **THE FIX IS HERE**: Handle `this.` prefix for loop contexts.
+        let path = inner.trim_start_matches("this.");
+        let pointer = format!("/{}", path.replace('.', "/"));
+        parts.push(ExpressionPart::Dynamic(pointer));
+        last_end = start + end + 2;
+    }
+    if last_end < text.len() {
+        parts.push(ExpressionPart::Static(text[last_end..].to_string()));
+    }
+
+    Ok(CompiledString::Dynamic(parts))
+}
+
 
 // --- Executable Instruction Set ---
 
@@ -19,23 +67,23 @@ pub enum JsonInstruction {
     List { styles: CompiledStyles, children: Vec<JsonInstruction> },
     ListItem { styles: CompiledStyles, children: Vec<JsonInstruction> },
     Paragraph { styles: CompiledStyles, children: Vec<JsonInstruction> },
-    Image { styles: CompiledStyles, src_template: String },
+    Image { styles: CompiledStyles, src: CompiledString },
     Table(CompiledTable),
-    Text { content_template: String },
+    Text { content: CompiledString },
     StyledSpan { styles: CompiledStyles, children: Vec<JsonInstruction> },
-    Hyperlink { styles: CompiledStyles, href_template: String, children: Vec<JsonInstruction> },
-    InlineImage { styles: CompiledStyles, src_template: String },
+    Hyperlink { styles: CompiledStyles, href: CompiledString, children: Vec<JsonInstruction> },
+    InlineImage { styles: CompiledStyles, src: CompiledString },
     LineBreak,
     PageBreak { master_name: Option<String> },
     RenderTemplate { name: String },
-    ForEach { in_path: String, body: Vec<JsonInstruction> },
-    If { test: String, then_branch: Vec<JsonInstruction>, else_branch: Vec<JsonInstruction> },
+    ForEach { select: Selection, body: Vec<JsonInstruction> },
+    If { test: Selection, then_branch: Vec<JsonInstruction>, else_branch: Vec<JsonInstruction> },
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CompiledStyles {
     pub static_styles: Vec<Arc<ElementStyle>>,
-    pub dynamic_style_templates: Vec<String>,
+    pub dynamic_style_templates: Vec<CompiledString>,
     pub style_override: Option<ElementStyle>,
 }
 
@@ -71,11 +119,13 @@ impl<'a> Compiler<'a> {
     fn compile_control_node(&self, node: &ControlNode) -> Result<Vec<JsonInstruction>, ParseError> {
         match node {
             ControlNode::Each { each, template } => {
-                Ok(vec![JsonInstruction::ForEach { in_path: each.clone(), body: self.compile_node(template)? }])
+                let select = xpath::parse_selection(each)?;
+                Ok(vec![JsonInstruction::ForEach { select, body: self.compile_node(template)? }])
             }
             ControlNode::If { test, then, else_branch } => {
+                let test_selection = xpath::parse_selection(test)?;
                 Ok(vec![JsonInstruction::If {
-                    test: test.clone(),
+                    test: test_selection,
                     then_branch: self.compile_node(then)?,
                     else_branch: else_branch.as_ref().map(|b| self.compile_node(b)).transpose()?.unwrap_or_default(),
                 }])
@@ -90,16 +140,15 @@ impl<'a> Compiler<'a> {
             JsonNode::List(c) => Ok(JsonInstruction::List { styles: self.compile_styles(&c.style_names, &c.style_override)?, children: self.compile_children(&c.children)? }),
             JsonNode::ListItem(c) => Ok(JsonInstruction::ListItem { styles: self.compile_styles(&c.style_names, &c.style_override)?, children: self.compile_children(&c.children)? }),
             JsonNode::Paragraph(p) => Ok(JsonInstruction::Paragraph { styles: self.compile_styles(&p.style_names, &p.style_override)?, children: self.compile_children(&p.children)? }),
-            JsonNode::Image(i) => Ok(JsonInstruction::Image { styles: self.compile_styles(&i.style_names, &i.style_override)?, src_template: i.src.clone() }),
+            JsonNode::Image(i) => Ok(JsonInstruction::Image { styles: self.compile_styles(&i.style_names, &i.style_override)?, src: parse_expression(&i.src)? }),
             JsonNode::Table(t) => self.compile_table_node(t),
-            JsonNode::Text { content } => Ok(JsonInstruction::Text { content_template: content.clone() }),
+            JsonNode::Text { content } => Ok(JsonInstruction::Text { content: parse_expression(content)? }),
             JsonNode::StyledSpan(c) => Ok(JsonInstruction::StyledSpan { styles: self.compile_styles(&c.style_names, &c.style_override)?, children: self.compile_children(&c.children)? }),
-            JsonNode::Hyperlink(h) => Ok(JsonInstruction::Hyperlink { styles: self.compile_styles(&h.style_names, &h.style_override)?, href_template: h.href.clone(), children: self.compile_children(&h.children)? }),
-            JsonNode::InlineImage(i) => Ok(JsonInstruction::InlineImage { styles: self.compile_styles(&i.style_names, &i.style_override)?, src_template: i.src.clone() }),
+            JsonNode::Hyperlink(h) => Ok(JsonInstruction::Hyperlink { styles: self.compile_styles(&h.style_names, &h.style_override)?, href: parse_expression(&h.href)?, children: self.compile_children(&h.children)? }),
+            JsonNode::InlineImage(i) => Ok(JsonInstruction::InlineImage { styles: self.compile_styles(&i.style_names, &i.style_override)?, src: parse_expression(&i.src)? }),
             JsonNode::LineBreak => Ok(JsonInstruction::LineBreak),
             JsonNode::PageBreak { master_name } => Ok(JsonInstruction::PageBreak { master_name: master_name.clone() }),
             JsonNode::RenderTemplate { name } => {
-                // Validate that the template exists at compile time.
                 if !self.definitions.contains_key(name) {
                     return Err(ParseError::TemplateParse(format!("Defined template '{}' not found in stylesheet definitions.", name)));
                 }
@@ -126,7 +175,7 @@ impl<'a> Compiler<'a> {
         let mut dynamic_style_templates = Vec::new();
         for name_str in names {
             if name_str.contains("{{") {
-                dynamic_style_templates.push(name_str.clone());
+                dynamic_style_templates.push(parse_expression(name_str)?);
             } else {
                 for name in name_str.split_whitespace().filter(|s| !s.is_empty()) {
                     let style = self.stylesheet.styles.get(name).cloned().ok_or_else(|| ParseError::TemplateParse(format!("Style '{}' not found in stylesheet", name)))?;
@@ -194,12 +243,12 @@ mod tests {
     #[test]
     fn test_compile_if_then_else() {
         let (compiler, _) = create_test_compiler();
-        let node: TemplateNode = serde_json::from_value(json!({ "if": "{{ show_it }}", "then": { "type": "Text", "content": "Then" }, "else": { "type": "Text", "content": "Else" } })).unwrap();
+        let node: TemplateNode = serde_json::from_value(json!({ "if": "show_it", "then": { "type": "Text", "content": "Then" }, "else": { "type": "Text", "content": "Else" } })).unwrap();
         let result = compiler.compile(&node).unwrap();
         assert_eq!(result.len(), 1);
         match &result[0] {
             JsonInstruction::If { test, then_branch, else_branch } => {
-                assert_eq!(test, "{{ show_it }}");
+                assert_eq!(*test, Selection::JsonPointer("/show_it".to_string()));
                 assert_eq!(then_branch.len(), 1);
                 assert_eq!(else_branch.len(), 1);
             }

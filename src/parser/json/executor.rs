@@ -1,32 +1,26 @@
 //! Implements the "Execution" phase for the JSON parser.
 //! It walks the compiled instruction set and generates the `IRNode` tree.
 
-use super::compiler::{CompiledStyles, CompiledTable, JsonInstruction};
+use super::compiler::{CompiledStyles, CompiledString, CompiledTable, ExpressionPart, JsonInstruction};
 use crate::core::idf::{IRNode, InlineNode, TableBody, TableCell, TableHeader, TableRow};
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
 use crate::parser::ParseError;
-use handlebars::Handlebars;
+use crate::xpath;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 /// A stateful executor that constructs an `IRNode` tree from a compiled instruction set.
-pub struct TemplateExecutor<'h, 's, 'd> {
-    template_engine: &'h Handlebars<'h>,
+pub struct TemplateExecutor<'s, 'd> {
     stylesheet: &'s Stylesheet,
     definitions: &'d HashMap<String, Vec<JsonInstruction>>,
     node_stack: Vec<IRNode>,
     inline_stack: Vec<InlineNode>,
 }
 
-impl<'h, 's, 'd> TemplateExecutor<'h, 's, 'd> {
-    pub fn new(
-        template_engine: &'h Handlebars<'h>,
-        stylesheet: &'s Stylesheet,
-        definitions: &'d HashMap<String, Vec<JsonInstruction>>,
-    ) -> Self {
+impl<'s, 'd> TemplateExecutor<'s, 'd> {
+    pub fn new(stylesheet: &'s Stylesheet, definitions: &'d HashMap<String, Vec<JsonInstruction>>) -> Self {
         Self {
-            template_engine,
             stylesheet,
             definitions,
             node_stack: vec![],
@@ -55,17 +49,22 @@ impl<'h, 's, 'd> TemplateExecutor<'h, 's, 'd> {
 
     fn execute_instruction(&mut self, instruction: &JsonInstruction, context: &Value) -> Result<(), ParseError> {
         match instruction {
-            JsonInstruction::ForEach { in_path, body } => {
-                let pointer_path = format!("/{}", in_path.replace('.', "/"));
-                let data_to_iterate = context.pointer(&pointer_path).ok_or_else(|| ParseError::TemplateRender(format!("#each path '{}' not found", in_path)))?;
-                let items = data_to_iterate.as_array().ok_or_else(|| ParseError::TemplateRender(format!("#each path '{}' not an array", in_path)))?;
+            JsonInstruction::ForEach { select, body } => {
+                let variables = HashMap::new(); // `each` doesn't currently use variables.
+                let items = select.select(context, &variables).first().and_then(|v| v.as_array()).ok_or_else(|| ParseError::TemplateRender("#each path did not resolve to an array".to_string()))?;
+
                 for item_context in items {
                     self.execute_instructions(body, item_context)?;
                 }
             }
             JsonInstruction::If { test, then_branch, else_branch } => {
-                let condition_template = format!("{{{{#if {}}}}}true{{{{/if}}}}", test.trim_matches(|c| c == '{' || c == '}'));
-                if self.render_text(&condition_template, context)? == "true" {
+                let variables = HashMap::new();
+                let results = test.select(context, &variables);
+                // Truthiness check: non-empty, and first element is not null or `false`.
+                let condition_met = !results.is_empty()
+                    && results.iter().all(|v| !v.is_null() && v.as_bool() != Some(false));
+
+                if condition_met {
                     self.execute_instructions(then_branch, context)?;
                 } else {
                     self.execute_instructions(else_branch, context)?;
@@ -80,12 +79,23 @@ impl<'h, 's, 'd> TemplateExecutor<'h, 's, 'd> {
             JsonInstruction::FlexContainer { styles, children } => self.execute_container(IRNode::FlexContainer { style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone(), children: vec![] }, children, context)?,
             JsonInstruction::List { styles, children } => self.execute_container(IRNode::List { style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone(), start: None, children: vec![] }, children, context)?,
             JsonInstruction::ListItem { styles, children } => self.execute_container(IRNode::ListItem { style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone(), children: vec![] }, children, context)?,
-            JsonInstruction::Paragraph { styles, children } => self.execute_container(IRNode::Paragraph { style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone(), children: vec![] }, children, context)?,
-            JsonInstruction::Image { styles, src_template } => self.push_block_to_parent(IRNode::Image { src: self.render_text(src_template, context)?, style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone() }),
+            JsonInstruction::Paragraph { styles, children } => {
+                let para_node = IRNode::Paragraph {
+                    style_sets: self.gather_styles(styles, context)?,
+                    style_override: styles.style_override.clone(),
+                    children: vec![],
+                };
+                self.node_stack.push(para_node);
+                self.execute_instructions(children, context)?;
+                if let Some(completed_para) = self.node_stack.pop() {
+                    self.push_block_to_parent(completed_para);
+                }
+            }
+            JsonInstruction::Image { styles, src } => self.push_block_to_parent(IRNode::Image { src: self.render_string(src, context)?, style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone() }),
             JsonInstruction::Table(table) => self.execute_table(table, context)?,
-            JsonInstruction::Text { content_template } => self.push_inline_to_parent(InlineNode::Text(self.render_text(content_template, context)?)),
+            JsonInstruction::Text { content } => self.push_inline_to_parent(InlineNode::Text(self.render_string(content, context)?)),
             JsonInstruction::LineBreak => self.push_inline_to_parent(InlineNode::LineBreak),
-            JsonInstruction::InlineImage { styles, src_template } => self.push_inline_to_parent(InlineNode::Image { src: self.render_text(src_template, context)?, style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone() }),
+            JsonInstruction::InlineImage { styles, src } => self.push_inline_to_parent(InlineNode::Image { src: self.render_string(src, context)?, style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone() }),
             JsonInstruction::StyledSpan { styles, children } => {
                 self.inline_stack.push(InlineNode::StyledSpan { style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone(), children: vec![] });
                 self.execute_instructions(children, context)?;
@@ -93,8 +103,8 @@ impl<'h, 's, 'd> TemplateExecutor<'h, 's, 'd> {
                     self.push_inline_to_parent(s);
                 }
             }
-            JsonInstruction::Hyperlink { styles, href_template, children } => {
-                self.inline_stack.push(InlineNode::Hyperlink { href: self.render_text(href_template, context)?, style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone(), children: vec![] });
+            JsonInstruction::Hyperlink { styles, href, children } => {
+                self.inline_stack.push(InlineNode::Hyperlink { href: self.render_string(href, context)?, style_sets: self.gather_styles(styles, context)?, style_override: styles.style_override.clone(), children: vec![] });
                 self.execute_instructions(children, context)?;
                 if let Some(h) = self.inline_stack.pop() {
                     self.push_inline_to_parent(h);
@@ -107,7 +117,7 @@ impl<'h, 's, 'd> TemplateExecutor<'h, 's, 'd> {
     fn gather_styles(&self, styles: &CompiledStyles, context: &Value) -> Result<Vec<Arc<ElementStyle>>, ParseError> {
         let mut resolved_styles = styles.static_styles.clone();
         for name_template in &styles.dynamic_style_templates {
-            for name in self.render_text(name_template, context)?.split_whitespace().filter(|s| !s.is_empty()) {
+            for name in self.render_string(name_template, context)?.split_whitespace().filter(|s| !s.is_empty()) {
                 resolved_styles.push(self.stylesheet.styles.get(name).cloned().ok_or_else(|| ParseError::TemplateParse(format!("Style '{}' (rendered) not found", name)))?);
             }
         }
@@ -115,11 +125,13 @@ impl<'h, 's, 'd> TemplateExecutor<'h, 's, 'd> {
     }
 
     fn execute_container(&mut self, mut node: IRNode, children: &[JsonInstruction], context: &Value) -> Result<(), ParseError> {
-        let mut sub_executor = TemplateExecutor::new(self.template_engine, self.stylesheet, self.definitions);
+        let mut sub_executor = TemplateExecutor::new(self.stylesheet, self.definitions);
         let child_nodes = sub_executor.build_tree(children, context)?;
         match &mut node {
-            IRNode::Block { children: c, .. } | IRNode::FlexContainer { children: c, .. } | IRNode::List { children: c, .. } | IRNode::ListItem { children: c, .. } => *c = child_nodes,
-            IRNode::Paragraph { children: c, .. } => *c = child_nodes.into_iter().map(InlineNode::try_from).collect::<Result<_, _>>()?,
+            IRNode::Block { children: c, .. }
+            | IRNode::FlexContainer { children: c, .. }
+            | IRNode::List { children: c, .. }
+            | IRNode::ListItem { children: c, .. } => *c = child_nodes,
             _ => {}
         }
         self.push_block_to_parent(node);
@@ -128,22 +140,34 @@ impl<'h, 's, 'd> TemplateExecutor<'h, 's, 'd> {
 
     fn execute_table(&mut self, table: &CompiledTable, context: &Value) -> Result<(), ParseError> {
         let header = if let Some(instructions) = &table.header {
-            let mut sub_executor = TemplateExecutor::new(self.template_engine, self.stylesheet, self.definitions);
+            let mut sub_executor = TemplateExecutor::new(self.stylesheet, self.definitions);
             Some(Box::new(TableHeader { rows: sub_executor.build_tree(instructions, context)?.into_iter().map(TableRow::try_from).collect::<Result<_, _>>()? }))
         } else {
             None
         };
-        let mut sub_executor = TemplateExecutor::new(self.template_engine, self.stylesheet, self.definitions);
+        let mut sub_executor = TemplateExecutor::new(self.stylesheet, self.definitions);
         let body = Box::new(TableBody { rows: sub_executor.build_tree(&table.body, context)?.into_iter().map(TableRow::try_from).collect::<Result<_, _>>()? });
         self.push_block_to_parent(IRNode::Table { style_sets: self.gather_styles(&table.styles, context)?, style_override: table.styles.style_override.clone(), columns: table.columns.clone(), header, body });
         Ok(())
     }
 
-    fn render_text(&self, text: &str, context: &Value) -> Result<String, ParseError> {
-        if !text.contains("{{") {
-            return Ok(text.to_string());
+    fn render_string(&self, compiled_str: &CompiledString, context: &Value) -> Result<String, ParseError> {
+        match compiled_str {
+            CompiledString::Static(s) => Ok(s.clone()),
+            CompiledString::Dynamic(parts) => {
+                let mut result = String::new();
+                for part in parts {
+                    match part {
+                        ExpressionPart::Static(s) => result.push_str(s),
+                        ExpressionPart::Dynamic(pointer) => {
+                            let s = xpath::select_as_string(&xpath::Selection::JsonPointer(pointer.clone()), context, &HashMap::new());
+                            result.push_str(&s);
+                        }
+                    }
+                }
+                Ok(result)
+            }
         }
-        self.template_engine.render_template(text, context).map_err(|e| ParseError::TemplateRender(e.to_string()))
     }
 
     fn push_block_to_parent(&mut self, node: IRNode) {

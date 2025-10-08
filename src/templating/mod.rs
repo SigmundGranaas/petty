@@ -6,40 +6,30 @@
 //!
 //! # Creating Reusable Components
 //!
-//! The most powerful feature of this API is the ability to create your own reusable
-//! components, analogous to "Widgets" in Flutter. This is achieved by creating a
-//! struct and implementing the [`TemplateBuilder`] trait for it.
+//! A powerful way to create reusable components is by using "widget functions".
+//! This is a simple function that takes your component's data and returns a
+//! pre-configured builder. This avoids boilerplate and is easy to compose.
 //!
 //! ```
-//! # use petty::templating::builders::*;
-//! # use petty::templating::TemplateBuilder;
-//! # use petty::parser::json::ast::TemplateNode;
-//! #[derive(Clone)]
-//! struct TitledSection {
-//!     title: String,
-//!     child: Box<dyn TemplateBuilder>,
+//! use petty::templating::builders::*;
+//! use petty::templating::{Template, TemplateBuilder};
+//!
+//! // A widget function that creates a titled section.
+//! fn titled_section(title: &str, child: impl TemplateBuilder + 'static) -> Block {
+//!     Block::new()
+//!         .style_name("section")
+//!         .child(
+//!             Paragraph::new(title)
+//!                 .style_name("title")
+//!         )
+//!         .child(child)
 //! }
 //!
-//! impl TitledSection {
-//!     pub fn new(title: &str, child: impl TemplateBuilder + 'static) -> Self {
-//!         Self { title: title.to_string(), child: Box::new(child) }
-//!     }
-//! }
-//!
-//! impl TemplateBuilder for TitledSection {
-//!     fn build(self: Box<Self>) -> TemplateNode {
-//!         let component = Block::new()
-//!             .style_name("section")
-//!             .child(Paragraph::new().style_name("title").text(&self.title))
-//!             .child(self.child);
-//!
-//!         // A component's build method returns another builder, which we then build.
-//!         Box::new(component).build()
-//!     }
-//! }
-//!
-//! // Now `TitledSection` can be used just like any other builder.
-//! let my_component = TitledSection::new("My Title", Paragraph::new().text("Content..."));
+//! // Now `titled_section` can be used just like any other builder.
+//! let my_template = Template::new(
+//!     Block::new()
+//!         .child(titled_section("My Title", Paragraph::new("Content...")))
+//! );
 //! ```
 //!
 //! The end goal of using these builders is to produce a [`Template`] object, which can
@@ -53,9 +43,11 @@ mod list;
 mod misc;
 mod node;
 mod paragraph;
+mod style;
 mod table;
 mod template;
 mod text;
+mod widgets;
 
 #[cfg(test)]
 mod tests;
@@ -70,9 +62,11 @@ pub mod builders {
     pub use super::list::List;
     pub use super::misc::{LineBreak, PageBreak, Render};
     pub use super::paragraph::Paragraph;
+    pub use super::style::StyledWidget;
     pub use super::table::{Cell, Column, Row, Table};
     pub use super::text::{Hyperlink, InlineImage, Span, Text};
 }
 
 pub use self::node::TemplateBuilder;
 pub use self::template::Template;
+pub use self::widgets::*;

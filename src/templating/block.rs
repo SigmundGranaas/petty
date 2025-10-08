@@ -1,8 +1,8 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/templating/block.rs
-
+// FILE: /home/sigmund/RustroverProjects/petty/src/templating/block.rs
 use crate::core::style::stylesheet::ElementStyle;
 use crate::parser::json::ast::{JsonContainer, JsonNode, TemplateNode};
 use crate::templating::node::TemplateBuilder;
+use crate::templating::style::impl_styled_widget;
 
 macro_rules! define_container_builder {
     ($name:ident, $node_variant:path) => {
@@ -27,11 +27,6 @@ macro_rules! define_container_builder {
                 self.style_names.push(name.to_string());
                 self
             }
-
-            pub fn with_override(mut self, style: ElementStyle) -> Self {
-                self.style_override = style;
-                self
-            }
         }
 
         impl TemplateBuilder for $name {
@@ -49,3 +44,5 @@ macro_rules! define_container_builder {
 define_container_builder!(Block, JsonNode::Block);
 define_container_builder!(Flex, JsonNode::FlexContainer);
 define_container_builder!(ListItem, JsonNode::ListItem);
+
+impl_styled_widget!(Block, Flex, ListItem);

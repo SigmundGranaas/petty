@@ -5,12 +5,11 @@
 use super::ast::JsonTemplateFile;
 use super::compiler::{Compiler, JsonInstruction};
 use super::executor::TemplateExecutor;
-use crate::core::idf::IRNode;
+use crate::core::idf::{IRNode};
 use crate::core::style::stylesheet::Stylesheet;
 use crate::error::PipelineError;
 use crate::parser::processor::{CompiledTemplate, TemplateParser};
 use crate::parser::ParseError;
-use handlebars::Handlebars;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -24,12 +23,11 @@ pub struct CompiledJsonTemplate {
     definitions: HashMap<String, Vec<JsonInstruction>>,
     stylesheet: Stylesheet,
     resource_base_path: PathBuf,
-    handlebars: Handlebars<'static>,
 }
 
 impl CompiledTemplate for CompiledJsonTemplate {
     fn execute(&self, data: &Value) -> Result<Vec<IRNode>, PipelineError> {
-        let mut executor = TemplateExecutor::new(&self.handlebars, &self.stylesheet, &self.definitions);
+        let mut executor = TemplateExecutor::new(&self.stylesheet, &self.definitions);
         let ir_nodes = executor.build_tree(&self.instructions, data)?;
         Ok(ir_nodes)
     }
@@ -74,15 +72,11 @@ impl TemplateParser for JsonParser {
         let main_instructions = main_compiler.compile(&template_file._template)?;
 
         // Phase 4: Construct the final compiled artifact.
-        let mut handlebars = Handlebars::new();
-        handlebars.set_strict_mode(false);
-
         let compiled_template = CompiledJsonTemplate {
             instructions: main_instructions,
             definitions: compiled_definitions,
             stylesheet,
             resource_base_path,
-            handlebars,
         };
 
         Ok(Arc::new(compiled_template))
@@ -111,8 +105,8 @@ mod tests {
             "type": "Block",
             "children": [
               { "type": "Paragraph", "styleNames": ["title"], "children": [{ "type": "Text", "content": "Report for {{ customer.name }}" }] },
-              { "if": "{{ customer.is_premium }}", "then": { "type": "Paragraph", "children": [{ "type": "Text", "content": "Premium Member" }] } },
-              { "each": "products", "template": { "type": "Paragraph", "styleNames": ["item_para"], "children": [{ "type": "Text", "content": "- {{ this.name }}: ${{ this.price }}" }] } }
+              { "if": "customer.is_premium", "then": { "type": "Paragraph", "children": [{ "type": "Text", "content": "Premium Member" }] } },
+              { "each": "products", "template": { "type": "Paragraph", "styleNames": ["item_para"], "children": [{ "type": "Text", "content": "- {{ name }}: ${{ price }}" }] } }
             ]
           }
         }
@@ -151,5 +145,60 @@ mod tests {
         };
         // Just the title para
         assert_eq!(root_children.len(), 1);
+    }
+
+    #[test]
+    fn test_template_rendering_with_this_prefix() {
+        let template_src = r#"
+        {
+          "_stylesheet": {},
+          "_template": {
+            "type": "Block",
+            "children": [
+              { "type": "Paragraph", "children": [{ "type": "Text", "content": "User: {{ user.name }}" }] },
+              { "each": "items", "template": {
+                  "type": "Paragraph", "children": [
+                    { "type": "Text", "content": "Item: {{ this.name }}" }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+        "#;
+        let data = json!({
+            "user": { "name": "Alice" },
+            "items": [ { "name": "Anvil" }, { "name": "Rocket" } ]
+        });
+
+        let parser = JsonParser;
+        let compiled = parser.parse(template_src, PathBuf::new()).unwrap();
+        let tree = compiled.execute(&data).unwrap();
+
+        let root_children = match &tree[0] {
+            IRNode::Block { children, .. } => children,
+            _ => panic!("Expected root block"),
+        };
+        assert_eq!(root_children.len(), 3); // 1 para for user, 2 paras for items
+
+        // Check user name
+        let user_para_text = match &root_children[0] {
+            IRNode::Paragraph { children, .. } => match &children[0] {
+                InlineNode::Text(t) => t,
+                _ => panic!("Expected text node"),
+            },
+            _ => panic!("Expected paragraph"),
+        };
+        assert_eq!(user_para_text, "User: Alice");
+
+        // Check first item name
+        let item1_para_text = match &root_children[1] {
+            IRNode::Paragraph { children, .. } => match &children[0] {
+                InlineNode::Text(t) => t,
+                _ => panic!("Expected text node"),
+            },
+            _ => panic!("Expected paragraph"),
+        };
+        assert_eq!(item1_para_text, "Item: Anvil");
     }
 }

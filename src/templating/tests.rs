@@ -1,7 +1,9 @@
+// FILE: src/templating/tests.rs
+
 #![cfg(test)]
 
 use super::builders::*;
-use super::{Template, TemplateBuilder};
+use super::{p, Template, TemplateBuilder};
 use crate::core::style::color::Color;
 use crate::core::style::dimension::{Dimension, Margins, PageSize};
 use crate::core::style::font::FontWeight;
@@ -32,13 +34,15 @@ impl TemplateBuilder for UserBadge {
     fn build(self: Box<Self>) -> TemplateNode {
         let component = Flex::new()
             .style_name("badge")
-            .child(Paragraph::new().text(&self.name_path))
+            // FIX: Explicitly convert &String to &str using .as_str()
+            .child(Paragraph::new(self.name_path.as_str()))
             .child(
                 If::new(
                     &self.is_premium_path,
-                    Paragraph::new().child(Span::new().text("Premium").style_name("premium-text")),
+                    Paragraph::empty()
+                        .child(Span::new().text("Premium").style_name("premium-text")),
                 )
-                    .with_else(Paragraph::new().text("Standard")),
+                    .with_else(Paragraph::new("Standard")),
             );
 
         // The component's build logic returns another builder, so we must
@@ -48,13 +52,51 @@ impl TemplateBuilder for UserBadge {
 }
 
 #[test]
+fn test_inline_styling() {
+    let template = Template::new(Block::new().padding(Margins::all(20.0)).child(
+        p("Hello Inline Styles")
+            .font_size(24.0)
+            .font_weight(FontWeight::Bold)
+            .color(Color::gray(50)),
+    ));
+
+    let json_string = template.to_json().unwrap();
+    let produced_value: serde_json::Value = serde_json::from_str(&json_string).unwrap();
+
+    let expected_value = serde_json::json!({
+      "_stylesheet": {},
+      "_template": {
+        "type": "Block",
+        "styleOverride": {
+          "padding": { "top": 20.0, "right": 20.0, "bottom": 20.0, "left": 20.0 }
+        },
+        "children": [
+          {
+            "type": "Paragraph",
+            "styleOverride": {
+              "fontSize": 24.0,
+              "fontWeight": "Bold",
+              "color": { "r": 50, "g": 50, "b": 50 }
+            },
+            "children": [
+              { "type": "Text", "content": "Hello Inline Styles" }
+            ]
+          }
+        ]
+      }
+    });
+
+    assert_eq!(produced_value, expected_value);
+}
+
+#[test]
 fn test_full_template_with_control_flow() {
     let template = Template::new(
         Block::new()
             .child(UserBadge::new("{{customer.name}}", "customer.is_premium"))
             .child(Each::new(
                 "products",
-                Flex::new().child(Paragraph::new().text("Product: {{this.name}}")),
+                Flex::new().child(Paragraph::new("Product: {{this.name}}")),
             )),
     )
         .add_style(
@@ -79,7 +121,7 @@ fn test_full_template_with_control_flow() {
       "_stylesheet": {
         "styles": {
           "badge": { "padding": { "top": 10.0, "right": 10.0, "bottom": 10.0, "left": 10.0 } },
-          "premium-text": { "color": { "r": 212, "g": 175, "b": 55, "a": 1.0 } }
+          "premium-text": { "color": { "r": 212, "g": 175, "b": 55 } }
         }
       },
       "_template": {
@@ -135,12 +177,15 @@ fn test_full_template_with_control_flow() {
 fn test_template_with_definitions() {
     let template = Template::new(
         Block::new()
-            .child(Paragraph::new().text("Rendering user badge:"))
+            .child(Paragraph::new("Rendering user badge:"))
             .child(Render::new("user_badge_def")), // Use the Render builder
     )
         .add_style(
             "badge",
-            ElementStyle { padding: Some(Margins::all(5.0)), ..Default::default() },
+            ElementStyle {
+                padding: Some(Margins::all(5.0)),
+                ..Default::default()
+            },
         )
         .add_style(
             "premium-text",
@@ -163,7 +208,7 @@ fn test_template_with_definitions() {
       "_stylesheet": {
         "styles": {
           "badge": { "padding": { "top": 5.0, "right": 5.0, "bottom": 5.0, "left": 5.0 } },
-          "premium-text": { "color": { "r": 212, "g": 175, "b": 55, "a": 1.0 } }
+          "premium-text": { "color": { "r": 212, "g": 175, "b": 55 } }
         },
         "definitions": {
             "user_badge_def": {
@@ -199,11 +244,7 @@ fn test_template_with_definitions() {
 fn test_template_builder_serialization() {
     let mut template = Template::new(
         Block::new()
-            .child(
-                Paragraph::new()
-                    .style_name("title")
-                    .text("Invoice #12345"),
-            )
+            .child(Paragraph::new("Invoice #12345").style_name("title"))
             .child(PageBreak::new().master_name("landscape"))
             .child(
                 Table::new()
@@ -211,22 +252,20 @@ fn test_template_builder_serialization() {
                     .column(Column::new().width(Dimension::Percent(50.0)))
                     .header_row(
                         Row::new()
-                            .cell(Cell::new().child(Paragraph::new().text("Item")))
-                            .cell(Cell::new().child(Paragraph::new().text("Price"))),
+                            .cell(Cell::new().child(Paragraph::new("Item")))
+                            .cell(Cell::new().child(Paragraph::new("Price"))),
                     )
                     .body_row(
                         Row::new()
-                            .cell(Cell::new().child(Paragraph::new().text("Anvil")))
-                            .cell(Cell::new().child(Paragraph::new().text("100.00"))),
+                            .cell(Cell::new().child(Paragraph::new("Anvil")))
+                            .cell(Cell::new().child(Paragraph::new("100.00"))),
                     ),
             )
-            .child(
-                List::new().item(
-                    ListItem::new()
-                        .child(Paragraph::new().text("Note 1"))
-                        .child(Paragraph::new().text("Note 2")),
-                ),
-            ),
+            .child(List::new().item(
+                ListItem::new()
+                    .child(Paragraph::new("Note 1"))
+                    .child(Paragraph::new("Note 2")),
+            )),
     );
 
     template = template

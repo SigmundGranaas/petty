@@ -2,6 +2,7 @@ use crate::core::style::stylesheet::ElementStyle;
 use crate::parser::json::ast::{JsonNode, JsonParagraph, TemplateNode};
 use crate::templating::builders::{InlineImage, Span, Text};
 use crate::templating::node::TemplateBuilder;
+use crate::templating::style::impl_styled_widget;
 
 /// Builder for a `<Paragraph>` node.
 #[derive(Default, Clone)]
@@ -12,7 +13,17 @@ pub struct Paragraph {
 }
 
 impl Paragraph {
-    pub fn new() -> Self {
+    /// Creates a new Paragraph containing an initial piece of content.
+    /// The content can be a `&str`, `Text`, or `Span`.
+    pub fn new<T: Into<Box<dyn TemplateBuilder>>>(content: T) -> Self {
+        Self {
+            children: vec![content.into()],
+            ..Default::default()
+        }
+    }
+
+    /// Creates a new, empty Paragraph.
+    pub fn empty() -> Self {
         Self::default()
     }
 
@@ -24,11 +35,6 @@ impl Paragraph {
 
     pub fn style_name(mut self, name: &str) -> Self {
         self.style_names.push(name.to_string());
-        self
-    }
-
-    pub fn with_override(mut self, style: ElementStyle) -> Self {
-        self.style_override = style;
         self
     }
 
@@ -55,5 +61,33 @@ impl TemplateBuilder for Paragraph {
             style_override: self.style_override,
             children: self.children.into_iter().map(|c| c.build()).collect(),
         }))
+    }
+}
+
+impl_styled_widget!(Paragraph);
+
+// Helper conversions for the ergonomic `Paragraph::new()` constructor.
+
+impl From<&str> for Box<dyn TemplateBuilder> {
+    fn from(s: &str) -> Self {
+        Box::new(Text::new(s))
+    }
+}
+
+impl From<String> for Box<dyn TemplateBuilder> {
+    fn from(s: String) -> Self {
+        Box::new(Text::new(&s))
+    }
+}
+
+impl From<Text> for Box<dyn TemplateBuilder> {
+    fn from(t: Text) -> Self {
+        Box::new(t)
+    }
+}
+
+impl From<Span> for Box<dyn TemplateBuilder> {
+    fn from(s: Span) -> Self {
+        Box::new(s)
     }
 }

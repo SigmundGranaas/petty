@@ -64,6 +64,12 @@ impl LayoutNode for ParagraphNode {
         self.style.margin.top + content_height + self.style.margin.bottom
     }
 
+    fn measure_intrinsic_width(&self, _engine: &LayoutEngine) -> f32 {
+        // The max-content width is the sum of all atom widths on a single line.
+        // This simple sum is a good approximation for flex basis calculation.
+        self.atoms.iter().map(|a| a.width()).sum()
+    }
+
     fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
         // --- Vertical Margin Collapsing ---
         let margin_to_add = self.style.margin.top.max(ctx.last_v_margin);
@@ -82,7 +88,7 @@ impl LayoutNode for ParagraphNode {
         ctx.advance_cursor(margin_to_add);
         // The margin has been "used," so reset it for any subsequent children.
         ctx.last_v_margin = 0.0;
-        
+
         let available_width = ctx.bounds.width;
         let all_line_ranges = break_atoms_into_line_ranges(&self.atoms, available_width);
         let total_lines = all_line_ranges.len();

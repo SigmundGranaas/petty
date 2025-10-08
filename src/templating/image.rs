@@ -1,8 +1,8 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/templating/image.rs
-
+// FILE: /home/sigmund/RustroverProjects/petty/src/templating/image.rs
 use crate::core::style::stylesheet::ElementStyle;
 use crate::parser::json::ast::{JsonImage, JsonNode, TemplateNode};
 use crate::templating::node::TemplateBuilder;
+use crate::templating::style::impl_styled_widget;
 
 /// Builder for a block-level `<Image>` node.
 #[derive(Clone)]
@@ -25,11 +25,6 @@ impl Image {
         self.style_names.push(name.to_string());
         self
     }
-
-    pub fn with_override(mut self, style: ElementStyle) -> Self {
-        self.style_override = style;
-        self
-    }
 }
 
 impl TemplateBuilder for Image {
@@ -41,3 +36,5 @@ impl TemplateBuilder for Image {
         }))
     }
 }
+
+impl_styled_widget!(Image);

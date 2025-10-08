@@ -11,7 +11,7 @@
 
 pub mod core;
 mod error;
-mod parser;
+pub mod parser;
 mod pipeline;
 mod render;
 mod xpath;

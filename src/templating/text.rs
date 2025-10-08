@@ -1,8 +1,8 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/templating/text.rs
-
+// FILE: /home/sigmund/RustroverProjects/petty/src/templating/text.rs
 use crate::core::style::stylesheet::ElementStyle;
 use crate::parser::json::ast::{JsonHyperlink, JsonImage, JsonInlineContainer, JsonNode, TemplateNode};
 use crate::templating::node::TemplateBuilder;
+use crate::templating::style::impl_styled_widget;
 
 /// Builder for an inline `<Text>` node.
 #[derive(Clone)]
@@ -46,11 +46,6 @@ impl Span {
 
     pub fn style_name(mut self, name: &str) -> Self {
         self.style_names.push(name.to_string());
-        self
-    }
-
-    pub fn with_override(mut self, style: ElementStyle) -> Self {
-        self.style_override = style;
         self
     }
 
@@ -98,11 +93,6 @@ impl Hyperlink {
         self
     }
 
-    pub fn with_override(mut self, style: ElementStyle) -> Self {
-        self.style_override = style;
-        self
-    }
-
     pub fn text(self, content: &str) -> Self {
         self.child(Text::new(content))
     }
@@ -140,11 +130,6 @@ impl InlineImage {
         self.style_names.push(name.to_string());
         self
     }
-
-    pub fn with_override(mut self, style: ElementStyle) -> Self {
-        self.style_override = style;
-        self
-    }
 }
 
 impl TemplateBuilder for InlineImage {
@@ -156,3 +141,5 @@ impl TemplateBuilder for InlineImage {
         }))
     }
 }
+
+impl_styled_widget!(Span, Hyperlink, InlineImage);

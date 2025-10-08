@@ -10,6 +10,55 @@ fn select_pointer<'a>(context: &'a Value, path: &str) -> Vec<&'a Value> {
     context.pointer(path).map_or(vec![], |v| vec![v])
 }
 
+// --- PRIVATE HELPERS for PARSING ---
+
+/// Finds the last occurrence of a needle in a haystack, respecting single quotes.
+fn rfind_outside_quotes(haystack: &str, needle: &str) -> Option<usize> {
+    let mut in_quotes = false;
+    // Iterate backwards over character indices
+    for (i, c) in haystack.char_indices().rev() {
+        if c == '\'' {
+            // We need to determine if this quote is escaped, but for this simple parser, we assume not.
+            // To check correctly, we'd need to look at the character before it.
+            // For now, any quote toggles the state. We scan from the beginning to this point to be sure.
+            let mut quote_count = 0;
+            for quote_char in haystack[..i].chars() {
+                if quote_char == '\'' {
+                    quote_count += 1;
+                }
+            }
+            in_quotes = quote_count % 2 != 0;
+        }
+
+        if !in_quotes && haystack[i..].starts_with(needle) {
+            return Some(i);
+        }
+    }
+    None
+}
+
+/// Finds the first occurrence of a needle in a haystack, respecting single quotes.
+fn find_outside_quotes(haystack: &str, needle: &str) -> Option<usize> {
+    let mut in_quotes = false;
+    let mut i = 0;
+    while i <= haystack.len().saturating_sub(needle.len()) {
+        let current_char = haystack[i..].chars().next().unwrap_or(' ');
+        if current_char == '\'' {
+            in_quotes = !in_quotes;
+            i += 1;
+            continue;
+        }
+
+        if !in_quotes && haystack[i..].starts_with(needle) {
+            return Some(i);
+        } else {
+            i += current_char.len_utf8();
+        }
+    }
+    None
+}
+
+
 // --- PUBLIC API for SELECTION ---
 
 /// A pre-compiled representation of an XPath selection path.
@@ -129,8 +178,8 @@ pub fn parse_condition(expr: &str) -> Result<Condition, ParseError> {
 }
 
 fn parse_or_expr(expr: &str) -> Result<Condition, ParseError> {
-    // Find the last ' or ' to maintain left-to-right evaluation order.
-    if let Some(index) = expr.rfind(" or ") {
+    // Find the last ' or ' to maintain left-to-right evaluation order, respecting quotes.
+    if let Some(index) = rfind_outside_quotes(expr, " or ") {
         let lhs = parse_or_expr(&expr[..index])?;
         let rhs = parse_equality_expr(expr[index + 4..].trim())?;
         return Ok(Condition::Or(Box::new(lhs), Box::new(rhs)));
@@ -150,7 +199,8 @@ fn parse_equality_expr(expr: &str) -> Result<Condition, ParseError> {
         }
     }
 
-    if let Some((lhs_path, rhs_str)) = expr.split_once(" = ") {
+    if let Some(index) = find_outside_quotes(expr, " = ") {
+        let (lhs_path, rhs_str) = (&expr[..index], &expr[index + 3..]);
         let lhs_path = lhs_path.trim();
         let rhs_str = rhs_str.trim();
         let selection = parse_selection(lhs_path)?;
@@ -223,6 +273,9 @@ mod tests {
         // OR logic
         let or_cond = parse_condition("type = 'customer' or rating = 4.5").unwrap();
         assert!(or_cond.evaluate(&data, None));
+        // OR logic with quoted operator
+        let or_cond_quoted = parse_condition("name = 'customer or partner' or type = 'partner'").unwrap();
+        assert!(or_cond_quoted.evaluate(&data, None));
     }
 
     #[test]

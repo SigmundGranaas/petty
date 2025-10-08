@@ -141,6 +141,14 @@ pub trait LayoutNode: Debug + Send + Sync + CloneLayoutNode {
         0.0
     }
 
+    /// Measures the intrinsic "max-content" width of the node.
+    /// This is used for `flex-basis: auto` calculation where an element has no explicit width.
+    fn measure_intrinsic_width(&self, _engine: &LayoutEngine) -> f32 {
+        // Default implementation for nodes that don't have an obvious intrinsic width (e.g., Block).
+        // They will rely on explicit width/flex-basis or flex-grow properties.
+        0.0
+    }
+
     /// Returns the computed style of the node.
     fn style(&self) -> &Arc<ComputedStyle>;
 

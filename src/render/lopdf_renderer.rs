@@ -35,7 +35,6 @@ pub struct LopdfDocumentRenderer<W: Write + Send> {
 }
 
 /// Generates the specific font family name based on style (e.g., "Helvetica-Bold").
-/// This logic MUST mirror the logic in `FontManager`.
 fn get_styled_font_name(style: &Arc<ComputedStyle>) -> String {
     let family = &style.font_family;
     match style.font_weight {
@@ -49,9 +48,10 @@ impl<W: Write + Send> LopdfDocumentRenderer<W> {
         let stylesheet = Arc::new(stylesheet);
         let mut font_map = HashMap::new();
 
-        // Build the map of descriptive font names to internal PDF font names (F1, F2, etc.)
-        for (i, family_name) in layout_engine.font_manager.font_data.keys().enumerate() {
-            font_map.insert(family_name.clone(), format!("F{}", i + 1));
+        // --- FIX: Build the map from the FontManager's database ---
+        // It maps the font's PostScript name to an internal PDF name (F1, F2, etc.)
+        for (i, face) in layout_engine.font_manager.db().faces().enumerate() {
+            font_map.insert(face.post_script_name.clone(), format!("F{}", i + 1));
         }
 
         Ok(Self {
@@ -71,18 +71,15 @@ impl<W: Write + Send> DocumentRenderer<W> for LopdfDocumentRenderer<W> {
     fn begin_document(&mut self, writer: W) -> Result<(), RenderError> {
         // Build the font dictionary for the PDF Resources object
         let mut font_dict = Dictionary::new();
-        for (family_name, _font_data) in self.layout_engine.font_manager.font_data.iter() {
-            if let Some(internal_name) = self.font_map.get(family_name) {
-                // For simplicity, we'll assume all are Type1 Helvetica for now.
-                // A full implementation would parse the TTF to get the correct subtype.
+        // --- FIX: Iterate over the database to build the font dictionary ---
+        for face in self.layout_engine.font_manager.db().faces() {
+            if let Some(internal_name) = self.font_map.get(&face.post_script_name) {
                 let single_font_dict = dictionary! {
                     "Type" => "Font",
-                    "Subtype" => "Type1",
-                    "BaseFont" => family_name.clone(),
+                    "Subtype" => "Type1", // Simplified, would need TTF parsing for full correctness
+                    "BaseFont" => face.post_script_name.clone(),
                     "Encoding" => "WinAnsiEncoding",
                 };
-                // NOTE: A full implementation would require embedding the font program stream.
-                // This will work for standard fonts like Helvetica.
                 font_dict.set(internal_name.as_bytes(), Object::Dictionary(single_font_dict));
             }
         }
@@ -172,16 +169,18 @@ pub fn render_lopdf_page_to_bytes(
     let (page_width, page_height) =
         LopdfDocumentRenderer::<&mut Vec<u8>>::get_page_dimensions_pt(page_layout);
 
-    // Create a temporary PageContext to generate the content stream.
-    // The writer is a dummy, as we only need the generated operations.
-    // In a full implementation, we would need to create a font map here too.
-    let font_map = HashMap::new(); // Dummy for now.
+    // --- FIX: Create a font_map for the parallel rendering context ---
+    let mut font_map = HashMap::new();
+    for (i, face) in layout_engine.font_manager.db().faces().enumerate() {
+        font_map.insert(face.post_script_name.clone(), format!("F{}", i + 1));
+    }
+
     let mut page_ctx = PageContext::new(
         layout_engine,
         page_height,
         &font_map,
     );
-    // The layout engine is used for footer text measurement, and the stylesheet is needed for footer style.
+
     page_ctx.stylesheet = Some(stylesheet);
     // Render main elements
     for element in &task.elements {
@@ -203,7 +202,6 @@ pub fn render_lopdf_page_to_bytes(
     let content_stream = Stream::new(dictionary! {}, content.encode()?);
 
     // Manually write the objects to our byte buffer using the pre-allocated IDs.
-    // This is a simplified version of what lopdf's writer does.
     buffer.extend_from_slice(
         format!(
             "{} {} obj\n",
@@ -246,8 +244,6 @@ fn to_win_ansi(s: &str) -> Vec<u8> {
             '’' => bytes.push(146), // U+2019 RIGHT SINGLE QUOTATION MARK
             '“' => bytes.push(147), // U+201C LEFT DOUBLE QUOTATION MARK
             '”' => bytes.push(148), // U+201D RIGHT DOUBLE QUOTATION MARK
-            // For other common non-ASCII chars, add mappings here.
-            // This is a simplified mapping. A full one is more complex.
             c if c as u32 <= 127 => bytes.push(c as u8), // ASCII passthrough
             _ => bytes.push(b'?'), // Placeholder for unsupported characters
         }
