@@ -1,3 +1,4 @@
+
 // FILE: /home/sigmund/RustroverProjects/petty/src/parser/json/processor.rs
 //! Implements the public interface for the JSON parser, conforming to the
 //! `TemplateParser` and `CompiledTemplate` traits.
@@ -5,7 +6,7 @@
 use super::ast::JsonTemplateFile;
 use super::compiler::{Compiler, JsonInstruction};
 use super::executor::TemplateExecutor;
-use crate::core::idf::{IRNode};
+use crate::core::idf::IRNode;
 use crate::core::style::stylesheet::Stylesheet;
 use crate::error::PipelineError;
 use crate::parser::processor::{CompiledTemplate, TemplateParser};
@@ -46,7 +47,11 @@ impl CompiledTemplate for CompiledJsonTemplate {
 pub struct JsonParser;
 
 impl TemplateParser for JsonParser {
-    fn parse(&self, template_source: &str, resource_base_path: PathBuf) -> Result<Arc<dyn CompiledTemplate>, ParseError> {
+    fn parse(
+        &self,
+        template_source: &str,
+        resource_base_path: PathBuf,
+    ) -> Result<Arc<dyn CompiledTemplate>, ParseError> {
         // Phase 1: Deserialize the raw JSON string into our AST.
         let template_file: JsonTemplateFile = serde_json::from_str(template_source)?;
         let mut stylesheet = Stylesheet::from(template_file._stylesheet.clone());
@@ -86,6 +91,7 @@ impl TemplateParser for JsonParser {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::idf::InlineNode;
     use serde_json::json;
 
     fn get_test_template() -> &'static str {

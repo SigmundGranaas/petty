@@ -1,4 +1,3 @@
-// src/parser/xslt/util.rs
 use crate::parser::{Location, ParseError};
 use quick_xml::events::BytesStart;
 

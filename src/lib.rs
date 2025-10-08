@@ -14,8 +14,9 @@ mod error;
 pub mod parser;
 mod pipeline;
 mod render;
-mod xpath;
+pub mod xpath;
 pub mod templating;
+pub mod jpath;
 // --- Public API ---
 // By exposing only these top-level items, we provide a clean and focused
 // public interface for users of the library.

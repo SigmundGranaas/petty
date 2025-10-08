@@ -1,4 +1,3 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/json/ast.rs
 //! Defines the Abstract Syntax Tree (AST) for the JSON template format as it is
 //! parsed from the source file by Serde. This is the **input** representation.
 
@@ -20,14 +19,14 @@ pub enum TemplateNode {
 pub enum ControlNode {
     /// Iterates over an array in the data context.
     Each {
-        /// A JSON pointer or Handlebars expression resolving to an array.
+        /// A JPath expression resolving to an array.
         each: String,
         /// The template to instantiate for each item in the array.
         template: Box<TemplateNode>,
     },
     /// Conditionally renders a template.
     If {
-        /// A Handlebars expression that evaluates to a truthy value.
+        /// A JPath expression that evaluates to a truthy value.
         #[serde(rename = "if")]
         test: String,
         /// The template to render if the condition is true.

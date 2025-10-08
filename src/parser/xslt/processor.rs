@@ -1,6 +1,3 @@
-//! Implements the public interface for the XSLT parser, conforming to the
-//! `TemplateParser` and `CompiledTemplate` traits.
-
 use super::ast::CompiledStylesheet;
 use super::compiler;
 use super::executor;

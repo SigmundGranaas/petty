@@ -1,7 +1,6 @@
 use crate::core::style::dimension::Dimension;
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
-use crate::xpath::{Condition, Selection};
-use handlebars::Handlebars;
+use crate::xpath::ast::Expression;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -20,7 +19,7 @@ pub struct PreparsedStyles {
 #[derive(Debug, Clone, PartialEq)]
 pub struct WithParam {
     pub name: String,
-    pub select: Selection,
+    pub select: Expression,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -38,8 +37,6 @@ pub struct CompiledStylesheet {
     pub template_rules: HashMap<Option<String>, Vec<TemplateRule>>,
     pub named_templates: HashMap<String, PreparsedTemplate>,
     pub resource_base_path: PathBuf,
-    // Handlebars is needed at execution time for {{...}} expressions
-    pub handlebars: Handlebars<'static>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -57,22 +54,22 @@ pub enum XsltInstruction {
         attrs: HashMap<String, String>,
     },
     If {
-        test: Condition,
+        test: Expression,
         body: PreparsedTemplate,
     },
     ForEach {
-        select: Selection,
+        select: Expression,
         body: PreparsedTemplate,
     },
     ValueOf {
-        select: Selection,
+        select: Expression,
     },
     CallTemplate {
         name: String,
         params: Vec<WithParam>,
     },
     ApplyTemplates {
-        select: Option<Selection>,
+        select: Option<Expression>,
         mode: Option<String>,
     },
     Table {
