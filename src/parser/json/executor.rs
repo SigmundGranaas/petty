@@ -7,7 +7,7 @@ use super::compiler::{
 };
 use crate::core::idf::{IRNode, InlineNode, TableBody, TableCell, TableHeader, TableRow};
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
-use crate::jpath::{self, engine, functions::FunctionRegistry};
+use crate::parser::jpath::{self, engine, functions::FunctionRegistry};
 use crate::parser::ParseError;
 use serde_json::Value;
 use std::collections::HashMap;

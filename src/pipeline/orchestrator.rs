@@ -112,7 +112,8 @@ impl DocumentPipeline {
                 while let Ok(result) = rx1_clone.recv_blocking() {
                     let (index, work_result) = match result {
                         Ok((index, context_arc)) => {
-                            let layout_result = template_clone.execute(&context_arc).and_then(|ir_nodes| {
+                            let data_source_string = serde_json::to_string(&*context_arc).map_err(PipelineError::from).unwrap();
+                            let layout_result = template_clone.execute(&data_source_string).and_then(|ir_nodes| {
                                 finish_layout_and_resource_loading(
                                     worker_id,
                                     ir_nodes,

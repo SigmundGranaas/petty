@@ -5,7 +5,7 @@
 use super::ast::{self, ControlNode, JsonNode, TemplateNode};
 use crate::core::idf::TableColumnDefinition;
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
-use crate::jpath::{self, Expression};
+use crate::parser::jpath::{self, Expression};
 use crate::parser::ParseError;
 use itertools::Itertools;
 use std::collections::HashMap;
@@ -218,7 +218,7 @@ impl<'a> Compiler<'a> {
 mod tests {
     use super::*;
     use crate::core::style::stylesheet::ElementStyle;
-    use crate::jpath::ast::Selection;
+    use crate::parser::jpath::ast::Selection;
     use crate::parser::json::ast::JsonParagraph;
     use serde_json::json;
     use std::collections::HashMap;

@@ -29,11 +29,14 @@ pub enum ParseError {
     #[error("JSON parsing error: {0}")]
     JsonParse(#[from] serde_json::Error),
 
-    #[error("XML parsing error at {location}: {source}")]
+    #[error("XML parsing error (quick_xml) at {location}: {source}")]
     Xml {
         source: quick_xml::Error,
         location: Location,
     },
+
+    #[error("XML parsing error (roxmltree): {0}")]
+    Roxmltree(#[from] roxmltree::Error),
 
     #[error("XML attribute parsing error: {0}")]
     XmlAttr(#[from] quick_xml::events::attributes::AttrError),
@@ -45,7 +48,7 @@ pub enum ParseError {
     StrUtf8(#[from] std::str::Utf8Error),
 
     #[error("Failed to parse string '{1}' as a number: {0}")]
-    FloatParse(ParseFloatError, String),
+    FloatParse(#[source] ParseFloatError, String),
 
     #[error("Template syntax error: {msg} ({location})")]
     TemplateSyntax { msg: String, location: Location },

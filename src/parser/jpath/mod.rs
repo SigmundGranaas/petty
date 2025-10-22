@@ -19,7 +19,7 @@ pub use parser::parse_expression;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{json, Value};
+    use serde_json::{json};
     use std::collections::HashMap;
 
     #[test]

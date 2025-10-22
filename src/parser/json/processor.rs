@@ -1,4 +1,3 @@
-
 // FILE: /home/sigmund/RustroverProjects/petty/src/parser/json/processor.rs
 //! Implements the public interface for the JSON parser, conforming to the
 //! `TemplateParser` and `CompiledTemplate` traits.
@@ -27,9 +26,10 @@ pub struct CompiledJsonTemplate {
 }
 
 impl CompiledTemplate for CompiledJsonTemplate {
-    fn execute(&self, data: &Value) -> Result<Vec<IRNode>, PipelineError> {
+    fn execute(&self, data_source: &str) -> Result<Vec<IRNode>, PipelineError> {
+        let data: Value = serde_json::from_str(data_source)?;
         let mut executor = TemplateExecutor::new(&self.stylesheet, &self.definitions);
-        let ir_nodes = executor.build_tree(&self.instructions, data)?;
+        let ir_nodes = executor.build_tree(&self.instructions, &data)?;
         Ok(ir_nodes)
     }
 
@@ -128,7 +128,7 @@ mod tests {
             "products": [ { "name": "Anvil", "price": 100 }, { "name": "Rocket", "price": 5000 } ]
         });
 
-        let tree = compiled_template.execute(&data).unwrap();
+        let tree = compiled_template.execute(&data.to_string()).unwrap();
         // The root is not part of the children count from build_tree
         assert_eq!(tree.len(), 1);
         let root_children = match &tree[0] {
@@ -144,7 +144,7 @@ mod tests {
         let parser = JsonParser;
         let compiled_template = parser.parse(get_test_template(), PathBuf::new()).unwrap();
         let data = json!({ "customer": { "name": "Contoso", "is_premium": false }, "products": [] });
-        let tree = compiled_template.execute(&data).unwrap();
+        let tree = compiled_template.execute(&data.to_string()).unwrap();
         let root_children = match &tree[0] {
             IRNode::Block { children, .. } => children,
             _ => panic!(),
@@ -179,7 +179,7 @@ mod tests {
 
         let parser = JsonParser;
         let compiled = parser.parse(template_src, PathBuf::new()).unwrap();
-        let tree = compiled.execute(&data).unwrap();
+        let tree = compiled.execute(&data.to_string()).unwrap();
 
         let root_children = match &tree[0] {
             IRNode::Block { children, .. } => children,

@@ -1,6 +1,8 @@
+// FILE: src/parser/xslt/ast.rs
 use crate::core::style::dimension::Dimension;
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
-use crate::xpath::ast::Expression;
+use crate::parser::xpath::Expression;
+use crate::parser::xslt::pattern::Pattern;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -24,18 +26,31 @@ pub struct WithParam {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct TemplateRule {
-    pub match_pattern: String,
+    pub pattern: Pattern, // Changed from String to compiled Pattern
     pub priority: f64,
     pub mode: Option<String>,
+    pub body: PreparsedTemplate,
+}
+
+/// Represents a declared `<xsl:param>` in a template.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Param {
+    pub name: String,
+    pub default_value: Option<Expression>,
+}
+
+/// Represents a compiled, named `<xsl:template name="...">`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NamedTemplate {
+    pub params: Vec<Param>,
     pub body: PreparsedTemplate,
 }
 
 #[derive(Debug, Clone)]
 pub struct CompiledStylesheet {
     pub stylesheet: Stylesheet,
-    pub root_template: Option<PreparsedTemplate>,
     pub template_rules: HashMap<Option<String>, Vec<TemplateRule>>,
-    pub named_templates: HashMap<String, PreparsedTemplate>,
+    pub named_templates: HashMap<String, Arc<NamedTemplate>>,
     pub resource_base_path: PathBuf,
 }
 
@@ -64,6 +79,10 @@ pub enum XsltInstruction {
     ValueOf {
         select: Expression,
     },
+    Variable {
+        name: String,
+        select: Expression,
+    },
     CallTemplate {
         name: String,
         params: Vec<WithParam>,
@@ -74,7 +93,7 @@ pub enum XsltInstruction {
     },
     Table {
         styles: PreparsedStyles,
-        columns: Vec<Dimension>, // Simplified for now
+        columns: Vec<Dimension>,
         header: Option<PreparsedTemplate>,
         body: PreparsedTemplate,
     },
