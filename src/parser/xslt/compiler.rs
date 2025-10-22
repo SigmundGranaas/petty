@@ -1,20 +1,22 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/compiler.rs
+// FILE: src/parser/xslt/compiler.rs
 //! Defines the CompilerBuilder, which constructs a `CompiledStylesheet` by listening to a parser driver.
 use super::ast::{
-    CompiledStylesheet, NamedTemplate, Param, PreparsedStyles, PreparsedTemplate, TemplateRule,
-    WithParam, XsltInstruction,
+    AttributeValueTemplate, CompiledStylesheet, NamedTemplate, Param, PreparsedStyles,
+    PreparsedTemplate, SortDataType, SortKey, SortOrder, TemplateRule, When, WithParam,
+    XsltInstruction,
 };
 use super::parser;
 use super::pattern;
 use super::util::{
-    get_attr_owned_optional, get_attr_owned_required, get_line_col_from_pos, OwnedAttributes,
+    get_attr_owned_optional, get_attr_owned_required, get_line_col_from_pos, parse_avt,
+    OwnedAttributes,
 };
 use crate::core::style::dimension::Dimension;
 use crate::core::style::stylesheet::{ElementStyle, PageLayout, Stylesheet};
 use crate::parser::style::{apply_style_property, parse_page_size};
 use crate::parser::style_parsers::{self, parse_length, parse_shorthand_margins, run_parser};
 use crate::parser::{style, Location, ParseError};
-use crate::parser::xpath::{self, Expression};
+use crate::parser::xpath;
 use quick_xml::events::{BytesEnd, BytesStart};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -51,7 +53,7 @@ enum BuilderState {
         name: String,
         style: ElementStyle,
     },
-    Attribute(String), // The attribute name
+    Attribute(String), // The attribute name for an xsl:attribute-set
     InstructionBody(OwnedAttributes),
     XslText, // State for handling <xsl:text> content preservation
     Table(OwnedAttributes),
@@ -61,6 +63,20 @@ enum BuilderState {
         name: String,
         params: Vec<WithParam>,
     },
+    Choose {
+        whens: Vec<When>,
+        otherwise: Option<PreparsedTemplate>,
+    },
+    When(OwnedAttributes),
+    Otherwise,
+    Sortable {
+        attrs: OwnedAttributes,
+        sort_keys: Vec<SortKey>,
+        saw_non_sort_child: bool,
+    },
+    // This is for `<xsl:attribute name="...">`, which generates an instruction.
+    // It's different from `Attribute(String)` which is for `<xsl:attribute-set>`.
+    InstructionAttribute(OwnedAttributes),
 }
 
 /// A stateful builder that constructs a `CompiledStylesheet` from parser events.
@@ -88,12 +104,7 @@ impl CompilerBuilder {
         if self.stylesheet.default_page_master_name.is_none() {
             self.stylesheet.default_page_master_name = self.stylesheet.page_masters.keys().next().cloned();
         }
-        if !self.template_rules.values().flatten().any(|r| r.pattern.to_string() == "/") {
-            return Err(ParseError::TemplateStructure {
-                message: "Could not find root <xsl:template match=\"/\">. This is required.".to_string(),
-                location: Location { line: 0, col: 0 },
-            });
-        }
+
         for rules in self.template_rules.values_mut() {
             rules.sort_by(|a, b| b.priority.partial_cmp(&a.priority).unwrap_or(std::cmp::Ordering::Equal));
         }
@@ -122,6 +133,11 @@ impl StylesheetBuilder for CompilerBuilder {
     fn start_element(&mut self, e: &BytesStart, attrs: OwnedAttributes, pos: usize, source: &str) -> Result<(), ParseError> {
         let qname_binding = e.name();
         let name = qname_binding.as_ref();
+        let location = get_line_col_from_pos(source, pos).into();
+
+        if let Some(BuilderState::Sortable { saw_non_sort_child, .. }) = self.state_stack.last_mut() {
+            *saw_non_sort_child = true;
+        }
 
         self.instruction_stack.push(Vec::new());
 
@@ -139,8 +155,13 @@ impl StylesheetBuilder for CompilerBuilder {
                 self.state_stack.push(BuilderState::AttributeSet { name, style: ElementStyle::default() });
             },
             b"xsl:attribute" => {
-                let attr_name = get_attr_owned_required(&attrs, b"name", name, pos, source)?;
-                self.state_stack.push(BuilderState::Attribute(attr_name));
+                // This can be a direct child of attribute-set or an instruction.
+                if matches!(self.state_stack.last(), Some(BuilderState::AttributeSet { .. })) {
+                    let attr_name = get_attr_owned_required(&attrs, b"name", name, pos, source)?;
+                    self.state_stack.push(BuilderState::Attribute(attr_name));
+                } else {
+                    self.state_stack.push(BuilderState::InstructionAttribute(attrs));
+                }
             },
             b"xsl:text" => self.state_stack.push(BuilderState::XslText),
             b"fo:table" | b"table" => self.state_stack.push(BuilderState::Table(attrs)),
@@ -150,6 +171,25 @@ impl StylesheetBuilder for CompilerBuilder {
                 let name = get_attr_owned_required(&attrs, b"name", name, pos, source)?;
                 self.state_stack.push(BuilderState::CallTemplate { name, params: vec![] });
             },
+            b"xsl:choose" => {
+                self.state_stack.push(BuilderState::Choose { whens: vec![], otherwise: None });
+            },
+            b"xsl:when" => {
+                if !matches!(self.state_stack.last(), Some(BuilderState::Choose {..})) {
+                    return Err(ParseError::TemplateStructure { message: "<xsl:when> must be a direct child of <xsl:choose>".to_string(), location });
+                }
+                self.state_stack.push(BuilderState::When(attrs));
+            },
+            b"xsl:otherwise" => {
+                if !matches!(self.state_stack.last(), Some(BuilderState::Choose {..})) {
+                    return Err(ParseError::TemplateStructure { message: "<xsl:otherwise> must be a direct child of <xsl:choose>".to_string(), location });
+                }
+                self.state_stack.push(BuilderState::Otherwise);
+            },
+            b"xsl:for-each" | b"xsl:apply-templates" => {
+                self.state_stack.push(BuilderState::Sortable { attrs, sort_keys: vec![], saw_non_sort_child: false });
+            },
+            b"xsl:copy" => self.state_stack.push(BuilderState::InstructionBody(attrs)),
             _ => self.state_stack.push(BuilderState::InstructionBody(attrs)),
         }
         Ok(())
@@ -159,6 +199,12 @@ impl StylesheetBuilder for CompilerBuilder {
         let qname_binding = e.name();
         let name = qname_binding.as_ref();
         let location = get_line_col_from_pos(source, pos).into();
+
+        if name != b"xsl:sort" {
+            if let Some(BuilderState::Sortable { saw_non_sort_child, .. }) = self.state_stack.last_mut() {
+                *saw_non_sort_child = true;
+            }
+        }
 
         let instr = match name {
             b"fo:simple-page-master" => {
@@ -196,10 +242,31 @@ impl StylesheetBuilder for CompilerBuilder {
                     params.push(param);
                 }
                 return Ok(());
+            },
+            b"xsl:sort" => {
+                if let Some(BuilderState::Sortable { sort_keys, saw_non_sort_child, .. }) = self.state_stack.last_mut() {
+                    if *saw_non_sort_child {
+                        return Err(ParseError::TemplateStructure{ message: "<xsl:sort> must appear before any other content in its parent.".to_string(), location });
+                    }
+                    let select_str = get_attr_owned_optional(&attrs, b"select")?.unwrap_or_else(|| ".".to_string());
+                    let order = match get_attr_owned_optional(&attrs, b"order")?.as_deref() {
+                        Some("descending") => SortOrder::Descending,
+                        _ => SortOrder::Ascending,
+                    };
+                    let data_type = match get_attr_owned_optional(&attrs, b"data-type")?.as_deref() {
+                        Some("number") => SortDataType::Number,
+                        _ => SortDataType::Text,
+                    };
+                    sort_keys.push(SortKey { select: xpath::parse_expression(&select_str)?, order, data_type });
+                } else {
+                    return Err(ParseError::TemplateStructure{ message: "<xsl:sort> can only appear inside <xsl:for-each> or <xsl:apply-templates>.".to_string(), location });
+                }
+                return Ok(());
             }
             b"xsl:value-of" => XsltInstruction::ValueOf { select: xpath::parse_expression(&get_attr_owned_required(&attrs, b"select", name, pos, source)?)? },
+            b"xsl:copy-of" => XsltInstruction::CopyOf { select: xpath::parse_expression(&get_attr_owned_required(&attrs, b"select", name, pos, source)?)? },
             b"xsl:variable" => XsltInstruction::Variable { name: get_attr_owned_required(&attrs, b"name", name, pos, source)?, select: xpath::parse_expression(&get_attr_owned_required(&attrs, b"select", name, pos, source)?)? },
-            b"xsl:apply-templates" => XsltInstruction::ApplyTemplates { select: get_attr_owned_optional(&attrs, b"select")?.map(|s| xpath::parse_expression(&s)).transpose()?, mode: get_attr_owned_optional(&attrs, b"mode")? },
+            b"xsl:apply-templates" => XsltInstruction::ApplyTemplates { select: get_attr_owned_optional(&attrs, b"select")?.map(|s| xpath::parse_expression(&s)).transpose()?, mode: get_attr_owned_optional(&attrs, b"mode")?, sort_keys: vec![] },
             b"page-break" => XsltInstruction::PageBreak { master_name: get_attr_owned_optional(&attrs, b"master-name")? },
             b"column" | b"fo:table-column" => {
                 if let Some(BuilderState::TableColumns) = self.state_stack.last() {
@@ -247,7 +314,7 @@ impl StylesheetBuilder for CompilerBuilder {
                 let template = NamedTemplate { params, body: PreparsedTemplate(body) };
                 self.named_templates.insert(name, Arc::new(template));
             }
-            BuilderState::AttributeSet { name, mut style } => {
+            BuilderState::AttributeSet { name, style } => {
                 // When the attribute set ends, we have already processed all its children
                 // and the style object is complete.
                 self.stylesheet.styles.insert(name, Arc::new(style));
@@ -268,7 +335,7 @@ impl StylesheetBuilder for CompilerBuilder {
             BuilderState::InstructionBody(attrs) => {
                 let instr = match name {
                     b"xsl:if" => XsltInstruction::If { test: xpath::parse_expression(&get_attr_owned_required(&attrs, b"test", name, pos, source)?)?, body: PreparsedTemplate(body) },
-                    b"xsl:for-each" => XsltInstruction::ForEach { select: xpath::parse_expression(&get_attr_owned_required(&attrs, b"select", name, pos, source)?)?, body: PreparsedTemplate(body) },
+                    b"xsl:copy" => XsltInstruction::Copy { styles: resolve_styles(&attrs, &self.stylesheet.styles, location)?, body: PreparsedTemplate(body) },
                     _ => {
                         let styles = resolve_styles(&attrs, &self.stylesheet.styles, location)?;
                         let non_style_attrs = get_non_style_attributes(&attrs)?;
@@ -277,6 +344,11 @@ impl StylesheetBuilder for CompilerBuilder {
                 };
                 if let Some(parent) = self.instruction_stack.last_mut() { parent.push(instr); }
             },
+            BuilderState::InstructionAttribute(attrs) => {
+                let attr_name = get_attr_owned_required(&attrs, b"name", name, pos, source)?;
+                let instr = XsltInstruction::Attribute { name: attr_name, body: PreparsedTemplate(body) };
+                if let Some(parent) = self.instruction_stack.last_mut() { parent.push(instr); }
+            }
             BuilderState::Table(attrs) => {
                 let mut header = None;
                 let mut columns = Vec::new();
@@ -302,12 +374,58 @@ impl StylesheetBuilder for CompilerBuilder {
                 let instr = XsltInstruction::CallTemplate { name, params };
                 if let Some(parent) = self.instruction_stack.last_mut() { parent.push(instr); }
             },
+            BuilderState::When(attrs) => {
+                let test = xpath::parse_expression(&get_attr_owned_required(&attrs, b"test", name, pos, source)?)?;
+                let when_block = When { test, body: PreparsedTemplate(body) };
+                if let Some(BuilderState::Choose { whens, .. }) = self.state_stack.last_mut() {
+                    whens.push(when_block);
+                } else {
+                    return Err(ParseError::TemplateStructure { message: "Internal compiler error: <xsl:when> not inside <xsl:choose>.".to_string(), location });
+                }
+            },
+            BuilderState::Otherwise => {
+                if let Some(BuilderState::Choose { otherwise, .. }) = self.state_stack.last_mut() {
+                    if otherwise.is_some() {
+                        return Err(ParseError::TemplateStructure { message: "Only one <xsl:otherwise> is allowed inside <xsl:choose>".to_string(), location });
+                    }
+                    *otherwise = Some(PreparsedTemplate(body));
+                } else {
+                    return Err(ParseError::TemplateStructure { message: "Internal compiler error: <xsl:otherwise> not inside <xsl:choose>.".to_string(), location });
+                }
+            },
+            BuilderState::Choose { whens, otherwise } => {
+                let instr = XsltInstruction::Choose { whens, otherwise };
+                if let Some(parent) = self.instruction_stack.last_mut() {
+                    parent.push(instr);
+                }
+            },
+            BuilderState::Sortable { attrs, sort_keys, .. } => {
+                let instr = match name {
+                    b"xsl:for-each" => XsltInstruction::ForEach {
+                        select: xpath::parse_expression(&get_attr_owned_required(&attrs, b"select", name, pos, source)?)?,
+                        sort_keys,
+                        body: PreparsedTemplate(body),
+                    },
+                    b"xsl:apply-templates" => XsltInstruction::ApplyTemplates {
+                        select: get_attr_owned_optional(&attrs, b"select")?.map(|s| xpath::parse_expression(&s)).transpose()?,
+                        mode: get_attr_owned_optional(&attrs, b"mode")?,
+                        sort_keys,
+                    },
+                    _ => unreachable!(),
+                };
+                if let Some(parent) = self.instruction_stack.last_mut() { parent.push(instr); }
+            }
             _ => {}
         }
         Ok(())
     }
 
     fn text(&mut self, text: String) -> Result<(), ParseError> {
+        if let Some(BuilderState::Sortable { saw_non_sort_child, .. }) = self.state_stack.last_mut() {
+            if !text.trim().is_empty() {
+                *saw_non_sort_child = true;
+            }
+        }
         let is_in_xsl_text = matches!(self.state_stack.last(), Some(BuilderState::XslText));
 
         // Preserve whitespace content if it's from <xsl:text>.
@@ -330,11 +448,28 @@ fn resolve_styles(attrs: &OwnedAttributes, styles: &HashMap<String, Arc<ElementS
     style::parse_fo_attributes(attrs, &mut style_override)?;
     Ok(PreparsedStyles { style_sets, style_override: if style_override == ElementStyle::default() { None } else { Some(style_override) } })
 }
-fn get_non_style_attributes(attributes: &OwnedAttributes) -> Result<HashMap<String, String>, ParseError> {
-    attributes.iter().filter_map(|(k, v)| {
-        let key_str = String::from_utf8_lossy(k);
-        if !key_str.starts_with("font-") && !key_str.starts_with("margin-") && !key_str.starts_with("padding-") && key_str != "style" && key_str != "use-attribute-sets" {
-            String::from_utf8(v.clone()).ok().map(|val| Ok((key_str.into_owned(), val)))
-        } else { None }
-    }).collect()
+
+fn get_non_style_attributes(
+    attributes: &OwnedAttributes,
+) -> Result<HashMap<String, AttributeValueTemplate>, ParseError> {
+    attributes
+        .iter()
+        .filter_map(|(k, v)| {
+            let key_str = String::from_utf8_lossy(k);
+            if !key_str.starts_with("font-")
+                && !key_str.starts_with("margin-")
+                && !key_str.starts_with("padding-")
+                && key_str != "style"
+                && key_str != "use-attribute-sets"
+            {
+                let res = from_utf8(v)
+                    .map_err(ParseError::from)
+                    .and_then(|val_str| parse_avt(val_str))
+                    .map(|avt| (key_str.into_owned(), avt));
+                Some(res)
+            } else {
+                None
+            }
+        })
+        .collect()
 }

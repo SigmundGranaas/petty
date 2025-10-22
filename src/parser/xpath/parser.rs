@@ -7,10 +7,10 @@ use nom::{
     branch::alt,
     bytes::complete::{tag, take_while, take_while1},
     character::complete::{char, multispace0},
-    combinator::{map, opt, recognize},
+    combinator::{map, opt, recognize, peek},
     multi::{many0, separated_list0},
     number::complete::double,
-    sequence::{delimited, pair, preceded},
+    sequence::{delimited, pair, preceded, terminated},
     IResult,
 };
 
@@ -213,8 +213,8 @@ fn q_name(input: &str) -> IResult<&str, String> {
 
 fn node_type_test(input: &str) -> IResult<&str, NodeTest> {
     map(
-        pair(alt((tag("text"), tag("node"))), pair(ws(char('(')), ws(char(')')))),
-        |(node_type, _)| match node_type {
+        terminated(alt((tag("text"), tag("node"))), pair(ws(char('(')), ws(char(')')))),
+        |node_type: &str| match node_type {
             "text" => NodeTest::NodeType(NodeTypeTest::Text),
             _ => NodeTest::NodeType(NodeTypeTest::Node),
         },
@@ -310,7 +310,17 @@ fn location_path(input: &str) -> IResult<&str, LocationPath> {
 
 // --- Function Call Parser ---
 fn function_call(input: &str) -> IResult<&str, Expression> {
+    // A function call must be a QName followed by '('. This lookahead avoids
+    // parsing a simple step name (like 'foo' in 'foo/bar') as a function.
     let (i, name) = q_name(input)?;
+    let (i, _) = peek(ws(char('(')))(i)?;
+
+    // Node-type tests like text() are not functions. They are handled by the step parser.
+    // If the name is a node type test, fail this parser.
+    if name == "text" || name == "node" {
+        return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Verify)));
+    }
+
     let (i, _) = multispace0(i)?;
     let (i, args) =
         delimited(char('('), separated_list0(ws(char(',')), expression), char(')'))(i)?;

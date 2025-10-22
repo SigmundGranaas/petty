@@ -6,7 +6,7 @@ use crate::parser::xpath::parser as xpath_parser;
 use crate::parser::ParseError;
 use nom::branch::alt;
 use nom::bytes::complete::tag;
-use nom::combinator::{map, opt};
+use nom::combinator::map;
 use nom::multi::separated_list1;
 use nom::sequence::preceded;
 use nom::IResult;

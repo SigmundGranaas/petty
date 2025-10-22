@@ -54,30 +54,87 @@ pub struct CompiledStylesheet {
     pub resource_base_path: PathBuf,
 }
 
+/// Represents a compiled `<xsl:when>` block.
+#[derive(Debug, Clone, PartialEq)]
+pub struct When {
+    pub test: Expression,
+    pub body: PreparsedTemplate,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortOrder {
+    Ascending,
+    Descending,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortDataType {
+    Text,
+    Number,
+}
+
+/// Represents a compiled `<xsl:sort>` instruction.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SortKey {
+    pub select: Expression,
+    pub order: SortOrder,
+    pub data_type: SortDataType,
+}
+
+/// A part of an Attribute Value Template.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AvtPart {
+    Static(String),
+    Dynamic(Expression),
+}
+
+/// A pre-compiled attribute value that can contain XPath expressions.
+#[derive(Debug, Clone, PartialEq)]
+pub enum AttributeValueTemplate {
+    Static(String),
+    Dynamic(Vec<AvtPart>),
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum XsltInstruction {
     Text(String),
     ContentTag {
         tag_name: Vec<u8>,
         styles: PreparsedStyles,
-        attrs: HashMap<String, String>,
+        attrs: HashMap<String, AttributeValueTemplate>,
         body: PreparsedTemplate,
     },
     EmptyTag {
         tag_name: Vec<u8>,
         styles: PreparsedStyles,
-        attrs: HashMap<String, String>,
+        attrs: HashMap<String, AttributeValueTemplate>,
+    },
+    Attribute {
+        name: String,
+        body: PreparsedTemplate,
     },
     If {
         test: Expression,
         body: PreparsedTemplate,
     },
+    Choose {
+        whens: Vec<When>,
+        otherwise: Option<PreparsedTemplate>,
+    },
     ForEach {
         select: Expression,
+        sort_keys: Vec<SortKey>,
         body: PreparsedTemplate,
     },
     ValueOf {
         select: Expression,
+    },
+    CopyOf {
+        select: Expression,
+    },
+    Copy {
+        styles: PreparsedStyles,
+        body: PreparsedTemplate,
     },
     Variable {
         name: String,
@@ -90,6 +147,7 @@ pub enum XsltInstruction {
     ApplyTemplates {
         select: Option<Expression>,
         mode: Option<String>,
+        sort_keys: Vec<SortKey>,
     },
     Table {
         styles: PreparsedStyles,
