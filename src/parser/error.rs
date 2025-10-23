@@ -1,3 +1,4 @@
+// FILE: /home/sigmund/RustroverProjects/petty/src/parser/error.rs
 //! Defines the unified, rich error types for all parsing operations.
 use std::fmt;
 use std::num::ParseFloatError;

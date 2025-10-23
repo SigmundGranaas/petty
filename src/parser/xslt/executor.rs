@@ -1,70 +1,203 @@
-// FILE: src/parser/xslt/executor.rs
+// FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/executor.rs
+// FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/executor.rs
+//! The stateful executor for an XSLT program. It orchestrates the execution flow,
+//! manages state (like variables), and delegates output generation to an `OutputBuilder`.
+
 use super::ast::{
     AttributeValueTemplate, AvtPart, CompiledStylesheet, PreparsedStyles, PreparsedTemplate,
     SortDataType, SortKey, SortOrder, TemplateRule, XsltInstruction,
 };
-use crate::core::idf::{IRNode, InlineNode};
-use crate::parser::datasource::{DataSourceNode, NodeType};
-use crate::parser::xpath::{self, engine, functions::FunctionRegistry, XPathValue};
+use super::executor_handlers;
+use super::idf_builder::IdfBuilder;
+use super::output::OutputBuilder;
+use crate::parser::xslt::datasource::{DataSourceNode, NodeType};
+use crate::parser::xslt::xpath::{self, engine, functions::FunctionRegistry, XPathValue};
 use crate::parser::ParseError;
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::marker::PhantomData;
+
+// --- Execution Error Handling ---
+
+#[derive(Debug)]
+pub enum ExecutionError {
+    XPath(String),
+    UnknownNamedTemplate(String),
+    FunctionError {
+        function: String,
+        message: String,
+    },
+    TypeError(String),
+    // For errors from parsing AVTs etc. at runtime.
+    Parse(ParseError),
+}
+
+impl fmt::Display for ExecutionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ExecutionError::XPath(msg) => write!(f, "XPath evaluation failed: {}", msg),
+            ExecutionError::UnknownNamedTemplate(name) => write!(f, "Call to unknown named template: '{}'", name),
+            ExecutionError::FunctionError { function, message } => write!(f, "Error in function '{}': {}", function, message),
+            ExecutionError::TypeError(msg) => write!(f, "Type error: {}", msg),
+            ExecutionError::Parse(e) => write!(f, "Parse error during execution: {}", e),
+        }
+    }
+}
+impl std::error::Error for ExecutionError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        if let ExecutionError::Parse(e) = self { Some(e) } else { None }
+    }
+}
+impl From<ParseError> for ExecutionError {
+    fn from(e: ParseError) -> Self {
+        ExecutionError::Parse(e)
+    }
+}
+
+
+/// An index for a single `<xsl:key>`, mapping string values to lists of nodes.
+type KeyIndex<'a, N> = HashMap<String, Vec<N>>;
+
+/// A map of all defined keys, indexed by the key's name.
+type KeyIndexMap<'a, N> = HashMap<String, KeyIndex<'a, N>>;
 
 /// A stateful executor that constructs an `IRNode` tree by processing a `CompiledStylesheet`
 /// against a generic `DataSourceNode`. It implements the XSLT "push" model.
 pub struct TemplateExecutor<'s, 'a, N: DataSourceNode<'a>> {
-    stylesheet: &'s CompiledStylesheet,
-    functions: FunctionRegistry,
-    root_node: N,
-    node_stack: Vec<IRNode>,
-    inline_stack: Vec<InlineNode>,
-    variable_stack: Vec<HashMap<String, XPathValue<N>>>,
+    pub(crate) stylesheet: &'s CompiledStylesheet,
+    pub(crate) functions: FunctionRegistry,
+    pub(crate) root_node: N,
+    pub(crate) variable_stack: Vec<HashMap<String, XPathValue<N>>>,
+    /// Holds the pre-computed key indexes for the entire document.
+    pub(crate) key_indexes: KeyIndexMap<'a, N>,
+    /// If true, enables strict XSLT compliance checks.
+    pub(crate) strict: bool,
     _marker: PhantomData<&'a ()>,
 }
 
 impl<'s, 'a, N: DataSourceNode<'a> + 'a> TemplateExecutor<'s, 'a, N> {
-    pub fn new(stylesheet: &'s CompiledStylesheet, root_node: N) -> Self {
-        Self {
+    pub fn new(stylesheet: &'s CompiledStylesheet, root_node: N, strict: bool) -> Result<Self, ParseError> {
+        let functions = FunctionRegistry::default();
+        let global_vars = HashMap::new();
+        let key_indexes =
+            Self::build_key_indexes(stylesheet, root_node, &functions, &global_vars)?;
+
+        Ok(Self {
             stylesheet,
-            functions: FunctionRegistry::default(),
+            functions,
             root_node,
-            node_stack: vec![],
-            inline_stack: vec![],
-            variable_stack: vec![HashMap::new()], // Start with a global scope
+            variable_stack: vec![global_vars], // Start with a global scope
+            key_indexes,
+            strict,
             _marker: PhantomData,
-        }
+        })
     }
 
-    /// The main public entry point for the executor.
-    pub fn build_tree(&mut self) -> Result<Vec<IRNode>, ParseError> {
-        self.node_stack.clear();
-        self.inline_stack.clear();
-        self.node_stack.push(IRNode::Root(Vec::with_capacity(16)));
-        self.apply_templates_to_nodes(&[self.root_node], None)?;
-        if let Some(IRNode::Root(children)) = self.node_stack.pop() {
-            Ok(children)
-        } else {
-            Err(ParseError::TemplateParse("Failed to construct root node.".to_string()))
+    /// Builds all key indexes for the document in a single pass.
+    fn build_key_indexes(
+        stylesheet: &'s CompiledStylesheet,
+        root_node: N,
+        functions: &FunctionRegistry,
+        global_vars: &HashMap<String, XPathValue<N>>,
+    ) -> Result<KeyIndexMap<'a, N>, ParseError> {
+        let mut key_indexes: KeyIndexMap<'a, N> = HashMap::new();
+        if stylesheet.keys.is_empty() {
+            return Ok(key_indexes);
         }
+
+        let empty_key_map = HashMap::new(); // For the e_ctx, since key() can't be used during indexing.
+
+        // Single document traversal using an explicit stack (iterative DFS).
+        let mut stack = vec![root_node];
+        let mut visited = HashSet::new();
+        visited.insert(root_node);
+
+        while let Some(node) = stack.pop() {
+            // For each node popped from the stack, check it against all key definitions.
+            for key_def in &stylesheet.keys {
+                if key_def.pattern.matches(node, root_node) {
+                    // Node matches a key's pattern. Now evaluate the 'use' expression.
+                    let e_ctx = engine::EvaluationContext::new(
+                        node,
+                        root_node,
+                        functions,
+                        1, 1, // Position/size are not well-defined, but 'use' rarely needs them.
+                        global_vars,
+                        &empty_key_map, // Pass empty map; key() not allowed in 'use' expr.
+                        false, // Never use strict mode for key indexing
+                    );
+                    let use_result = xpath::evaluate(&key_def.use_expr, &e_ctx)
+                        .map_err(|e| ParseError::TemplateRender(format!("Error evaluating 'use' expression for key '{}': {}", key_def.name, e)))?;
+
+                    // The 'use' expression can return a node-set or a string/number.
+                    let key_strings = match use_result {
+                        XPathValue::NodeSet(nodes) => nodes
+                            .into_iter()
+                            .map(|n| n.string_value())
+                            .collect::<Vec<_>>(),
+                        other => vec![other.to_string()],
+                    };
+
+                    let index_for_this_key = key_indexes.entry(key_def.name.clone()).or_default();
+
+                    // Add the *matched node* to the index for each resulting key string.
+                    for key_str in key_strings {
+                        if !key_str.is_empty() {
+                            index_for_this_key
+                                .entry(key_str)
+                                .or_default()
+                                .push(node);
+                        }
+                    }
+                }
+            }
+
+            // After processing the node, add its children and attributes to the stack for future processing.
+            for child in node.children() {
+                if visited.insert(child) {
+                    stack.push(child);
+                }
+            }
+            for attr in node.attributes() {
+                if visited.insert(attr) {
+                    stack.push(attr);
+                }
+            }
+        }
+        Ok(key_indexes)
+    }
+
+    /// The main public entry point for the executor. It creates a concrete `IdfBuilder`
+    /// and executes the template to produce a final `IRNode` tree.
+    pub fn build_tree(&mut self) -> Result<Vec<crate::core::idf::IRNode>, ExecutionError> {
+        let mut builder = IdfBuilder::new();
+        self.execute(&mut builder)?;
+        Ok(builder.get_result())
+    }
+
+    /// Executes the entire XSLT transformation, delegating all output actions to the provided builder.
+    pub fn execute(&mut self, builder: &mut dyn OutputBuilder) -> Result<(), ExecutionError> {
+        self.apply_templates_to_nodes(&[self.root_node], None, builder)?;
+        Ok(())
     }
 
     // --- Scope Management ---
-    fn push_scope(&mut self) {
+    pub(crate) fn push_scope(&mut self) {
         self.variable_stack.push(HashMap::new());
     }
 
-    fn pop_scope(&mut self) {
+    pub(crate) fn pop_scope(&mut self) {
         self.variable_stack.pop();
     }
 
-    fn set_variable_in_current_scope(&mut self, name: String, value: XPathValue<N>) {
+    pub(crate) fn set_variable_in_current_scope(&mut self, name: String, value: XPathValue<N>) {
         if let Some(scope) = self.variable_stack.last_mut() {
             scope.insert(name, value);
         }
     }
 
-    fn get_merged_variables(&self) -> HashMap<String, XPathValue<N>> {
+    pub(crate) fn get_merged_variables(&self) -> HashMap<String, XPathValue<N>> {
         let mut merged = HashMap::new();
         for scope in &self.variable_stack {
             merged.extend(scope.clone());
@@ -72,7 +205,7 @@ impl<'s, 'a, N: DataSourceNode<'a> + 'a> TemplateExecutor<'s, 'a, N> {
         merged
     }
 
-    fn get_eval_context<'d>(
+    pub(crate) fn get_eval_context<'d>(
         &'d self,
         context_node: N,
         merged_variables: &'d HashMap<String, XPathValue<N>>,
@@ -86,29 +219,32 @@ impl<'s, 'a, N: DataSourceNode<'a> + 'a> TemplateExecutor<'s, 'a, N> {
             context_position,
             context_size,
             merged_variables,
+            &self.key_indexes,
+            self.strict,
         )
     }
 
     /// Processes a list of instructions from a template body against a context node.
-    fn execute_template(
+    pub(crate) fn execute_template(
         &mut self,
         template: &PreparsedTemplate,
         context_node: N,
         context_position: usize,
         context_size: usize,
-    ) -> Result<(), ParseError> {
+        builder: &mut dyn OutputBuilder,
+    ) -> Result<(), ExecutionError> {
         for instruction in &template.0 {
-            self.execute_instruction(instruction, context_node, context_position, context_size)?;
+            self.execute_instruction(instruction, context_node, context_position, context_size, builder)?;
         }
         Ok(())
     }
 
     /// Evaluates an AVT and returns the resulting string.
-    fn evaluate_avt(
+    pub(crate) fn evaluate_avt(
         &self,
         avt: &AttributeValueTemplate,
         e_ctx: &engine::EvaluationContext<'a, '_, N>,
-    ) -> Result<String, ParseError> {
+    ) -> Result<String, ExecutionError> {
         match avt {
             AttributeValueTemplate::Static(s) => Ok(s.clone()),
             AttributeValueTemplate::Dynamic(parts) => {
@@ -127,278 +263,123 @@ impl<'s, 'a, N: DataSourceNode<'a> + 'a> TemplateExecutor<'s, 'a, N> {
         }
     }
 
-    /// Processes a single XSLT instruction.
+    /// Processes a single XSLT instruction by dispatching to the appropriate handler.
     fn execute_instruction(
         &mut self,
         instruction: &XsltInstruction,
         context_node: N,
         context_position: usize,
         context_size: usize,
-    ) -> Result<(), ParseError> {
+        builder: &mut dyn OutputBuilder,
+    ) -> Result<(), ExecutionError> {
         match instruction {
-            XsltInstruction::Text(text) => {
-                self.push_inline_to_parent(InlineNode::Text(text.clone()));
-            }
+            XsltInstruction::Text(text) => executor_handlers::literals::handle_text(text, builder),
             XsltInstruction::ValueOf { select } => {
                 let merged_vars = self.get_merged_variables();
                 let e_ctx = self.get_eval_context(context_node, &merged_vars, context_position, context_size);
-                let result = xpath::evaluate(select, &e_ctx)?;
-                let content = result.to_string();
-                if !content.is_empty() {
-                    self.push_inline_to_parent(InlineNode::Text(content));
-                }
+                executor_handlers::literals::handle_value_of(select, &e_ctx, builder)?
             }
             XsltInstruction::CopyOf { select } => {
-                let merged_vars = self.get_merged_variables();
-                let e_ctx = self.get_eval_context(context_node, &merged_vars, context_position, context_size);
-                let result = xpath::evaluate(select, &e_ctx)?;
-                match result {
-                    XPathValue::NodeSet(nodes) => {
-                        for node in nodes {
-                            self.copy_data_source_node_to_idf(node)?;
-                        }
-                    }
-                    _ => {
-                        let content = result.to_string();
-                        if !content.is_empty() {
-                            self.push_inline_to_parent(InlineNode::Text(content));
-                        }
-                    }
-                }
+                let result = {
+                    let merged_vars = self.get_merged_variables();
+                    let e_ctx = self.get_eval_context(context_node, &merged_vars, context_position, context_size);
+                    xpath::evaluate(select, &e_ctx)?
+                };
+                executor_handlers::copy::handle_copy_of(self, result, builder)?
             }
-            XsltInstruction::Copy { styles, body } => {
-                match context_node.node_type() {
-                    NodeType::Element => {
-                        let tag_name = context_node.name().map_or(b"" as &[u8], |q| q.local_part.as_bytes());
-                        self.execute_start_tag(tag_name, styles)?;
-                        self.execute_template(body, context_node, context_position, context_size)?;
-                        self.execute_end_tag(tag_name)?;
-                    }
-                    NodeType::Text | NodeType::Attribute => {
-                        self.push_inline_to_parent(InlineNode::Text(context_node.string_value()));
-                    }
-                    NodeType::Root => {
-                        // Copying the root node just processes the children of the xsl:copy
-                        self.execute_template(body, context_node, context_position, context_size)?;
-                    }
-                }
-            }
+            XsltInstruction::Copy { styles, body } => executor_handlers::copy::handle_copy(self, styles, body, context_node, context_position, context_size, builder)?,
             XsltInstruction::Variable { name, select } => {
-                let merged_vars = self.get_merged_variables();
-                let e_ctx = self.get_eval_context(context_node, &merged_vars, context_position, context_size);
-                let value = xpath::evaluate(select, &e_ctx)?;
-                self.set_variable_in_current_scope(name.clone(), value);
-            }
-            XsltInstruction::Attribute { name, body } => {
-                let mut value = String::new();
-                for instruction in &body.0 {
-                    match instruction {
-                        XsltInstruction::ValueOf { select } => {
-                            let merged_vars = self.get_merged_variables();
-                            let e_ctx = self.get_eval_context(context_node, &merged_vars, context_position, context_size);
-                            value.push_str(&xpath::evaluate(select, &e_ctx)?.to_string());
-                        }
-                        XsltInstruction::Text(text) => {
-                            value.push_str(text);
-                        }
-                        _ => {
-                            log::warn!("Non-text-producing instruction found inside xsl:attribute, ignoring.");
-                        }
-                    }
-                }
-                self.set_attribute_on_parent(name, &value);
+                let value = {
+                    let merged_vars = self.get_merged_variables();
+                    let e_ctx = self.get_eval_context(context_node, &merged_vars, context_position, context_size);
+                    xpath::evaluate(select, &e_ctx)?
+                };
+                executor_handlers::variables::handle_variable(self, name, value)?
             }
             XsltInstruction::ApplyTemplates { select, mode, sort_keys } => {
-                let merged_vars = self.get_merged_variables();
-                let mut nodes_to_process = if let Some(sel) = select {
-                    let e_ctx = self.get_eval_context(context_node, &merged_vars, context_position, context_size);
-                    if let XPathValue::NodeSet(nodes) = xpath::evaluate(sel, &e_ctx)? {
-                        nodes
-                    } else {
-                        vec![]
-                    }
-                } else {
-                    context_node.children().collect()
-                };
-                self.sort_node_set(&mut nodes_to_process, sort_keys, &merged_vars)?;
-                self.apply_templates_to_nodes(&nodes_to_process, mode.as_deref())?;
+                executor_handlers::apply_templates::handle_apply_templates(self, select, mode, sort_keys, context_node, context_position, context_size, builder)?
             }
             XsltInstruction::If { test, body } => {
-                let merged_vars = self.get_merged_variables();
-                let e_ctx = self.get_eval_context(context_node, &merged_vars, context_position, context_size);
-                if xpath::evaluate(test, &e_ctx)?.to_bool() {
-                    self.execute_template(body, context_node, context_position, context_size)?;
-                }
+                let condition = {
+                    let merged_vars = self.get_merged_variables();
+                    let e_ctx = self.get_eval_context(context_node, &merged_vars, context_position, context_size);
+                    xpath::evaluate(test, &e_ctx)?.to_bool()
+                };
+                executor_handlers::control_flow::handle_if(self, condition, body, context_node, context_position, context_size, builder)?
             }
             XsltInstruction::Choose { whens, otherwise } => {
-                let mut chose_one = false;
-                let merged_vars = self.get_merged_variables();
-                for when_block in whens {
-                    let e_ctx = self.get_eval_context(context_node, &merged_vars, context_position, context_size);
-                    if xpath::evaluate(&when_block.test, &e_ctx)?.to_bool() {
-                        self.execute_template(&when_block.body, context_node, context_position, context_size)?;
-                        chose_one = true;
-                        break;
-                    }
-                }
-                if !chose_one {
-                    if let Some(otherwise_body) = otherwise {
-                        self.execute_template(otherwise_body, context_node, context_position, context_size)?;
-                    }
-                }
+                executor_handlers::control_flow::handle_choose(self, whens, otherwise, context_node, context_position, context_size, builder)?
             }
             XsltInstruction::ForEach { select, sort_keys, body } => {
-                let merged_vars = self.get_merged_variables();
-                let e_ctx = self.get_eval_context(context_node, &merged_vars, context_position, context_size);
-                if let XPathValue::NodeSet(mut nodes) = xpath::evaluate(select, &e_ctx)? {
-                    self.sort_node_set(&mut nodes, sort_keys, &merged_vars)?;
-                    let inner_context_size = nodes.len();
-                    for (i, node) in nodes.into_iter().enumerate() {
-                        let inner_context_position = i + 1;
-                        self.push_scope();
-                        self.execute_template(body, node, inner_context_position, inner_context_size)?;
-                        self.pop_scope();
-                    }
-                }
+                executor_handlers::for_each::handle_for_each(self, select, sort_keys, body, context_node, context_position, context_size, builder)?
             }
             XsltInstruction::CallTemplate { name, params } => {
-                if let Some(template) = self.stylesheet.named_templates.get(name) {
-                    let template_clone = template.clone();
-                    let (passed_params, caller_merged_vars) = {
-                        let merged_vars = self.get_merged_variables();
-                        let e_ctx = self.get_eval_context(context_node, &merged_vars, context_position, context_size);
-                        let params_map = params.iter()
-                            .map(|param| Ok((param.name.clone(), xpath::evaluate(&param.select, &e_ctx)?)))
-                            .collect::<Result<HashMap<_,_>, ParseError>>()?;
-                        (params_map, merged_vars)
-                    };
-                    self.push_scope();
-                    for defined_param in &template_clone.params {
-                        let param_value = if let Some(passed_value) = passed_params.get(&defined_param.name) {
-                            passed_value.clone()
-                        } else if let Some(default_expr) = &defined_param.default_value {
-                            let e_ctx = self.get_eval_context(context_node, &caller_merged_vars, context_position, context_size);
-                            xpath::evaluate(default_expr, &e_ctx)?
-                        } else {
-                            XPathValue::String("".to_string())
-                        };
-                        self.set_variable_in_current_scope(defined_param.name.clone(), param_value);
-                    }
-                    self.execute_template(&template_clone.body, context_node, context_position, context_size)?;
-                    self.pop_scope();
-                } else {
-                    return Err(ParseError::TemplateRender(format!("Call to unknown named template: '{}'", name)));
-                }
+                executor_handlers::call_template::handle_call_template(self, name, params, context_node, context_position, context_size, builder)?
             }
             XsltInstruction::ContentTag { tag_name, styles, attrs, body } => {
-                self.execute_start_tag(tag_name, styles)?;
-
-                // **FIX:** Evaluate all AVTs first, releasing the immutable borrow on `self`,
-                // then apply them, allowing a mutable borrow.
                 let evaluated_attrs = {
                     let merged_vars = self.get_merged_variables();
                     let e_ctx = self.get_eval_context(context_node, &merged_vars, context_position, context_size);
-                    attrs.iter()
+                    attrs
+                        .iter()
                         .map(|(name, avt)| Ok((name.clone(), self.evaluate_avt(avt, &e_ctx)?)))
-                        .collect::<Result<HashMap<_, _>, ParseError>>()?
+                        .collect::<Result<HashMap<_, _>, ExecutionError>>()?
                 };
-                for (name, value) in evaluated_attrs {
-                    self.set_attribute_on_parent(&name, &value);
-                }
-
-                self.execute_template(body, context_node, context_position, context_size)?;
-                self.execute_end_tag(tag_name)?;
+                executor_handlers::literals::handle_content_tag(self, tag_name, styles, &evaluated_attrs, body, context_node, context_position, context_size, builder)?
             }
             XsltInstruction::EmptyTag { tag_name, styles, attrs } => {
-                self.execute_start_tag(tag_name, styles)?;
-
-                // **FIX:** Same logic as for ContentTag
                 let evaluated_attrs = {
                     let merged_vars = self.get_merged_variables();
                     let e_ctx = self.get_eval_context(context_node, &merged_vars, context_position, context_size);
-                    attrs.iter()
+                    attrs
+                        .iter()
                         .map(|(name, avt)| Ok((name.clone(), self.evaluate_avt(avt, &e_ctx)?)))
-                        .collect::<Result<HashMap<_, _>, ParseError>>()?
+                        .collect::<Result<HashMap<_, _>, ExecutionError>>()?
                 };
-                for (name, value) in evaluated_attrs {
-                    self.set_attribute_on_parent(&name, &value);
-                }
-
-                self.execute_end_tag(tag_name)?;
+                executor_handlers::literals::handle_empty_tag(self, tag_name, styles, &evaluated_attrs, builder)?
+            }
+            XsltInstruction::Attribute { name, body } => {
+                executor_handlers::literals::handle_attribute(self, name, body, context_node, context_position, context_size, builder)?
+            }
+            XsltInstruction::Element { name, body } => {
+                executor_handlers::literals::handle_element(self, name, body, context_node, context_position, context_size, builder)?
+            }
+            XsltInstruction::Table { styles, columns, header, body } => {
+                executor_handlers::table::handle_table(self, styles, columns, header, body, context_node, context_position, context_size, builder)?
             }
             _ => log::warn!("XSLT instruction not yet implemented: {:?}", instruction),
         }
         Ok(())
     }
 
-    fn apply_templates_to_nodes(&mut self, nodes: &[N], mode: Option<&str>) -> Result<(), ParseError> {
+    pub(crate) fn apply_templates_to_nodes(&mut self, nodes: &[N], mode: Option<&str>, builder: &mut dyn OutputBuilder) -> Result<(), ExecutionError> {
         let context_size = nodes.len();
         for (i, &node) in nodes.iter().enumerate() {
             let context_position = i + 1;
             if let Some(rule) = self.find_matching_template(node, mode) {
                 let body = rule.body.clone();
                 self.push_scope();
-                self.execute_template(&body, node, context_position, context_size)?;
+                self.execute_template(&body, node, context_position, context_size, builder)?;
                 self.pop_scope();
             } else {
-                self.apply_builtin_template(node)?;
+                self.apply_builtin_template(node, builder)?;
             }
         }
         Ok(())
     }
 
-    fn apply_builtin_template(&mut self, node: N) -> Result<(), ParseError> {
+    fn apply_builtin_template(&mut self, node: N, builder: &mut dyn OutputBuilder) -> Result<(), ExecutionError> {
         match node.node_type() {
             NodeType::Root | NodeType::Element => {
                 let children: Vec<N> = node.children().collect();
-                self.apply_templates_to_nodes(&children, None)?;
+                self.apply_templates_to_nodes(&children, None, builder)?;
             }
-            NodeType::Text => {
-                self.push_inline_to_parent(InlineNode::Text(node.string_value()));
+            NodeType::Text | NodeType::Attribute => {
+                builder.add_text(&node.string_value());
             }
-            NodeType::Attribute => {
-                self.push_inline_to_parent(InlineNode::Text(node.string_value()));
+            NodeType::Comment | NodeType::ProcessingInstruction => {
+                // The built-in template rules for comments and processing instructions do nothing.
             }
-        }
-        Ok(())
-    }
-
-    /// Recursively transforms a `DataSourceNode` and its descendants into IDF nodes.
-    /// This is a semantic conversion, not a literal one.
-    fn copy_data_source_node_to_idf(&mut self, node: N) -> Result<(), ParseError> {
-        match node.node_type() {
-            NodeType::Element => {
-                let local_name = node.name().map_or("", |q| q.local_part);
-                let tag_name = local_name.as_bytes();
-
-                // Simple semantic mapping
-                self.execute_start_tag(tag_name, &PreparsedStyles::default())?;
-
-                // Copy attributes that have direct IDF mappings
-                for attr in node.attributes() {
-                    if let Some(attr_name) = attr.name() {
-                        self.set_attribute_on_parent(attr_name.local_part, &attr.string_value());
-                    }
-                }
-
-                // Recursively copy children
-                for child in node.children() {
-                    self.copy_data_source_node_to_idf(child)?;
-                }
-
-                self.execute_end_tag(tag_name)?;
-            }
-            NodeType::Text => {
-                self.push_inline_to_parent(InlineNode::Text(node.string_value()));
-            }
-            // Root nodes are traversed, but don't create an output node themselves.
-            NodeType::Root => {
-                for child in node.children() {
-                    self.copy_data_source_node_to_idf(child)?;
-                }
-            }
-            // Attributes are handled when their parent element is copied.
-            NodeType::Attribute => {}
         }
         Ok(())
     }
@@ -408,12 +389,12 @@ impl<'s, 'a, N: DataSourceNode<'a> + 'a> TemplateExecutor<'s, 'a, N> {
         rules_for_mode.iter().find(|rule| rule.pattern.matches(node, self.root_node))
     }
 
-    fn sort_node_set(
+    pub(crate) fn sort_node_set(
         &self,
         nodes: &mut [N],
         sort_keys: &[SortKey],
         merged_vars: &HashMap<String, XPathValue<N>>,
-    ) -> Result<(), ParseError> {
+    ) -> Result<(), ExecutionError> {
         if sort_keys.is_empty() {
             return Ok(());
         }
@@ -458,62 +439,43 @@ impl<'s, 'a, N: DataSourceNode<'a> + 'a> TemplateExecutor<'s, 'a, N> {
         Ok(())
     }
 
-    fn execute_start_tag(&mut self, tag_name: &[u8], styles: &PreparsedStyles) -> Result<(), ParseError> {
-        let style_sets = styles.style_sets.clone(); let style_override = styles.style_override.clone();
-        let node = match String::from_utf8_lossy(tag_name).as_ref() {
-            "p" => IRNode::Paragraph { style_sets, style_override, children: vec![] },
-            "fo:block" | "block" | "root" | "div" => IRNode::Block { style_sets, style_override, children: vec![] },
-            "fo:flex-container" | "flex-container" => IRNode::FlexContainer { style_sets, style_override, children: vec![] },
-            "fo:list-block" | "list" => IRNode::List { style_sets, style_override, start: None, children: vec![] },
-            "fo:list-item" | "list-item" => IRNode::ListItem { style_sets, style_override, children: vec![] },
-            "fo:inline" | "span" | "strong" | "b" | "em" | "i" => { self.inline_stack.push(InlineNode::StyledSpan { style_sets, style_override, children: vec![] }); return Ok(()); }
-            "fo:basic-link" | "a" | "link" => { self.inline_stack.push(InlineNode::Hyperlink { style_sets, style_override, href: "".to_string(), children: vec![] }); return Ok(()); }
-            "fo:external-graphic" | "img" => { self.node_stack.push(IRNode::Image { src: "".to_string(), style_sets, style_override }); return Ok(()); }
-            _ => IRNode::Block { style_sets, style_override, children: vec![] }, // Default to a block for unknown tags
-        };
-        self.node_stack.push(node); Ok(())
-    }
-    fn execute_end_tag(&mut self, tag_name: &[u8]) -> Result<(), ParseError> {
+    /// Maps a literal result element tag name to a semantic action on the `OutputBuilder`.
+    pub(crate) fn execute_start_tag(&self, tag_name: &[u8], styles: &PreparsedStyles, builder: &mut dyn OutputBuilder) {
         match String::from_utf8_lossy(tag_name).as_ref() {
-            "fo:inline" | "span" | "strong" | "b" | "em" | "i" | "fo:basic-link" | "a" | "link" => { if let Some(inline_node) = self.inline_stack.pop() { self.push_inline_to_parent(inline_node); } }
-            _ => { if let Some(node) = self.node_stack.pop() { self.push_block_to_parent(node); } }
-        }
-        Ok(())
+            "p" => builder.start_paragraph(styles),
+            "fo:block" | "block" | "root" | "div" => builder.start_block(styles),
+            "fo:flex-container" | "flex-container" => builder.start_flex_container(styles),
+            "fo:list-block" | "list" => builder.start_list(styles),
+            "fo:list-item" | "list-item" => builder.start_list_item(styles),
+            "fo:inline" | "span" | "strong" | "b" | "em" | "i" => builder.start_styled_span(styles),
+            "fo:basic-link" | "a" | "link" => builder.start_hyperlink(styles),
+            "fo:external-graphic" | "img" => builder.start_image(styles),
+            // Table elements
+            "table" | "fo:table" => builder.start_table(styles),
+            "tbody" | "thead" | "header" => builder.start_block(styles), // Treat as simple containers
+            "tr" | "row" | "fo:table-row" => builder.start_table_row(styles),
+            "td" | "cell" | "fo:table-cell" => builder.start_table_cell(styles),
+            _ => builder.start_block(styles), // Default to a block for unknown tags
+        };
     }
 
-    fn set_attribute_on_parent(&mut self, name: &str, value: &str) {
-        if let Some(inline_parent) = self.inline_stack.last_mut() {
-            match inline_parent {
-                InlineNode::Hyperlink { href, .. } if name == "href" => {
-                    *href = value.to_string();
-                    return;
-                }
-                _ => log::warn!("Cannot set attribute '{}' on current inline parent: {:?}", name, inline_parent),
-            }
+    /// Maps a literal result element tag name to a semantic end action on the `OutputBuilder`.
+    pub(crate) fn execute_end_tag(&self, tag_name: &[u8], builder: &mut dyn OutputBuilder) {
+        match String::from_utf8_lossy(tag_name).as_ref() {
+            "p" => builder.end_paragraph(),
+            "fo:block" | "block" | "root" | "div" => builder.end_block(),
+            "fo:flex-container" | "flex-container" => builder.end_flex_container(),
+            "fo:list-block" | "list" => builder.end_list(),
+            "fo:list-item" | "list-item" => builder.end_list_item(),
+            "fo:inline" | "span" | "strong" | "b" | "em" | "i" => builder.end_styled_span(),
+            "fo:basic-link" | "a" | "link" => builder.end_hyperlink(),
+            "fo:external-graphic" | "img" => builder.end_image(),
+            // Table elements
+            "table" | "fo:table" => builder.end_table(),
+            "tbody" | "thead" | "header" => builder.end_block(),
+            "tr" | "row" | "fo:table-row" => builder.end_table_row(),
+            "td" | "cell" | "fo:table-cell" => builder.end_table_cell(),
+            _ => builder.end_block(),
         }
-        if let Some(block_parent) = self.node_stack.last_mut() {
-            match block_parent {
-                IRNode::Image { src, .. } if name == "src" => {
-                    *src = value.to_string();
-                }
-                _ => log::warn!("Cannot set attribute '{}' on current block parent: {:?}", name, block_parent),
-            }
-        }
-    }
-
-    fn push_block_to_parent(&mut self, node: IRNode) {
-        if let Some(parent) = self.node_stack.last_mut() {
-            match parent {
-                IRNode::Root(c) | IRNode::Block { children: c, .. } | IRNode::FlexContainer { children: c, .. } | IRNode::List { children: c, .. } | IRNode::ListItem { children: c, .. } => c.push(node),
-                _ => log::warn!("Cannot add block node to current parent: {:?}", parent),
-            }
-        }
-    }
-    fn push_inline_to_parent(&mut self, node: InlineNode) {
-        if let Some(parent_inline) = self.inline_stack.last_mut() {
-            if let InlineNode::StyledSpan { children: c, .. } | InlineNode::Hyperlink { children: c, .. } = parent_inline { c.push(node); return; }
-        }
-        if let Some(IRNode::Paragraph { children: c, .. }) = self.node_stack.last_mut() { c.push(node); }
-        else { self.push_block_to_parent(IRNode::Paragraph { style_sets: vec![], style_override: None, children: vec![node], }); }
     }
 }

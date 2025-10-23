@@ -19,6 +19,8 @@ pub enum PipelineError {
     Layout(String),
     #[error("Data parsing error: {0}")]
     DataParse(#[from] serde_json::Error),
+    #[error("Template execution error: {0}")]
+    TemplateExecution(String)
 }
 
 impl From<crate::core::layout::LayoutError> for PipelineError {

@@ -20,8 +20,7 @@ Selections are paths used to retrieve data from the current JSON context.
     -   `products[0]` -> Selects the first element of the `products` array.
     -   `user.orders[1].item` -> A chained selection on objects and arrays.
 -   **Current Context:** Use a single dot `.` to refer to the current node. This is especially useful in loops or when the context itself is a primitive value.
-    -   `.`
--   **Variable Access:** Use a `$` prefix to access a variable from the current scope.
+-   **Variable Access:** Use a `$` prefix to access a variable from the current scope. (Note: The JSON template system does not currently use variables, but the syntax is supported by the engine).
     -   `$myVar`
 
 ### 2. Literals
@@ -46,6 +45,21 @@ JPath supports a set of built-in functions for data manipulation. The syntax is 
 -   `count(array)`: Returns the number of items in an array.
 -   `position()`: Returns the 1-based index of the current item in a loop.
 -   `equals(val1, val2)`: Returns `true` if the two values are equal (string-based comparison).
+
+## Implementation Details
+
+### Truthiness
+
+When a JPath expression is used in a conditional context (like an `if` block), the result is coerced to a boolean. The rules are:
+-   **`false`**: `false`, `null`, `0`, `""` (empty string)
+-   **`false`**: Empty arrays (`[]`) and empty objects (`{}`)
+-   **`true`**: All other values are considered "truthy".
+
+### Context Handling in Loops
+
+Inside a loop (`each` block), the context node changes to the current item of the array. The parser provides a convenience for accessing properties of this item. An expression like `{{ name }}` is treated as equivalent to `{{ .name }}`.
+
+Furthermore, for compatibility with other template systems, the expression `{{ this.name }}` is also supported and automatically translated to `{{ .name }}` during compilation.
 
 ## Usage Example
 

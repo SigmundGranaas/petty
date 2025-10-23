@@ -1,4 +1,3 @@
-// FILE: src/parser/xpath/ast.rs
 //! Defines the Abstract Syntax Tree (AST) for XPath 1.0 expressions.
 
 /// The top-level expression that can be evaluated.
@@ -17,7 +16,10 @@ pub enum Expression {
         op: BinaryOperator,
         right: Box<Expression>,
     },
-    // TODO: UnaryOp for negation
+    UnaryOp {
+        op: UnaryOperator,
+        expr: Box<Expression>,
+    },
 }
 
 impl Expression {
@@ -30,6 +32,12 @@ impl Expression {
     pub fn is_binary_op(&self) -> bool {
         matches!(self, Expression::BinaryOp { .. })
     }
+}
+
+/// A unary operator used in an expression.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnaryOperator {
+    Minus,
 }
 
 /// A binary operator used in an expression.
@@ -86,7 +94,11 @@ pub enum Axis {
     Attribute,
     Parent,
     Ancestor,
-    // TODO: Implement remaining axes
+    SelfAxis,
+    FollowingSibling,
+    PrecedingSibling,
+    Following,
+    Preceding,
 }
 
 /// A test to apply to nodes on a given axis to see if they should be included.
@@ -104,5 +116,6 @@ pub enum NodeTest {
 pub enum NodeTypeTest {
     Text,
     Node,
-    // TODO: Add `comment()` and `processing-instruction()`
+    Comment,
+    ProcessingInstruction,
 }

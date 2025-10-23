@@ -1,4 +1,3 @@
-// FILE: src/parser/xpath/parser.rs
 //! A `nom`-based parser for the XPath 1.0 expression language.
 
 use super::ast::*;
@@ -109,13 +108,30 @@ fn additive_expr(input: &str) -> IResult<&str, Expression> {
 
 fn multiplicative_expr(input: &str) -> IResult<&str, Expression> {
     build_binary_expr_parser(
-        union_expr,
+        unary_expr,
         alt((
             map(char('*'), |_| BinaryOperator::Multiply),
             map(tag("div"), |_| BinaryOperator::Divide),
             map(tag("mod"), |_| BinaryOperator::Modulo),
         )),
     )(input)
+}
+
+fn unary_expr(input: &str) -> IResult<&str, Expression> {
+    let (i, neg_op) = opt(ws(char('-')))(input)?;
+    let (i, expr) = union_expr(i)?;
+
+    if neg_op.is_some() {
+        Ok((
+            i,
+            Expression::UnaryOp {
+                op: UnaryOperator::Minus,
+                expr: Box::new(expr),
+            },
+        ))
+    } else {
+        Ok((i, expr))
+    }
 }
 
 // The union operator `|` has higher precedence than the others, but only applies to paths.
@@ -213,10 +229,12 @@ fn q_name(input: &str) -> IResult<&str, String> {
 
 fn node_type_test(input: &str) -> IResult<&str, NodeTest> {
     map(
-        terminated(alt((tag("text"), tag("node"))), pair(ws(char('(')), ws(char(')')))),
+        terminated(alt((tag("text"), tag("node"), tag("comment"), tag("processing-instruction"))), pair(ws(char('(')), ws(char(')')))),
         |node_type: &str| match node_type {
             "text" => NodeTest::NodeType(NodeTypeTest::Text),
-            _ => NodeTest::NodeType(NodeTypeTest::Node),
+            "comment" => NodeTest::NodeType(NodeTypeTest::Comment),
+            "processing-instruction" => NodeTest::NodeType(NodeTypeTest::ProcessingInstruction),
+            _ => NodeTest::NodeType(NodeTypeTest::Node), // "node"
         },
     )(input)
 }
@@ -240,6 +258,11 @@ fn axis(input: &str) -> IResult<&str, Axis> {
                 tag("attribute"),
                 tag("parent"),
                 tag("ancestor"),
+                tag("self"),
+                tag("following-sibling"),
+                tag("preceding-sibling"),
+                tag("following"),
+                tag("preceding"),
             )),
             tag("::"),
         ),
@@ -249,7 +272,12 @@ fn axis(input: &str) -> IResult<&str, Axis> {
             "attribute" => Axis::Attribute,
             "parent" => Axis::Parent,
             "ancestor" => Axis::Ancestor,
-            _ => Axis::Child,
+            "self" => Axis::SelfAxis,
+            "following-sibling" => Axis::FollowingSibling,
+            "preceding-sibling" => Axis::PrecedingSibling,
+            "following" => Axis::Following,
+            "preceding" => Axis::Preceding,
+            _ => Axis::Child, // child
         },
     )(input)
 }
@@ -260,7 +288,7 @@ fn predicate(input: &str) -> IResult<&str, Expression> {
 
 fn step(input: &str) -> IResult<&str, Step> {
     let (i, main_part) = alt((
-        map(tag("."), |_| (Axis::Child, NodeTest::Name(".".to_string()))),
+        map(tag("."), |_| (Axis::SelfAxis, NodeTest::Name(".".to_string()))),
         map(preceded(char('@'), node_test), |nt| (Axis::Attribute, nt)),
         map(pair(opt(axis), node_test), |(ax, nt)| (ax.unwrap_or(Axis::Child), nt)),
     ))(input)?;
@@ -317,7 +345,7 @@ fn function_call(input: &str) -> IResult<&str, Expression> {
 
     // Node-type tests like text() are not functions. They are handled by the step parser.
     // If the name is a node type test, fail this parser.
-    if name == "text" || name == "node" {
+    if name == "text" || name == "node" || name == "comment" || name == "processing-instruction" {
         return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Verify)));
     }
 
@@ -347,6 +375,34 @@ mod tests {
                 ]
             })
         );
+    }
+
+    #[test]
+    fn test_parse_unary_minus() {
+        let result = parse_expression("-5").unwrap();
+        assert_eq!(result, Expression::UnaryOp { op: UnaryOperator::Minus, expr: Box::new(Expression::Number(5.0)) });
+
+        let result2 = parse_expression("10 - -5").unwrap();
+        assert!(matches!(result2, Expression::BinaryOp { op: BinaryOperator::Minus, .. }));
+        if let Expression::BinaryOp{ left, right, .. } = result2 {
+            assert_eq!(*left, Expression::Number(10.0));
+            assert_eq!(*right, Expression::UnaryOp { op: UnaryOperator::Minus, expr: Box::new(Expression::Number(5.0)) });
+        }
+    }
+
+    #[test]
+    fn test_parse_axes() {
+        let result = parse_expression("following-sibling::foo").unwrap();
+        assert!(matches!(result, Expression::LocationPath(_)));
+        if let Expression::LocationPath(lp) = result {
+            assert_eq!(lp.steps[0].axis, Axis::FollowingSibling);
+        }
+
+        let result = parse_expression("preceding::*").unwrap();
+        assert!(matches!(result, Expression::LocationPath(_)));
+        if let Expression::LocationPath(lp) = result {
+            assert_eq!(lp.steps[0].axis, Axis::Preceding);
+        }
     }
 
     #[test]
@@ -458,6 +514,7 @@ mod tests {
         if let Expression::LocationPath(lp) = result {
             assert_eq!(lp.steps.len(), 1);
             assert_eq!(lp.steps[0].node_test, NodeTest::Name(".".to_string()));
+            assert_eq!(lp.steps[0].axis, Axis::SelfAxis);
         } else {
             panic!("Expected location path for '.'");
         }

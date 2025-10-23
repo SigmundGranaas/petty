@@ -1,10 +1,11 @@
+// FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/xpath/functions.rs
 // FILE: src/parser/xpath/functions.rs
 //! Defines the registry and built-in implementations for XPath 1.0 functions.
 
 use super::engine::{EvaluationContext, XPathValue};
-use crate::parser::datasource::DataSourceNode;
-use crate::parser::ParseError;
-use std::collections::HashMap;
+use crate::parser::xslt::datasource::{DataSourceNode, NodeType};
+use crate::parser::xslt::executor::ExecutionError;
+use std::collections::{HashMap, HashSet};
 
 // A simple registry that just holds the names of built-in functions.
 pub struct FunctionRegistry {
@@ -28,15 +29,17 @@ pub fn evaluate_function<'a, 'd, N: DataSourceNode<'a>>(
     name: &str,
     args: Vec<XPathValue<N>>,
     e_ctx: &EvaluationContext<'a, 'd, N>,
-) -> Result<XPathValue<N>, ParseError> {
+) -> Result<XPathValue<N>, ExecutionError> {
     match name.to_lowercase().as_str() {
         // Core & Node-Set
         "string" => func_string(args, e_ctx),
         "count" => func_count(args),
+        "id" => func_id(args, e_ctx),
         "position" => func_position(args, e_ctx),
         "last" => func_last(args, e_ctx),
         "local-name" => func_local_name(args, e_ctx),
         "name" => func_name(args, e_ctx),
+        "key" => func_key(args, e_ctx),
 
         // String
         "concat" => func_concat(args),
@@ -53,7 +56,7 @@ pub fn evaluate_function<'a, 'd, N: DataSourceNode<'a>>(
         "not" => func_not(args),
         "true" => func_true(args),
         "false" => func_false(args),
-        "lang" => Err(ParseError::TemplateRender("lang() function is not implemented.".to_string())),
+        "lang" => func_lang(args, e_ctx),
 
         // Number
         "sum" => func_sum(args),
@@ -63,19 +66,100 @@ pub fn evaluate_function<'a, 'd, N: DataSourceNode<'a>>(
 
         // "node" is not a real function, but registering it prevents "unknown function" errors
         // when the parser mistakes the node() test for a function call.
-        "node" => Err(ParseError::XPathParse("node()".to_string(), "node() is a node-test, not a function.".to_string())),
-        _ => Err(ParseError::TemplateRender(format!("Unknown XPath function: {}", name))),
+        "node" | "comment" | "processing-instruction" => Err(ExecutionError::FunctionError { function: name.to_string(), message: "This is a node-test, not a function.".to_string() }),
+        _ => Err(ExecutionError::FunctionError { function: name.to_string(), message: "Unknown XPath function".to_string() }),
     }
 }
 
 // --- Core & Node-Set Functions ---
 
+fn func_id<'a, 'd, N: DataSourceNode<'a>>(
+    mut args: Vec<XPathValue<N>>,
+    e_ctx: &EvaluationContext<'a, 'd, N>,
+) -> Result<XPathValue<N>, ExecutionError> {
+    if args.len() != 1 {
+        return Err(ExecutionError::FunctionError { function: "id()".to_string(), message: "Expected 1 argument".to_string() });
+    }
+
+    let id_string = args.remove(0).to_string();
+    let ids_to_find: HashSet<_> = id_string.split_whitespace().collect();
+    if ids_to_find.is_empty() {
+        return Ok(XPathValue::NodeSet(vec![]));
+    }
+
+    let mut results = Vec::new();
+    let mut seen_nodes = HashSet::new();
+    let mut stack = e_ctx.root_node.children().collect::<Vec<_>>();
+
+    while let Some(node) = stack.pop() {
+        if node.node_type() == NodeType::Element {
+            for attr in node.attributes() {
+                if let Some(q_name) = attr.name() {
+                    let is_id_attr = (q_name.local_part == "id" && q_name.prefix.is_none())
+                        || (q_name.local_part == "id" && q_name.prefix == Some("xml"));
+
+                    if is_id_attr && ids_to_find.contains(attr.string_value().as_str()) {
+                        if seen_nodes.insert(node) {
+                            results.push(node);
+                        }
+                    }
+                }
+            }
+        }
+        stack.extend(node.children());
+    }
+
+    results.sort();
+    Ok(XPathValue::NodeSet(results))
+}
+
+fn func_key<'a, 'd, N: DataSourceNode<'a>>(
+    mut args: Vec<XPathValue<N>>,
+    e_ctx: &EvaluationContext<'a, 'd, N>,
+) -> Result<XPathValue<N>, ExecutionError> {
+    if args.len() != 2 {
+        return Err(ExecutionError::FunctionError { function: "key()".to_string(), message: "Expected 2 arguments".to_string() });
+    }
+
+    let key_value_arg = args.remove(1);
+    let key_name = args.remove(0).to_string();
+
+    let key_index = match e_ctx.key_indexes.get(&key_name) {
+        Some(index) => index,
+        None => return Ok(XPathValue::NodeSet(vec![])), // No such key, return empty set
+    };
+
+    let key_values = match key_value_arg {
+        XPathValue::NodeSet(nodes) => nodes
+            .into_iter()
+            .map(|n| n.string_value())
+            .collect::<Vec<_>>(),
+        other => vec![other.to_string()],
+    };
+
+    let mut result_nodes = Vec::new();
+    let mut seen = std::collections::HashSet::new(); // Avoid duplicates
+
+    for value in key_values {
+        if let Some(nodes) = key_index.get(&value) {
+            for &node in nodes {
+                if seen.insert(node) {
+                    result_nodes.push(node);
+                }
+            }
+        }
+    }
+
+    result_nodes.sort();
+    Ok(XPathValue::NodeSet(result_nodes))
+}
+
 fn func_string<'a, 'd, N: DataSourceNode<'a>>(
     mut args: Vec<XPathValue<N>>,
     e_ctx: &EvaluationContext<'a, 'd, N>,
-) -> Result<XPathValue<N>, ParseError> {
+) -> Result<XPathValue<N>, ExecutionError> {
     if args.len() > 1 {
-        return Err(ParseError::XPathParse("string()".to_string(), "Expected 0 or 1 arguments".to_string()));
+        return Err(ExecutionError::FunctionError { function: "string()".to_string(), message: "Expected 0 or 1 arguments".to_string() });
     }
     let s = if args.is_empty() {
         e_ctx.context_node.string_value()
@@ -85,27 +169,27 @@ fn func_string<'a, 'd, N: DataSourceNode<'a>>(
     Ok(XPathValue::String(s))
 }
 
-fn func_count<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ParseError> {
+fn func_count<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ExecutionError> {
     if args.len() != 1 {
-        return Err(ParseError::XPathParse("count()".to_string(), "Expected 1 argument".to_string()));
+        return Err(ExecutionError::FunctionError { function: "count()".to_string(), message: "Expected 1 argument".to_string() });
     }
     let count = match args.remove(0) {
         XPathValue::NodeSet(nodes) => nodes.len() as f64,
-        v => return Err(ParseError::XPathParse("count()".to_string(), format!("Argument must be a node-set, got {:?}", v))),
+        v => return Err(ExecutionError::TypeError(format!("count() argument must be a node-set, got {:?}", v))),
     };
     Ok(XPathValue::Number(count))
 }
 
-fn func_position<'a, 'd, N: DataSourceNode<'a>>(args: Vec<XPathValue<N>>, e_ctx: &EvaluationContext<'a, 'd, N>) -> Result<XPathValue<N>, ParseError> {
+fn func_position<'a, 'd, N: DataSourceNode<'a>>(args: Vec<XPathValue<N>>, e_ctx: &EvaluationContext<'a, 'd, N>) -> Result<XPathValue<N>, ExecutionError> {
     if !args.is_empty() {
-        return Err(ParseError::XPathParse("position()".to_string(), "Expected 0 arguments".to_string()));
+        return Err(ExecutionError::FunctionError { function: "position()".to_string(), message: "Expected 0 arguments".to_string() });
     }
     Ok(XPathValue::Number(e_ctx.context_position as f64))
 }
 
-fn func_last<'a, 'd, N: DataSourceNode<'a>>(args: Vec<XPathValue<N>>, e_ctx: &EvaluationContext<'a, 'd, N>) -> Result<XPathValue<N>, ParseError> {
+fn func_last<'a, 'd, N: DataSourceNode<'a>>(args: Vec<XPathValue<N>>, e_ctx: &EvaluationContext<'a, 'd, N>) -> Result<XPathValue<N>, ExecutionError> {
     if !args.is_empty() {
-        return Err(ParseError::XPathParse("last()".to_string(), "Expected 0 arguments".to_string()));
+        return Err(ExecutionError::FunctionError { function: "last()".to_string(), message: "Expected 0 arguments".to_string() });
     }
     Ok(XPathValue::Number(e_ctx.context_size as f64))
 }
@@ -113,16 +197,16 @@ fn func_last<'a, 'd, N: DataSourceNode<'a>>(args: Vec<XPathValue<N>>, e_ctx: &Ev
 fn func_local_name<'a, 'd, N: DataSourceNode<'a>>(
     mut args: Vec<XPathValue<N>>,
     e_ctx: &EvaluationContext<'a, 'd, N>,
-) -> Result<XPathValue<N>, ParseError> {
+) -> Result<XPathValue<N>, ExecutionError> {
     if args.len() > 1 {
-        return Err(ParseError::XPathParse("local-name()".to_string(), "Expected 0 or 1 arguments".to_string()));
+        return Err(ExecutionError::FunctionError { function: "local-name()".to_string(), message: "Expected 0 or 1 arguments".to_string() });
     }
     let node = if args.is_empty() {
         Some(e_ctx.context_node)
     } else {
         match args.remove(0) {
             XPathValue::NodeSet(nodes) => nodes.first().copied(),
-            v => return Err(ParseError::XPathParse("local-name()".to_string(), format!("Argument must be a node-set, got {:?}", v))),
+            v => return Err(ExecutionError::TypeError(format!("local-name() argument must be a node-set, got {:?}", v))),
         }
     };
     let name = node.and_then(|n| n.name().map(|q| q.local_part.to_string())).unwrap_or_default();
@@ -132,16 +216,16 @@ fn func_local_name<'a, 'd, N: DataSourceNode<'a>>(
 fn func_name<'a, 'd, N: DataSourceNode<'a>>(
     mut args: Vec<XPathValue<N>>,
     e_ctx: &EvaluationContext<'a, 'd, N>,
-) -> Result<XPathValue<N>, ParseError> {
+) -> Result<XPathValue<N>, ExecutionError> {
     if args.len() > 1 {
-        return Err(ParseError::XPathParse("name()".to_string(), "Expected 0 or 1 arguments".to_string()));
+        return Err(ExecutionError::FunctionError { function: "name()".to_string(), message: "Expected 0 or 1 arguments".to_string() });
     }
     let node = if args.is_empty() {
         Some(e_ctx.context_node)
     } else {
         match args.remove(0) {
             XPathValue::NodeSet(nodes) => nodes.first().copied(),
-            v => return Err(ParseError::XPathParse("name()".to_string(), format!("Argument must be a node-set, got {:?}", v))),
+            v => return Err(ExecutionError::TypeError(format!("name() argument must be a node-set, got {:?}", v))),
         }
     };
     let name = node.and_then(|n| n.name().map(|q| {
@@ -156,35 +240,35 @@ fn func_name<'a, 'd, N: DataSourceNode<'a>>(
 
 // --- String Functions ---
 
-fn func_concat<'a, N: DataSourceNode<'a>>(args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ParseError> {
+fn func_concat<'a, N: DataSourceNode<'a>>(args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ExecutionError> {
     if args.len() < 2 {
-        return Err(ParseError::XPathParse("concat()".to_string(), "Expected at least 2 arguments".to_string()));
+        return Err(ExecutionError::FunctionError { function: "concat()".to_string(), message: "Expected at least 2 arguments".to_string() });
     }
     let result = args.iter().map(|v| v.to_string()).collect::<String>();
     Ok(XPathValue::String(result))
 }
 
-fn func_starts_with<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ParseError> {
+fn func_starts_with<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ExecutionError> {
     if args.len() != 2 {
-        return Err(ParseError::XPathParse("starts-with()".to_string(), "Expected 2 arguments".to_string()));
+        return Err(ExecutionError::FunctionError { function: "starts-with()".to_string(), message: "Expected 2 arguments".to_string() });
     }
     let s2 = args.remove(1).to_string();
     let s1 = args.remove(0).to_string();
     Ok(XPathValue::Boolean(s1.starts_with(&s2)))
 }
 
-fn func_contains<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ParseError> {
+fn func_contains<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ExecutionError> {
     if args.len() != 2 {
-        return Err(ParseError::XPathParse("contains()".to_string(), "Expected 2 arguments".to_string()));
+        return Err(ExecutionError::FunctionError { function: "contains()".to_string(), message: "Expected 2 arguments".to_string() });
     }
     let s2 = args.remove(1).to_string();
     let s1 = args.remove(0).to_string();
     Ok(XPathValue::Boolean(s1.contains(&s2)))
 }
 
-fn func_substring_before<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ParseError> {
+fn func_substring_before<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ExecutionError> {
     if args.len() != 2 {
-        return Err(ParseError::XPathParse("substring-before()".to_string(), "Expected 2 arguments".to_string()));
+        return Err(ExecutionError::FunctionError { function: "substring-before()".to_string(), message: "Expected 2 arguments".to_string() });
     }
     let s2 = args.remove(1).to_string();
     let s1 = args.remove(0).to_string();
@@ -195,9 +279,9 @@ fn func_substring_before<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>
     }
 }
 
-fn func_substring_after<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ParseError> {
+fn func_substring_after<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ExecutionError> {
     if args.len() != 2 {
-        return Err(ParseError::XPathParse("substring-after()".to_string(), "Expected 2 arguments".to_string()));
+        return Err(ExecutionError::FunctionError { function: "substring-after()".to_string(), message: "Expected 2 arguments".to_string() });
     }
     let s2 = args.remove(1).to_string();
     let s1 = args.remove(0).to_string();
@@ -208,9 +292,9 @@ fn func_substring_after<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>)
     }
 }
 
-fn func_substring<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ParseError> {
+fn func_substring<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ExecutionError> {
     if !(2..=3).contains(&args.len()) {
-        return Err(ParseError::XPathParse("substring()".to_string(), "Expected 2 or 3 arguments".to_string()));
+        return Err(ExecutionError::FunctionError { function: "substring()".to_string(), message: "Expected 2 or 3 arguments".to_string() });
     }
     let length_val = if args.len() == 3 { Some(args.remove(2).to_number()) } else { None };
     let start_val = args.remove(1).to_number();
@@ -237,9 +321,9 @@ fn func_substring<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Re
 fn func_string_length<'a, 'd, N: DataSourceNode<'a>>(
     mut args: Vec<XPathValue<N>>,
     e_ctx: &EvaluationContext<'a, 'd, N>,
-) -> Result<XPathValue<N>, ParseError> {
+) -> Result<XPathValue<N>, ExecutionError> {
     if args.len() > 1 {
-        return Err(ParseError::XPathParse("string-length()".to_string(), "Expected 0 or 1 arguments".to_string()));
+        return Err(ExecutionError::FunctionError { function: "string-length()".to_string(), message: "Expected 0 or 1 arguments".to_string() });
     }
     let s = if args.is_empty() {
         e_ctx.context_node.string_value()
@@ -252,9 +336,9 @@ fn func_string_length<'a, 'd, N: DataSourceNode<'a>>(
 fn func_normalize_space<'a, 'd, N: DataSourceNode<'a>>(
     mut args: Vec<XPathValue<N>>,
     e_ctx: &EvaluationContext<'a, 'd, N>,
-) -> Result<XPathValue<N>, ParseError> {
+) -> Result<XPathValue<N>, ExecutionError> {
     if args.len() > 1 {
-        return Err(ParseError::XPathParse("normalize-space()".to_string(), "Expected 0 or 1 arguments".to_string()));
+        return Err(ExecutionError::FunctionError { function: "normalize-space()".to_string(), message: "Expected 0 or 1 arguments".to_string() });
     }
     let s = if args.is_empty() {
         e_ctx.context_node.string_value()
@@ -265,9 +349,9 @@ fn func_normalize_space<'a, 'd, N: DataSourceNode<'a>>(
     Ok(XPathValue::String(normalized))
 }
 
-fn func_translate<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ParseError> {
+fn func_translate<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ExecutionError> {
     if args.len() != 3 {
-        return Err(ParseError::XPathParse("translate()".to_string(), "Expected 3 arguments".to_string()));
+        return Err(ExecutionError::FunctionError { function: "translate()".to_string(), message: "Expected 3 arguments".to_string() });
     }
     let to_str: Vec<char> = args.remove(2).to_string().chars().collect();
     let from_str: Vec<char> = args.remove(1).to_string().chars().collect();
@@ -284,32 +368,66 @@ fn func_translate<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Re
 
 // --- Boolean Functions ---
 
-fn func_not<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ParseError> {
+fn func_not<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ExecutionError> {
     if args.len() != 1 {
-        return Err(ParseError::XPathParse("not()".to_string(), "Expected 1 argument".to_string()));
+        return Err(ExecutionError::FunctionError { function: "not()".to_string(), message: "Expected 1 argument".to_string() });
     }
     Ok(XPathValue::Boolean(!args.remove(0).to_bool()))
 }
 
-fn func_true<'a, N: DataSourceNode<'a>>(args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ParseError> {
+fn func_true<'a, N: DataSourceNode<'a>>(args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ExecutionError> {
     if !args.is_empty() {
-        return Err(ParseError::XPathParse("true()".to_string(), "Expected 0 arguments".to_string()));
+        return Err(ExecutionError::FunctionError { function: "true()".to_string(), message: "Expected 0 arguments".to_string() });
     }
     Ok(XPathValue::Boolean(true))
 }
 
-fn func_false<'a, N: DataSourceNode<'a>>(args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ParseError> {
+fn func_false<'a, N: DataSourceNode<'a>>(args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ExecutionError> {
     if !args.is_empty() {
-        return Err(ParseError::XPathParse("false()".to_string(), "Expected 0 arguments".to_string()));
+        return Err(ExecutionError::FunctionError { function: "false()".to_string(), message: "Expected 0 arguments".to_string() });
+    }
+    Ok(XPathValue::Boolean(false))
+}
+
+fn func_lang<'a, 'd, N: DataSourceNode<'a>>(
+    mut args: Vec<XPathValue<N>>,
+    e_ctx: &EvaluationContext<'a, 'd, N>,
+) -> Result<XPathValue<N>, ExecutionError> {
+    if args.len() != 1 {
+        return Err(ExecutionError::FunctionError { function: "lang()".to_string(), message: "Expected 1 argument".to_string() });
+    }
+    let test_lang = args.remove(0).to_string().to_lowercase();
+    let mut current = Some(e_ctx.context_node);
+
+    // If context node is not an element, start with its parent.
+    if current.map_or(false, |n| n.node_type() != NodeType::Element) {
+        current = current.and_then(|n| n.parent());
+    }
+
+    while let Some(node) = current {
+        for attr in node.attributes() {
+            if let Some(name) = attr.name() {
+                if name.prefix == Some("xml") && name.local_part == "lang" {
+                    let node_lang = attr.string_value().to_lowercase();
+                    // Check for exact match or subcode match (e.g., "en" matches "en-GB")
+                    if node_lang == test_lang || node_lang.starts_with(&format!("{}-", test_lang)) {
+                        return Ok(XPathValue::Boolean(true));
+                    }
+                    // If we found an xml:lang, we don't need to check higher up.
+                    return Ok(XPathValue::Boolean(false));
+                }
+            }
+        }
+        current = node.parent();
     }
     Ok(XPathValue::Boolean(false))
 }
 
 // --- Number Functions ---
 
-fn func_sum<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ParseError> {
+fn func_sum<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ExecutionError> {
     if args.len() != 1 {
-        return Err(ParseError::XPathParse("sum()".to_string(), "Expected 1 argument".to_string()));
+        return Err(ExecutionError::FunctionError { function: "sum()".to_string(), message: "Expected 1 argument".to_string() });
     }
     let sum = match args.remove(0) {
         XPathValue::NodeSet(nodes) => {
@@ -317,28 +435,28 @@ fn func_sum<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<X
                 node.string_value().trim().parse::<f64>().unwrap_or(0.0)
             }).sum()
         },
-        v => return Err(ParseError::XPathParse("sum()".to_string(), format!("Argument must be a node-set, got {:?}", v))),
+        v => return Err(ExecutionError::TypeError(format!("sum() argument must be a node-set, got {:?}", v))),
     };
     Ok(XPathValue::Number(sum))
 }
 
-fn func_floor<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ParseError> {
+fn func_floor<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ExecutionError> {
     if args.len() != 1 {
-        return Err(ParseError::XPathParse("floor()".to_string(), "Expected 1 argument".to_string()));
+        return Err(ExecutionError::FunctionError { function: "floor()".to_string(), message: "Expected 1 argument".to_string() });
     }
     Ok(XPathValue::Number(args.remove(0).to_number().floor()))
 }
 
-fn func_ceiling<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ParseError> {
+fn func_ceiling<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ExecutionError> {
     if args.len() != 1 {
-        return Err(ParseError::XPathParse("ceiling()".to_string(), "Expected 1 argument".to_string()));
+        return Err(ExecutionError::FunctionError { function: "ceiling()".to_string(), message: "Expected 1 argument".to_string() });
     }
     Ok(XPathValue::Number(args.remove(0).to_number().ceil()))
 }
 
-fn func_round<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ParseError> {
+fn func_round<'a, N: DataSourceNode<'a>>(mut args: Vec<XPathValue<N>>) -> Result<XPathValue<N>, ExecutionError> {
     if args.len() != 1 {
-        return Err(ParseError::XPathParse("round()".to_string(), "Expected 1 argument".to_string()));
+        return Err(ExecutionError::FunctionError { function: "round()".to_string(), message: "Expected 1 argument".to_string() });
     }
     let n = args.remove(0).to_number();
     if n.is_nan() || n.is_infinite() || n == 0.0 {
@@ -355,10 +473,12 @@ impl Default for FunctionRegistry {
         // Core
         registry.register("string");
         registry.register("count");
+        registry.register("id");
         registry.register("position");
         registry.register("last");
         registry.register("local-name");
         registry.register("name");
+        registry.register("key");
         // String
         registry.register("concat");
         registry.register("starts-with");
@@ -379,8 +499,10 @@ impl Default for FunctionRegistry {
         registry.register("floor");
         registry.register("ceiling");
         registry.register("round");
-        // Other
+        // Node Tests (registered to provide better error messages)
         registry.register("node");
+        registry.register("comment");
+        registry.register("processing-instruction");
         registry
     }
 }
@@ -388,8 +510,8 @@ impl Default for FunctionRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::datasource::tests::{create_test_tree, MockNode, MockTree};
-    use crate::parser::xpath::engine::EvaluationContext;
+    use crate::parser::xslt::datasource::tests::{create_test_tree, MockNode, MockTree};
+    use crate::parser::xslt::xpath::engine::EvaluationContext;
     use std::collections::HashMap;
 
     // --- Test Setup ---
@@ -399,6 +521,7 @@ mod tests {
         tree: &'a MockTree<'a>, // Holds a reference to the tree, not ownership
         funcs: FunctionRegistry,
         vars: HashMap<String, XPathValue<MockNode<'a>>>,
+        keys: HashMap<String, HashMap<String, Vec<MockNode<'a>>>>,
     }
 
     impl<'a> TestSetup<'a> {
@@ -408,7 +531,13 @@ mod tests {
                 tree,
                 funcs: FunctionRegistry::default(),
                 vars: HashMap::new(),
+                keys: HashMap::new(),
             }
+        }
+
+        fn with_keys(mut self, keys: HashMap<String, HashMap<String, Vec<MockNode<'a>>>>) -> Self {
+            self.keys = keys;
+            self
         }
 
         // Creates an EvaluationContext with a specific context node, position, and size.
@@ -419,7 +548,7 @@ mod tests {
             // self.tree has lifetime 'a, so MockNode<'a> is valid.
             // &self.funcs and &self.vars have lifetime 's.
             // This correctly constructs an EvaluationContext<'a, 's, MockNode<'a>>.
-            EvaluationContext::new(context_node, root, &self.funcs, pos, size, &self.vars)
+            EvaluationContext::new(context_node, root, &self.funcs, pos, size, &self.vars, &self.keys, false)
         }
     }
 
@@ -491,7 +620,7 @@ mod tests {
         let tree = create_test_tree();
         let setup = TestSetup::new(&tree);
         let e_ctx = setup.context(0, 1, 1);
-        let args = vec![XPathValue::String("  leading \n and  \t trailing  ".to_string())];
+        let args = vec![XPathValue::String("  leading \n and   \t trailing  ".to_string())];
         assert_eq!(eval_func("normalize-space", args, &e_ctx).to_string(), "leading and trailing");
     }
 
@@ -526,6 +655,24 @@ mod tests {
         assert_eq!(eval_func("not", vec![XPathValue::Number(0.0)], &e_ctx).to_bool(), true);
         assert_eq!(eval_func("not", vec![XPathValue::String("".to_string())], &e_ctx).to_bool(), true);
     }
+
+    #[test]
+    fn test_func_lang() {
+        let tree = create_test_tree();
+        let setup = TestSetup::new(&tree);
+        let e_ctx_text = setup.context(4, 1, 1); // "Hello" text node, child of para with xml:lang="en"
+        let e_ctx_div = setup.context(5, 1, 1); // div with no lang
+
+        let args_en = vec![XPathValue::String("en".to_string())];
+        assert_eq!(eval_func("lang", args_en, &e_ctx_text).to_bool(), true);
+
+        let args_engb = vec![XPathValue::String("en-GB".to_string())];
+        assert_eq!(eval_func("lang", args_engb, &e_ctx_text).to_bool(), false);
+
+        let args_en_div = vec![XPathValue::String("en".to_string())];
+        assert_eq!(eval_func("lang", args_en_div, &e_ctx_div).to_bool(), false);
+    }
+
 
     // --- Number Function Tests ---
 
@@ -568,7 +715,7 @@ mod tests {
         let tree = create_test_tree();
         let setup = TestSetup::new(&tree);
         let e_ctx_para = setup.context(1, 1, 1); // <para>
-        let e_ctx_text = setup.context(3, 1, 1); // text()
+        let e_ctx_text = setup.context(4, 1, 1); // text()
 
         // No args, uses context node
         assert_eq!(eval_func("local-name", vec![], &e_ctx_para).to_string(), "para");
@@ -578,5 +725,60 @@ mod tests {
         let para_node = MockNode { id: 1, tree: &setup.tree };
         let args = vec![XPathValue::NodeSet(vec![para_node])];
         assert_eq!(eval_func("local-name", args, &e_ctx_para).to_string(), "para");
+    }
+
+    #[test]
+    fn test_func_key() {
+        let tree = create_test_tree();
+        let para_node = MockNode { id: 1, tree: &tree };
+        let attr_node = MockNode { id: 2, tree: &tree };
+
+        let mut key_index = HashMap::new();
+        key_index.insert("p1".to_string(), vec![para_node]); // key 'id-key' with value 'p1' maps to <para>
+        key_index.insert("attr-val".to_string(), vec![attr_node]); // key 'id-key' with value 'attr-val' maps to @id
+
+        let mut keys = HashMap::new();
+        keys.insert("id-key".to_string(), key_index);
+
+        let setup = TestSetup::new(&tree).with_keys(keys);
+        let e_ctx = setup.context(0, 1, 1); // Context is root
+
+        // Test key('id-key', 'p1')
+        let args1 = vec![
+            XPathValue::String("id-key".to_string()),
+            XPathValue::String("p1".to_string()),
+        ];
+        let result1 = eval_func("key", args1, &e_ctx);
+        if let XPathValue::NodeSet(nodes) = result1 {
+            assert_eq!(nodes.len(), 1);
+            assert_eq!(nodes[0], para_node);
+        } else {
+            panic!("Expected NodeSet");
+        }
+
+        // Test key('id-key', 'nonexistent')
+        let args2 = vec![
+            XPathValue::String("id-key".to_string()),
+            XPathValue::String("nonexistent".to_string()),
+        ];
+        let result2 = eval_func("key", args2, &e_ctx);
+        if let XPathValue::NodeSet(nodes) = result2 {
+            assert!(nodes.is_empty());
+        } else {
+            panic!("Expected NodeSet");
+        }
+
+        // Test key('id-key', /para/@id) -- arg is a node-set
+        let args3 = vec![
+            XPathValue::String("id-key".to_string()),
+            XPathValue::NodeSet(vec![attr_node]), // attr_node's string value is 'p1'
+        ];
+        let result3 = eval_func("key", args3, &e_ctx);
+        if let XPathValue::NodeSet(nodes) = result3 {
+            assert_eq!(nodes.len(), 1);
+            assert_eq!(nodes[0], para_node);
+        } else {
+            panic!("Expected NodeSet");
+        }
     }
 }

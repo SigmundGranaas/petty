@@ -1,10 +1,40 @@
 // FILE: src/parser/xslt/util.rs
 use crate::parser::{Location, ParseError};
-use crate::parser::xpath;
+use crate::parser::xslt::xpath;
 use crate::parser::xslt::ast::{AttributeValueTemplate, AvtPart};
 use quick_xml::events::BytesStart;
+use std::collections::HashMap;
 
 pub(super) type OwnedAttributes = Vec<(Vec<u8>, Vec<u8>)>;
+
+// A list of all known XSL-FO and CSS properties.
+// This is used to separate styling attributes from regular attributes.
+const STYLE_PROPERTIES: &[&[u8]] = &[
+    b"font-family", b"font-size", b"font-weight", b"font-style", b"line-height",
+    b"text-align", b"color", b"background-color", b"border", b"border-top", b"border-bottom",
+    b"margin", b"margin-top", b"margin-right", b"margin-bottom", b"margin-left",
+    b"padding", b"padding-top", b"padding-right", b"padding-bottom", b"padding-left",
+    b"width", b"height", b"list-style-type", b"flex-direction", b"flex-wrap",
+    b"justify-content", b"align-items", b"flex-grow", b"flex-shrink", b"flex-basis",
+    b"align-self",
+];
+
+pub(crate) fn get_non_style_attributes(
+    attrs: &OwnedAttributes,
+) -> Result<HashMap<String, AttributeValueTemplate>, ParseError> {
+    let mut non_style_attrs = HashMap::new();
+    for (key, value) in attrs {
+        if key.as_slice() == b"style" || key.as_slice() == b"use-attribute-sets" || STYLE_PROPERTIES.contains(&key.as_slice()) {
+            continue;
+        }
+        let value_str = std::str::from_utf8(value)?;
+        non_style_attrs.insert(
+            String::from_utf8(key.clone())?,
+            parse_avt(value_str)?,
+        );
+    }
+    Ok(non_style_attrs)
+}
 
 /// Parses all attributes from a `BytesStart` event into an owned `Vec`.
 pub(crate) fn get_owned_attributes(e: &BytesStart) -> Result<OwnedAttributes, ParseError> {

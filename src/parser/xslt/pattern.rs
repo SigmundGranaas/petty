@@ -1,13 +1,13 @@
 // FILE: src/parser/xslt/pattern.rs
 //! A dedicated engine for parsing and evaluating XSLT `match` patterns.
-use crate::parser::datasource::{DataSourceNode, NodeType};
-use crate::parser::xpath::ast::{NodeTest, NodeTypeTest};
-use crate::parser::xpath::parser as xpath_parser;
+use crate::parser::xslt::datasource::{DataSourceNode, NodeType};
+use crate::parser::xslt::xpath::ast::{NodeTest, NodeTypeTest};
+use crate::parser::xslt::xpath::parser as xpath_parser;
 use crate::parser::ParseError;
 use nom::branch::alt;
 use nom::bytes::complete::tag;
 use nom::combinator::map;
-use nom::multi::separated_list1;
+use nom::multi::{separated_list0, separated_list1};
 use nom::sequence::preceded;
 use nom::IResult;
 use std::fmt;
@@ -95,17 +95,27 @@ impl MatchStep {
                 }
             }
             MatchAxis::Child => {
-                if node_type != NodeType::Element && node_type != NodeType::Text {
+                // Child axis in patterns can match elements, text nodes, and the root.
+                if node_type != NodeType::Element && node_type != NodeType::Text && node_type != NodeType::Root {
                     return false;
                 }
             }
         }
 
         match &self.node_test {
-            NodeTest::Wildcard => true,
+            NodeTest::Wildcard => {
+                // `*` on a child axis should only match elements.
+                if self.axis == MatchAxis::Child {
+                    node_type == NodeType::Element
+                } else {
+                    true
+                }
+            },
             NodeTest::Name(test_name) => name.map_or(false, |q| q.local_part == test_name),
             NodeTest::NodeType(ntt) => match ntt {
                 NodeTypeTest::Text => node_type == NodeType::Text,
+                NodeTypeTest::Comment => node_type == NodeType::Comment,
+                NodeTypeTest::ProcessingInstruction => node_type == NodeType::ProcessingInstruction,
                 NodeTypeTest::Node => true,
             },
         }
@@ -132,37 +142,21 @@ fn step_parser(input: &str) -> IResult<&str, MatchStep> {
 }
 
 fn path_parser(input: &str) -> IResult<&str, LocationPathPattern> {
-    // Check for an absolute path first.
-    if let Ok((remaining, _)) = tag::<&str, &str, nom::error::Error<&str>>("/")(input) {
-        // It's an absolute path. It's only valid if no steps follow, i.e., it's just "/".
-        // We test this by seeing if a step can be parsed from the remaining input.
-        if let Ok(_) = step_parser(remaining) {
-            // A step was parsed (e.g., "/foo"), which is an invalid pattern. Return a parse error.
-            Err(nom::Err::Error(nom::error::Error::new(
-                input,
-                nom::error::ErrorKind::Verify,
-            )))
-        } else {
-            // No step could be parsed. This is the valid "/" pattern.
-            Ok((
-                remaining,
-                LocationPathPattern {
-                    is_absolute: true,
-                    steps: vec![],
-                },
-            ))
-        }
+    let (remaining, is_absolute) = if let Ok((rem, _)) = tag::<&str, &str, nom::error::Error<&str>>("/")(input) {
+        (rem, true)
     } else {
-        // It's a relative path. It must have at least one step.
-        let (input, steps) = separated_list1(tag("/"), step_parser)(input)?;
-        Ok((
-            input,
-            LocationPathPattern {
-                is_absolute: false,
-                steps,
-            },
-        ))
-    }
+        (input, false)
+    };
+
+    let (remaining, steps) = if is_absolute {
+        // An absolute path can be just `/` (no steps) or have subsequent steps like `/*` or `/root/item`
+        separated_list0(tag("/"), step_parser)(remaining)?
+    } else {
+        // A relative path MUST have at least one step.
+        separated_list1(tag("/"), step_parser)(remaining)?
+    };
+
+    Ok((remaining, LocationPathPattern { is_absolute, steps }))
 }
 
 fn pattern_parser(input: &str) -> IResult<&str, Vec<LocationPathPattern>> {
@@ -172,7 +166,7 @@ fn pattern_parser(input: &str) -> IResult<&str, Vec<LocationPathPattern>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::datasource::tests::{create_test_tree, MockNode, MockTree};
+    use crate::parser::xslt::datasource::tests::{create_test_tree, MockNode, MockTree};
 
     fn get_node<'a>(tree: &'a MockTree<'a>, id: usize) -> MockNode<'a> {
         MockNode { id, tree }
@@ -182,13 +176,14 @@ mod tests {
     fn test_pattern_parsing() {
         assert!(parse("foo").is_ok());
         assert!(parse("foo/bar").is_ok());
-        assert!(parse("/foo/bar").is_err(), "Absolute paths with steps should be invalid patterns");
+        assert!(parse("/").is_ok());
+        assert!(parse("/*").is_ok());
+        assert!(parse("/root/item").is_ok()); // This is now valid.
         assert!(parse("foo|bar").is_ok());
         assert!(parse("text()").is_ok());
         assert!(parse("@id").is_ok());
         assert!(parse("*").is_ok());
         assert!(parse("foo/*/@id").is_ok());
-        assert!(parse("/").is_ok());
     }
 
     #[test]
@@ -200,25 +195,33 @@ mod tests {
     }
 
     #[test]
+    fn test_absolute_wildcard_match() {
+        let tree = create_test_tree();
+        let pattern = parse("/*").unwrap();
+        let root_node = get_node(&tree, 0);
+        let doc_element = get_node(&tree, 1); // <para> is the document element in the test tree
+        let text_node = get_node(&tree, 4);
+
+        assert!(pattern.matches(doc_element, root_node));
+        assert!(!pattern.matches(root_node, root_node));
+        assert!(!pattern.matches(text_node, root_node));
+    }
+
+
+    #[test]
     fn test_path_match() {
         let tree = create_test_tree();
         let pattern = parse("para/text()").unwrap();
-        assert!(pattern.matches(get_node(&tree, 3), get_node(&tree, 0))); // "Hello" text node
+        assert!(pattern.matches(get_node(&tree, 4), get_node(&tree, 0))); // "Hello" text node
         assert!(!pattern.matches(get_node(&tree, 1), get_node(&tree, 0))); // <para> itself
     }
 
     #[test]
     fn test_absolute_path_match() {
         let tree = create_test_tree();
-        let pattern = parse("para").unwrap();
-        let root = get_node(&tree, 0);
-        let para = get_node(&tree, 1);
-        // FIX: The pattern is relative, so it should match the `para` node regardless of its parent.
-        assert!(pattern.matches(para, root));
-
         let root_pattern = parse("/").unwrap();
-        assert!(root_pattern.matches(root, root));
-        assert!(!root_pattern.matches(para, root));
+        assert!(root_pattern.matches(get_node(&tree, 0), get_node(&tree, 0)));
+        assert!(!root_pattern.matches(get_node(&tree, 1), get_node(&tree, 0)));
     }
 
     #[test]

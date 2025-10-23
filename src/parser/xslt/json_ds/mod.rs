@@ -1,12 +1,13 @@
-// FILE: src/parser/json_ds/mod.rs
+// FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/json_ds/mod.rs
 //! An implementation of the `DataSourceNode` trait for a `serde_json::Value`.
 //! It transforms the JSON into an in-memory "Virtual DOM" that can be navigated
 //! by the XPath engine as if it were an XML document.
 
-use crate::parser::datasource::{DataSourceNode, NodeType, QName};
+use crate::parser::xslt::datasource::{DataSourceNode, NodeType, QName};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::cmp::Ordering;
 
 // --- VDOM Data Structures ---
 
@@ -51,24 +52,14 @@ impl<'a> JsonVDocument<'a> {
         JsonVNode { id: 0, tree: self }
     }
 
-    /// A simple, non-exhaustive singularization helper for common resume keys.
-    fn singularize(plural: &str) -> &str {
-        match plural {
-            "experience" => "job",
-            "education" => "entry",
-            "skills" => "skill",
-            "projects" => "project",
-            "responsibilities" => "item",
-            _ => "item", // default fallback
-        }
-    }
+    // REMOVED the hardcoded singularize function
 
     fn build(&mut self, json_value: &'a Value) {
         // Create the top-level root node (ID 0)
         self.nodes.push(VNodeData {
             node_type: NodeType::Root,
             name: None,
-            value: "".to_string(),
+            value: "".to_string(), // Root value is calculated on-demand
             children: vec![],
             attributes: vec![],
         });
@@ -87,16 +78,8 @@ impl<'a> JsonVDocument<'a> {
         // Start the recursive build from the document element
         let doc_element_id = self.build_recursive(doc_element_content, 0, doc_element_name);
         self.nodes[0].children.push(doc_element_id);
-
-        // Post-process the root's string value.
-        let string_val = {
-            let root_node_copy = JsonVNode { id: 0, tree: self };
-            root_node_copy.calculate_string_value()
-        };
-        if let Some(node_data) = self.nodes.get_mut(0) {
-            node_data.value = string_val;
-        }
     }
+
 
     fn build_recursive(&mut self, val: &'a Value, parent_id: usize, name: &'a str) -> usize {
         match val {
@@ -106,38 +89,48 @@ impl<'a> JsonVDocument<'a> {
                 self.nodes.push(VNodeData {
                     node_type: NodeType::Element,
                     name: Some(QName { prefix: None, local_part: name }),
-                    value: String::new(),
+                    value: String::new(), // Value is calculated on-demand
                     children: Vec::new(),
                     attributes: Vec::new(),
                 });
 
-                for (key, child_val) in obj {
-                    if let Some(attr_name) = key.strip_prefix('@') {
+                // Collect keys and sort them alphabetically to ensure deterministic order
+                let mut sorted_keys: Vec<_> = obj.keys().map(|k| k.as_str()).collect();
+                sorted_keys.sort_unstable(); // Use unstable sort for efficiency
+
+                for key_str in sorted_keys {
+                    let child_val = &obj[key_str];
+
+                    if let Some(attr_name) = key_str.strip_prefix('@') {
+                        // Handle attributes (prefixed with '@')
                         let attr_id = self.build_attribute(child_val, current_id, attr_name);
                         self.nodes[current_id].attributes.push(attr_id);
                     } else if let Value::Array(arr) = child_val {
-                        // **BUG FIX STARTS HERE**
-                        // Create a single container element for the array.
+                        // Handle nested arrays: create a container element for the array itself
                         let container_id = self.nodes.len();
                         self.parent_map.insert(container_id, current_id);
                         self.nodes.push(VNodeData {
                             node_type: NodeType::Element,
-                            name: Some(QName { prefix: None, local_part: key }),
-                            value: String::new(), children: vec![], attributes: vec![],
+                            name: Some(QName { prefix: None, local_part: key_str }),
+                            value: String::new(), // Container value is calculated on-demand
+                            children: vec![],
+                            attributes: vec![],
                         });
                         self.nodes[current_id].children.push(container_id);
 
-                        // Now, create children for each item within the container.
-                        let item_name = Self::singularize(key);
+                        // Create children for each item within the container.
+                        // Use "item" as the standard name for array elements.
+                        let item_name = "item";
                         for item in arr {
                             if !item.is_null() {
                                 let item_id = self.build_recursive(item, container_id, item_name);
                                 self.nodes[container_id].children.push(item_id);
                             }
                         }
-                        // **BUG FIX ENDS HERE**
+
                     } else if !child_val.is_null() {
-                        let child_id = self.build_recursive(child_val, current_id, key);
+                        // Handle nested objects or primitives (non-null)
+                        let child_id = self.build_recursive(child_val, current_id, key_str);
                         self.nodes[current_id].children.push(child_id);
                     }
                 }
@@ -145,26 +138,29 @@ impl<'a> JsonVDocument<'a> {
             }
             Value::Array(arr) => {
                 // This case handles when an array is NOT an object value (e.g., top-level).
-                // We create a container element.
+                // Create a container element.
                 let current_id = self.nodes.len();
                 self.parent_map.insert(current_id, parent_id);
                 self.nodes.push(VNodeData {
                     node_type: NodeType::Element,
                     name: Some(QName { prefix: None, local_part: name }),
-                    value: String::new(),
+                    value: String::new(), // Value calculated on-demand
                     children: Vec::new(),
                     attributes: vec![],
                 });
 
+                // Use "item" as the standard name for array elements
+                let item_name = "item";
                 for item in arr {
                     if !item.is_null() {
-                        let child_id = self.build_recursive(item, current_id, "item");
+                        let child_id = self.build_recursive(item, current_id, item_name);
                         self.nodes[current_id].children.push(child_id);
                     }
                 }
                 current_id
             }
             Value::Null => {
+                // Create an empty element for null values
                 let current_id = self.nodes.len();
                 self.parent_map.insert(current_id, parent_id);
                 self.nodes.push(VNodeData {
@@ -174,33 +170,38 @@ impl<'a> JsonVDocument<'a> {
                 current_id
             }
             primitive => {
+                // Handle primitive values (String, Number, Bool)
                 let owned_value_str = match primitive {
                     Value::String(s) => s.clone(),
                     Value::Number(n) => n.to_string(),
                     Value::Bool(b) => b.to_string(),
-                    _ => unreachable!(),
+                    _ => unreachable!(), // Should only be string, number, or bool here
                 };
 
+                // Create the element node that represents the primitive key-value pair
                 let element_id = self.nodes.len();
                 self.parent_map.insert(element_id, parent_id);
                 self.nodes.push(VNodeData {
                     node_type: NodeType::Element,
                     name: Some(QName { prefix: None, local_part: name }),
-                    value: owned_value_str.clone(),
-                    children: vec![element_id + 1],
+                    value: owned_value_str.clone(), // Element's value is the primitive's value
+                    children: vec![element_id + 1], // It will have one text node child
                     attributes: vec![],
                 });
 
+                // Create the text node child containing the primitive's value
                 let text_id = self.nodes.len();
                 self.parent_map.insert(text_id, element_id);
                 self.nodes.push(VNodeData {
                     node_type: NodeType::Text, name: None,
-                    value: owned_value_str, children: vec![], attributes: vec![],
+                    value: owned_value_str, // Text node's value is also the primitive's value
+                    children: vec![], attributes: vec![],
                 });
-                element_id
+                element_id // Return the ID of the element node
             }
         }
     }
+
 
     fn build_attribute(&mut self, val: &'a Value, parent_id: usize, name: &'a str) -> usize {
         let attr_id = self.nodes.len();
@@ -209,7 +210,7 @@ impl<'a> JsonVDocument<'a> {
             Value::String(s) => s.clone(),
             Value::Number(n) => n.to_string(),
             Value::Bool(b) => b.to_string(),
-            _ => String::new(),
+            _ => String::new(), // Attributes from non-primitives become empty string
         };
         self.nodes.push(VNodeData {
             node_type: NodeType::Attribute,
@@ -227,57 +228,80 @@ impl<'a> PartialEq for JsonVNode<'a> {
 }
 impl<'a> Eq for JsonVNode<'a> {}
 
+impl<'a> PartialOrd for JsonVNode<'a> {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl<'a> Ord for JsonVNode<'a> {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.id.cmp(&other.id)
+    }
+}
+
 impl<'a> Hash for JsonVNode<'a> {
     fn hash<H: Hasher>(&self, state: &mut H) { self.id.hash(state); }
 }
 
 impl<'a> DataSourceNode<'a> for JsonVNode<'a> {
-    fn node_type(&self) -> NodeType { self.tree.nodes.get(self.id).map_or(NodeType::Text, |n| n.node_type) }
+    fn node_type(&self) -> NodeType { self.tree.nodes.get(self.id).map_or(NodeType::Text, |n| n.node_type) } // Default to Text if ID out of bounds
     fn name(&self) -> Option<QName<'a>> { self.tree.nodes.get(self.id).and_then(|n| n.name) }
+
     fn string_value(&self) -> String {
-        if self.node_type() == NodeType::Element || self.node_type() == NodeType::Root {
-            self.calculate_string_value()
-        } else {
-            self.tree.nodes.get(self.id).map_or(String::new(), |n| n.value.clone())
+        match self.node_type() {
+            NodeType::Attribute | NodeType::Text => {
+                // The value is pre-stored for these simple node types.
+                self.tree.nodes.get(self.id).map_or(String::new(), |n| n.value.clone())
+            }
+            NodeType::Element | NodeType::Root => {
+                // Compute on-demand for elements and root by concatenating all descendant text nodes.
+                let mut s = String::new();
+                let mut stack: Vec<JsonVNode> = self.children().collect();
+                stack.reverse(); // Reverse to process in document order using pop()
+
+                while let Some(node) = stack.pop() {
+                    match node.node_type() {
+                        NodeType::Text => {
+                            if let Some(node_data) = node.tree.nodes.get(node.id) {
+                                s.push_str(&node_data.value);
+                            }
+                        }
+                        NodeType::Element => {
+                            // Add children to the stack to continue the depth-first traversal.
+                            let mut children: Vec<_> = node.children().collect();
+                            children.reverse();
+                            stack.extend(children);
+                        }
+                        _ => {} // Ignore attributes, etc.
+                    }
+                }
+                s
+            }
+            NodeType::Comment | NodeType::ProcessingInstruction => {
+                // The JSON VDOM cannot produce these node types.
+                unreachable!();
+            }
         }
     }
+
     fn attributes(&self) -> Box<dyn Iterator<Item = Self> + 'a> {
-        let tree = self.tree;
+        let tree = self.tree; // Re-borrow to satisfy lifetime checker
         let attribute_ids = self.tree.nodes.get(self.id).map_or(vec![], |n| n.attributes.clone());
         Box::new(attribute_ids.into_iter().map(move |id| JsonVNode { id, tree }))
     }
+
     fn children(&self) -> Box<dyn Iterator<Item = Self> + 'a> {
-        let tree = self.tree;
+        let tree = self.tree; // Re-borrow
         let children_ids = self.tree.nodes.get(self.id).map_or(vec![], |n| n.children.clone());
         Box::new(children_ids.into_iter().filter_map(move |id| {
+            // Ensure child ID is valid before creating the node
             if id < tree.nodes.len() { Some(JsonVNode { id, tree }) } else { None }
         }))
     }
+
     fn parent(&self) -> Option<Self> { self.tree.parent_map.get(&self.id).map(|&pid| JsonVNode { id: pid, tree: self.tree }) }
 }
 
-impl<'a> JsonVNode<'a> {
-    fn calculate_string_value(&self) -> String {
-        if self.node_type() == NodeType::Text {
-            return self.tree.nodes.get(self.id).map_or(String::new(), |n| n.value.clone());
-        }
-        let mut s = String::new();
-        let mut stack: Vec<JsonVNode> = self.children().collect();
-        stack.reverse();
-        while let Some(node) = stack.pop() {
-            if node.node_type() == NodeType::Text {
-                if let Some(node_data) = node.tree.nodes.get(node.id) {
-                    s.push_str(&node_data.value);
-                }
-            } else {
-                let mut children: Vec<_> = node.children().collect();
-                children.reverse();
-                stack.extend(children);
-            }
-        }
-        s
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -285,14 +309,14 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn test_json_vdom_structure() {
+    fn test_json_vdom_structure_and_values() {
         let data = json!({
             "user": {
                 "@id": "u123",
-                "name": "John Doe",
+                "name": "John Doe", // Should come before orders alphabetically
                 "orders": [
-                    { "id": "o1", "amount": 100 },
-                    { "id": "o2", "amount": 200 }
+                    { "amount": 100, "id": "o1" }, // amount before id
+                    { "id": "o2", "amount": 200 }  // id before amount
                 ]
             }
         });
@@ -301,8 +325,16 @@ mod tests {
         let root = doc.root_node();
         assert_eq!(root.node_type(), NodeType::Root);
 
+        // Expected string value based on alphabetical order:
+        // user -> name -> orders -> item -> amount -> id -> item -> amount -> id
+        let expected_string_value = "John Doe100o1200o2";
+        assert_eq!(root.string_value(), expected_string_value, "Root string value mismatch");
+
+
         let doc_element: JsonVNode<'_> = root.children().next().unwrap();
         assert_eq!(doc_element.name().unwrap().local_part, "user");
+        assert_eq!(doc_element.string_value(), expected_string_value, "User element string value mismatch");
+
 
         let mut attrs: Vec<_> = doc_element.attributes().collect();
         assert_eq!(attrs.len(), 1);
@@ -312,39 +344,55 @@ mod tests {
         assert_eq!(id_attr.string_value(), "u123");
         assert_eq!(id_attr.parent().unwrap(), doc_element);
 
-        // Children of 'user' should be 'name' and the 'orders' container.
+        // Children of 'user' should be 'name' and 'orders' (alphabetical).
         let user_children: Vec<_> = doc_element.children().collect();
         assert_eq!(user_children.len(), 2);
+        assert_eq!(user_children[0].name().unwrap().local_part, "name"); // name first
+        assert_eq!(user_children[1].name().unwrap().local_part, "orders"); // orders second
 
-        let orders_container = user_children
-            .iter()
-            .find(|n| n.name().map_or(false, |q| q.local_part == "orders"))
-            .expect("Should find an <orders> container node");
+        let name_node = &user_children[0];
+        assert_eq!(name_node.string_value(), "John Doe");
+        assert_eq!(name_node.children().next().unwrap().node_type(), NodeType::Text);
 
-        // The children of the <orders> container are the <item> nodes.
+
+        let orders_container = &user_children[1];
+        // Expected container value: amount -> id -> amount -> id
+        assert_eq!(orders_container.string_value(), "100o1200o2", "Orders container string value mismatch");
+
+
+        // The children of the <orders> container are the <item> nodes (standard name).
         let order_items: Vec<_> = orders_container.children().collect();
         assert_eq!(order_items.len(), 2);
-        assert_eq!(order_items[0].name().unwrap().local_part, "item");
+        assert_eq!(order_items[0].name().unwrap().local_part, "item"); // Standard name
+        assert_eq!(order_items[0].string_value(), "100o1", "First order item string value mismatch"); // amount then id
+        assert_eq!(order_items[1].name().unwrap().local_part, "item"); // Standard name
+        assert_eq!(order_items[1].string_value(), "200o2", "Second order item string value mismatch"); // amount then id
 
-        let order1_id_node = order_items[0]
-            .children()
-            .find(|c| c.name().unwrap().local_part == "id")
-            .unwrap();
-        assert_eq!(order1_id_node.string_value(), "o1");
 
-        let order2_amount_node = order_items[1]
-            .children()
-            .find(|c| c.name().unwrap().local_part == "amount")
-            .unwrap();
-        assert_eq!(order2_amount_node.string_value(), "200");
+        // Check children of first order item (should be amount then id)
+        let order1_children: Vec<_> = order_items[0].children().collect();
+        assert_eq!(order1_children.len(), 2);
+        assert_eq!(order1_children[0].name().unwrap().local_part, "amount");
+        assert_eq!(order1_children[0].string_value(), "100");
+        assert_eq!(order1_children[1].name().unwrap().local_part, "id");
+        assert_eq!(order1_children[1].string_value(), "o1");
+
+
+        // Check children of second order item (should be amount then id)
+        let order2_children: Vec<_> = order_items[1].children().collect();
+        assert_eq!(order2_children.len(), 2);
+        assert_eq!(order2_children[0].name().unwrap().local_part, "amount");
+        assert_eq!(order2_children[0].string_value(), "200");
+        assert_eq!(order2_children[1].name().unwrap().local_part, "id");
+        assert_eq!(order2_children[1].string_value(), "o2");
     }
 
     #[test]
-    fn test_json_vdom_string_value() {
+    fn test_json_vdom_string_value_simple() {
         let data = json!({
             "para": {
-                "line1": "Hello",
-                "line2": "World"
+                "line2": "World", // Reversed order
+                "line1": "Hello"
             }
         });
 
@@ -352,6 +400,28 @@ mod tests {
         let root = doc.root_node();
         let para_node = root.children().next().unwrap();
 
+        // Expect alphabetical concatenation: Hello then World
         assert_eq!(para_node.string_value(), "HelloWorld");
+        assert_eq!(root.string_value(), "HelloWorld");
+    }
+
+    #[test]
+    fn test_json_vdom_primitive_array() {
+        let data = json!({
+            "tags": ["rust", "xslt", "json"]
+        });
+        let doc = JsonVDocument::new(&data);
+        let root = doc.root_node(); // Root node
+        let tags_node = root.children().next().unwrap(); // <tags> element
+        assert_eq!(tags_node.name().unwrap().local_part, "tags");
+        assert_eq!(tags_node.string_value(), "rustxsltjson");
+
+        let items: Vec<_> = tags_node.children().collect();
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].name().unwrap().local_part, "item"); // Standard name
+        assert_eq!(items[0].string_value(), "rust");
+        assert_eq!(items[1].string_value(), "xslt");
+        assert_eq!(items[2].string_value(), "json");
+
     }
 }

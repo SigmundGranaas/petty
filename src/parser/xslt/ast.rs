@@ -1,7 +1,8 @@
+// FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/ast.rs
 // FILE: src/parser/xslt/ast.rs
 use crate::core::style::dimension::Dimension;
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
-use crate::parser::xpath::Expression;
+use crate::parser::xslt::xpath::Expression;
 use crate::parser::xslt::pattern::Pattern;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -46,11 +47,20 @@ pub struct NamedTemplate {
     pub body: PreparsedTemplate,
 }
 
+/// Represents a compiled `<xsl:key>` definition.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KeyDefinition {
+    pub name: String,
+    pub pattern: Pattern,
+    pub use_expr: Expression,
+}
+
 #[derive(Debug, Clone)]
 pub struct CompiledStylesheet {
     pub stylesheet: Stylesheet,
     pub template_rules: HashMap<Option<String>, Vec<TemplateRule>>,
     pub named_templates: HashMap<String, Arc<NamedTemplate>>,
+    pub keys: Vec<KeyDefinition>,
     pub resource_base_path: PathBuf,
 }
 
@@ -110,7 +120,11 @@ pub enum XsltInstruction {
         attrs: HashMap<String, AttributeValueTemplate>,
     },
     Attribute {
-        name: String,
+        name: AttributeValueTemplate,
+        body: PreparsedTemplate,
+    },
+    Element {
+        name: AttributeValueTemplate,
         body: PreparsedTemplate,
     },
     If {
@@ -146,7 +160,7 @@ pub enum XsltInstruction {
     },
     ApplyTemplates {
         select: Option<Expression>,
-        mode: Option<String>,
+        mode: Option<AttributeValueTemplate>,
         sort_keys: Vec<SortKey>,
     },
     Table {
@@ -156,6 +170,6 @@ pub enum XsltInstruction {
         body: PreparsedTemplate,
     },
     PageBreak {
-        master_name: Option<String>,
+        master_name: Option<AttributeValueTemplate>,
     },
 }

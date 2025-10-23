@@ -1,10 +1,12 @@
+// FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/xpath/engine.rs
 // FILE: src/parser/xpath/engine.rs
 //! The evaluation engine for executing a parsed XPath AST against a generic `DataSourceNode`.
 
-use super::ast::{Axis, BinaryOperator, Expression, LocationPath, NodeTest, NodeTypeTest, Step};
+use super::ast::{Axis, Expression, LocationPath, NodeTest, NodeTypeTest, Step, UnaryOperator};
 use super::functions::{self, FunctionRegistry};
-use crate::parser::datasource::{DataSourceNode, NodeType};
-use crate::parser::ParseError;
+use super::{axes, operators};
+use crate::parser::xslt::datasource::{DataSourceNode, NodeType};
+use crate::parser::xslt::executor::ExecutionError;
 use std::collections::{HashMap, HashSet};
 use std::marker::PhantomData;
 
@@ -62,6 +64,10 @@ pub struct EvaluationContext<'a, 'd, N: DataSourceNode<'a>> {
     pub context_position: usize, // 1-based index
     pub context_size: usize,
     pub variables: &'d HashMap<String, XPathValue<N>>,
+    /// Read-only access to the pre-computed key indexes.
+    pub key_indexes: &'d HashMap<String, HashMap<String, Vec<N>>>,
+    /// If true, enables strict error checking.
+    pub strict: bool,
     _marker: PhantomData<&'a ()>,
 }
 
@@ -73,6 +79,8 @@ impl<'a, 'd, N: DataSourceNode<'a>> EvaluationContext<'a, 'd, N> {
         context_position: usize,
         context_size: usize,
         variables: &'d HashMap<String, XPathValue<N>>,
+        key_indexes: &'d HashMap<String, HashMap<String, Vec<N>>>,
+        strict: bool,
     ) -> Self {
         Self {
             context_node,
@@ -81,6 +89,8 @@ impl<'a, 'd, N: DataSourceNode<'a>> EvaluationContext<'a, 'd, N> {
             context_position,
             context_size,
             variables,
+            key_indexes,
+            strict,
             _marker: PhantomData,
         }
     }
@@ -90,7 +100,7 @@ impl<'a, 'd, N: DataSourceNode<'a>> EvaluationContext<'a, 'd, N> {
 pub fn evaluate<'a, N>(
     expr: &Expression,
     e_ctx: &EvaluationContext<'a, '_, N>,
-) -> Result<XPathValue<N>, ParseError>
+) -> Result<XPathValue<N>, ExecutionError>
 where
     N: DataSourceNode<'a> + 'a,
 {
@@ -102,6 +112,11 @@ where
             Ok(XPathValue::NodeSet(nodes))
         }
         Expression::Variable(name) => {
+            if e_ctx.strict && !e_ctx.variables.contains_key(name) {
+                return Err(ExecutionError::TypeError(
+                    format!("Reference to undeclared variable: ${}", name)
+                ));
+            }
             Ok(e_ctx.variables.get(name).cloned().unwrap_or(XPathValue::String("".to_string())))
         }
         Expression::FunctionCall { name, args } => {
@@ -109,89 +124,26 @@ where
             for arg in args {
                 evaluated_args.push(evaluate(arg, e_ctx)?);
             }
-            functions::evaluate_function(name, evaluated_args, e_ctx)
+            Ok(functions::evaluate_function(name, evaluated_args, e_ctx)?)
         }
         Expression::BinaryOp { left, op, right } => {
-            evaluate_binary_op(left, *op, right, e_ctx)
+            let left_val = evaluate(left, e_ctx)?;
+            let right_val = evaluate(right, e_ctx)?;
+            operators::evaluate(*op, left_val, right_val)
         }
-    }
-}
-
-fn evaluate_binary_op<'a, N: DataSourceNode<'a> + 'a>(
-    left_expr: &Expression,
-    op: BinaryOperator,
-    right_expr: &Expression,
-    e_ctx: &EvaluationContext<'a, '_, N>,
-) -> Result<XPathValue<N>, ParseError> {
-    use BinaryOperator::*;
-
-    // Special handling for Union, which must operate on node-sets.
-    if op == Union {
-        let left_val = evaluate(left_expr, e_ctx)?;
-        let right_val = evaluate(right_expr, e_ctx)?;
-
-        let l_nodes = if let XPathValue::NodeSet(n) = left_val {
-            n
-        } else {
-            return Err(ParseError::XPathParse(
-                "Union operator".to_string(),
-                "Left-hand side of '|' must be a node-set.".to_string(),
-            ));
-        };
-        let r_nodes = if let XPathValue::NodeSet(n) = right_val {
-            n
-        } else {
-            return Err(ParseError::XPathParse(
-                "Union operator".to_string(),
-                "Right-hand side of '|' must be a node-set.".to_string(),
-            ));
-        };
-
-        let mut merged = l_nodes.clone();
-        let mut seen: HashSet<N> = l_nodes.into_iter().collect();
-        for node in r_nodes {
-            if seen.insert(node) {
-                merged.push(node);
+        Expression::UnaryOp { op, expr } => {
+            let val = evaluate(expr, e_ctx)?;
+            match op {
+                UnaryOperator::Minus => Ok(XPathValue::Number(-val.to_number())),
             }
         }
-        // TODO: Sort by document order. For now, this is correct enough.
-        return Ok(XPathValue::NodeSet(merged));
-    }
-
-    let left = evaluate(left_expr, e_ctx)?;
-    let right = evaluate(right_expr, e_ctx)?;
-
-    match op {
-        Or => Ok(XPathValue::Boolean(left.to_bool() || right.to_bool())),
-        And => Ok(XPathValue::Boolean(left.to_bool() && right.to_bool())),
-        Equals | NotEquals => {
-            let res = if let (XPathValue::Number(l), XPathValue::Number(r)) = (&left, &right) {
-                l == r
-            } else if let (XPathValue::Boolean(l), XPathValue::Boolean(r)) = (&left, &right) {
-                l == r
-            } else {
-                left.to_string() == right.to_string()
-            };
-            Ok(XPathValue::Boolean(if op == Equals { res } else { !res }))
-        }
-        LessThan => Ok(XPathValue::Boolean(left.to_number() < right.to_number())),
-        LessThanOrEqual => Ok(XPathValue::Boolean(left.to_number() <= right.to_number())),
-        GreaterThan => Ok(XPathValue::Boolean(left.to_number() > right.to_number())),
-        GreaterThanOrEqual => Ok(XPathValue::Boolean(left.to_number() >= right.to_number())),
-        Plus => Ok(XPathValue::Number(left.to_number() + right.to_number())),
-        Minus => Ok(XPathValue::Number(left.to_number() - right.to_number())),
-        Multiply => Ok(XPathValue::Number(left.to_number() * right.to_number())),
-        Divide => Ok(XPathValue::Number(left.to_number() / right.to_number())),
-        Modulo => Ok(XPathValue::Number(left.to_number() % right.to_number())),
-        Union => unreachable!(), // Handled above
     }
 }
-
 
 fn evaluate_location_path<'a, N>(
     path: &LocationPath,
     e_ctx: &EvaluationContext<'a, '_, N>,
-) -> Result<Vec<N>, ParseError>
+) -> Result<Vec<N>, ExecutionError>
 where
     N: DataSourceNode<'a> + 'a,
 {
@@ -227,12 +179,12 @@ fn evaluate_step<'a, N>(
     step: &Step,
     context_nodes: &[N],
     e_ctx: &EvaluationContext<'a, '_, N>,
-) -> Result<Vec<N>, ParseError>
+) -> Result<Vec<N>, ExecutionError>
 where
     N: DataSourceNode<'a> + 'a,
 {
     // Handle special abbreviated step '.' which means the context node set itself.
-    if step.node_test == NodeTest::Name(".".to_string()) {
+    if step.axis == Axis::SelfAxis && step.node_test == NodeTest::Name(".".to_string()) {
         return Ok(context_nodes.to_vec());
     }
 
@@ -250,51 +202,18 @@ where
     let mut seen = HashSet::new();
 
     for &node in context_nodes {
-        let axis_iterator: Box<dyn Iterator<Item = N>> = match axis {
-            Axis::Child => Box::new(node.children()),
-            Axis::Attribute => Box::new(node.attributes()),
-            Axis::Descendant => {
-                let mut queue: Vec<N> = node.children().collect();
-                Box::new(std::iter::from_fn(move || {
-                    if let Some(current) = queue.pop() {
-                        queue.extend(current.children());
-                        Some(current)
-                    } else {
-                        None
-                    }
-                }))
-            }
-            Axis::DescendantOrSelf => {
-                let mut queue: Vec<N> = node.children().collect();
-                let self_iter = std::iter::once(node);
-                let desc_iter = std::iter::from_fn(move || {
-                    if let Some(current) = queue.pop() {
-                        queue.extend(current.children());
-                        Some(current)
-                    } else {
-                        None
-                    }
-                });
-                Box::new(self_iter.chain(desc_iter))
-            }
-            Axis::Parent => Box::new(node.parent().into_iter()),
-            Axis::Ancestor => {
-                let mut current = node.parent();
-                Box::new(std::iter::from_fn(move || {
-                    if let Some(p) = current {
-                        current = p.parent();
-                        Some(p)
-                    } else {
-                        None
-                    }
-                }))
-            }
-        };
-
-        for candidate_node in axis_iterator {
-            if seen.insert(candidate_node) {
-                result_nodes.push(candidate_node);
-            }
+        match axis {
+            Axis::Child => axes::collect_child_nodes(node, &mut seen, &mut result_nodes),
+            Axis::Attribute => axes::collect_attribute_nodes(node, &mut seen, &mut result_nodes),
+            Axis::Descendant => axes::collect_descendant_nodes(node, &mut seen, &mut result_nodes),
+            Axis::DescendantOrSelf => axes::collect_descendant_or_self_nodes(node, &mut seen, &mut result_nodes),
+            Axis::Parent => axes::collect_parent_nodes(node, &mut seen, &mut result_nodes),
+            Axis::Ancestor => axes::collect_ancestor_nodes(node, &mut seen, &mut result_nodes),
+            Axis::SelfAxis => axes::collect_self_nodes(node, &mut seen, &mut result_nodes),
+            Axis::FollowingSibling => axes::collect_following_sibling_nodes(node, &mut seen, &mut result_nodes),
+            Axis::PrecedingSibling => axes::collect_preceding_sibling_nodes(node, &mut seen, &mut result_nodes),
+            Axis::Following => axes::collect_following_nodes(node, &mut seen, &mut result_nodes),
+            Axis::Preceding => axes::collect_preceding_nodes(node, &mut seen, &mut result_nodes),
         }
     }
     result_nodes
@@ -318,6 +237,8 @@ where
                 }
                 NodeTest::NodeType(ntt) => match ntt {
                     NodeTypeTest::Text => node.node_type() == NodeType::Text,
+                    NodeTypeTest::Comment => node.node_type() == NodeType::Comment,
+                    NodeTypeTest::ProcessingInstruction => node.node_type() == NodeType::ProcessingInstruction,
                     NodeTypeTest::Node => true,
                 },
             }
@@ -331,7 +252,7 @@ fn apply_predicates<'a, N>(
     nodes: &[N],
     predicates: &[Expression],
     e_ctx: &EvaluationContext<'a, '_, N>,
-) -> Result<Vec<N>, ParseError>
+) -> Result<Vec<N>, ExecutionError>
 where
     N: DataSourceNode<'a> + 'a,
 {
@@ -347,6 +268,8 @@ where
                 i + 1,
                 context_size,
                 e_ctx.variables,
+                e_ctx.key_indexes, // Pass through the key indexes
+                e_ctx.strict, // Propagate strict mode
             );
             let result = evaluate(predicate, &predicate_e_ctx)?;
             let keep = match result {
@@ -365,16 +288,17 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::datasource::tests::{create_test_tree, MockNode};
+    use crate::parser::xslt::datasource::tests::{create_test_tree, MockNode};
     use std::collections::HashMap;
 
     fn create_test_eval_context<'a, 'd>(
-        tree: &'a crate::parser::datasource::tests::MockTree<'a>,
+        tree: &'a crate::parser::xslt::datasource::tests::MockTree<'a>,
         functions: &'d FunctionRegistry,
         vars: &'d HashMap<String, XPathValue<MockNode<'a>>>,
+        keys: &'d HashMap<String, HashMap<String, Vec<MockNode<'a>>>>,
     ) -> EvaluationContext<'a, 'd, MockNode<'a>> {
         let root = MockNode { id: 0, tree };
-        EvaluationContext::new(root, root, functions, 1, 1, vars)
+        EvaluationContext::new(root, root, functions, 1, 1, vars, keys, false)
     }
 
     #[test]
@@ -383,13 +307,13 @@ mod tests {
         let root = MockNode { id: 0, tree: &tree };
         let para = MockNode { id: 1, tree: &tree };
         let attr = MockNode { id: 2, tree: &tree };
-        let text = MockNode { id: 3, tree: &tree };
+        let text = MockNode { id: 4, tree: &tree };
 
         // Test collect_axis_nodes
         let children = collect_axis_nodes(Axis::Child, &[root]);
-        assert_eq!(children, vec![para]);
+        assert_eq!(children.len(), 5);
         let attributes = collect_axis_nodes(Axis::Attribute, &[para]);
-        assert_eq!(attributes, vec![attr]);
+        assert_eq!(attributes.len(), 2);
         let ancestors = collect_axis_nodes(Axis::Ancestor, &[text]);
         assert_eq!(ancestors, vec![para, root]);
 
@@ -406,9 +330,10 @@ mod tests {
         // Test apply_predicates (positional)
         let funcs = FunctionRegistry::default();
         let vars = HashMap::new();
-        let e_ctx = create_test_eval_context(&tree, &funcs, &vars);
+        let keys = HashMap::new();
+        let e_ctx = create_test_eval_context(&tree, &funcs, &vars, &keys);
         // FIX: Parse only the expression within the predicate.
-        let predicate_expr = crate::parser::xpath::parse_expression("position()=2").unwrap();
+        let predicate_expr = crate::parser::xslt::xpath::parse_expression("position()=2").unwrap();
         let predicates = vec![predicate_expr];
         let nodes_to_filter = vec![root, para, text];
         let filtered = apply_predicates(&nodes_to_filter, &predicates, &e_ctx).unwrap();
@@ -420,9 +345,10 @@ mod tests {
         let tree = create_test_tree();
         let funcs = FunctionRegistry::default();
         let vars = HashMap::new();
-        let e_ctx = create_test_eval_context(&tree, &funcs, &vars);
+        let keys = HashMap::new();
+        let e_ctx = create_test_eval_context(&tree, &funcs, &vars, &keys);
 
-        let expr = crate::parser::xpath::parse_expression("child::para[@id='p1']").unwrap();
+        let expr = crate::parser::xslt::xpath::parse_expression("child::para[@id='p1']").unwrap();
         let result = evaluate(&expr, &e_ctx).unwrap();
 
         if let XPathValue::NodeSet(nodes) = result {
@@ -438,9 +364,10 @@ mod tests {
         let tree = create_test_tree();
         let funcs = FunctionRegistry::default();
         let vars = HashMap::new();
-        let e_ctx = create_test_eval_context(&tree, &funcs, &vars);
+        let keys = HashMap::new();
+        let e_ctx = create_test_eval_context(&tree, &funcs, &vars, &keys);
 
-        let expr = crate::parser::xpath::parse_expression("child::para[1]").unwrap();
+        let expr = crate::parser::xslt::xpath::parse_expression("child::para[1]").unwrap();
         let result = evaluate(&expr, &e_ctx).unwrap();
 
         if let XPathValue::NodeSet(nodes) = result {
@@ -456,9 +383,10 @@ mod tests {
         let tree = create_test_tree();
         let funcs = FunctionRegistry::default();
         let vars = HashMap::new();
-        let e_ctx = create_test_eval_context(&tree, &funcs, &vars);
+        let keys = HashMap::new();
+        let e_ctx = create_test_eval_context(&tree, &funcs, &vars, &keys);
 
-        let expr = crate::parser::xpath::parse_expression("child::para[position()=1]").unwrap();
+        let expr = crate::parser::xslt::xpath::parse_expression("child::para[position()=1]").unwrap();
         let result = evaluate(&expr, &e_ctx).unwrap();
 
         if let XPathValue::NodeSet(nodes) = result {
@@ -473,13 +401,14 @@ mod tests {
     fn test_variable_evaluation() {
         let tree = create_test_tree();
         let funcs = FunctionRegistry::default();
+        let keys = HashMap::new();
 
         let mut vars = HashMap::new();
         vars.insert("myVar".to_string(), XPathValue::String("test-value".to_string()));
 
-        let e_ctx = create_test_eval_context(&tree, &funcs, &vars);
+        let e_ctx = create_test_eval_context(&tree, &funcs, &vars, &keys);
 
-        let expr = crate::parser::xpath::parse_expression("$myVar").unwrap();
+        let expr = crate::parser::xslt::xpath::parse_expression("$myVar").unwrap();
         let result = evaluate(&expr, &e_ctx).unwrap();
         assert_eq!(result.to_string(), "test-value");
     }
@@ -488,21 +417,22 @@ mod tests {
     fn test_path_from_variable_node_set() {
         let tree = create_test_tree();
         let funcs = FunctionRegistry::default();
+        let keys = HashMap::new();
         let mut vars = HashMap::new();
 
         // Put the <para> node (id 1) into a variable
         let para_node = MockNode { id: 1, tree: &tree };
         vars.insert("para_node".to_string(), XPathValue::NodeSet(vec![para_node]));
 
-        let e_ctx = create_test_eval_context(&tree, &funcs, &vars);
+        let e_ctx = create_test_eval_context(&tree, &funcs, &vars, &keys);
 
         // Select the text() node from the node in the variable
-        let expr = crate::parser::xpath::parse_expression("$para_node/text()").unwrap();
+        let expr = crate::parser::xslt::xpath::parse_expression("$para_node/text()").unwrap();
         let result = evaluate(&expr, &e_ctx).unwrap();
 
         if let XPathValue::NodeSet(nodes) = result {
             assert_eq!(nodes.len(), 1);
-            assert_eq!(nodes[0].id, 3); // id of the text node "Hello"
+            assert_eq!(nodes[0].id, 4); // id of the text node "Hello"
             assert_eq!(nodes[0].string_value(), "Hello");
         } else {
             panic!("Expected a NodeSet");

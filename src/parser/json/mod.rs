@@ -2,3 +2,4 @@ pub mod ast;
 pub mod compiler;
 pub mod executor;
 pub mod processor;
+pub mod jpath;

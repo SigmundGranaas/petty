@@ -5,7 +5,7 @@ use super::worker::{finish_layout_and_resource_loading, LaidOutSequence};
 use crate::core::layout::{FontManager, LayoutEngine};
 use crate::core::style::stylesheet::Stylesheet;
 use crate::error::PipelineError;
-use crate::parser::processor::CompiledTemplate;
+use crate::parser::processor::{CompiledTemplate, ExecutionConfig, DataSourceFormat};
 use crate::render::lopdf_renderer::{render_lopdf_page_to_bytes, LopdfDocumentRenderer, LopdfPageRenderTask};
 use crate::render::pdf::{render_footer_to_ops, render_page_to_ops, PdfDocumentRenderer, RenderContext};
 use crate::render::DocumentRenderer;
@@ -113,7 +113,14 @@ impl DocumentPipeline {
                     let (index, work_result) = match result {
                         Ok((index, context_arc)) => {
                             let data_source_string = serde_json::to_string(&*context_arc).map_err(PipelineError::from).unwrap();
-                            let layout_result = template_clone.execute(&data_source_string).and_then(|ir_nodes| {
+
+                            let exec_config = ExecutionConfig {
+                                // This orchestrator processes an iterator of serde_json::Value, so the format is always JSON.
+                                format: DataSourceFormat::Json,
+                                strict: debug_mode,
+                            };
+
+                            let layout_result = template_clone.execute(&data_source_string, exec_config).and_then(|ir_nodes| {
                                 finish_layout_and_resource_loading(
                                     worker_id,
                                     ir_nodes,

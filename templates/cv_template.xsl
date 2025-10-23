@@ -13,6 +13,7 @@
     <xsl:attribute-set name="name"><xsl:attribute name="font-size">28pt</xsl:attribute><xsl:attribute name="font-weight">bold</xsl:attribute><xsl:attribute name="color">#111</xsl:attribute></xsl:attribute-set>
     <xsl:attribute-set name="title"><xsl:attribute name="font-size">14pt</xsl:attribute><xsl:attribute name="color">#555</xsl:attribute><xsl:attribute name="margin-top">4pt</xsl:attribute></xsl:attribute-set>
     <xsl:attribute-set name="contact-info"><xsl:attribute name="text-align">right</xsl:attribute><xsl:attribute name="color">#444</xsl:attribute><xsl:attribute name="font-size">10pt</xsl:attribute><xsl:attribute name="line-height">8pt</xsl:attribute></xsl:attribute-set>
+    <xsl:attribute-set name="contact-line"><xsl:attribute name="margin-top">2pt</xsl:attribute></xsl:attribute-set>
     <xsl:attribute-set name="link-color"><xsl:attribute name="color">#0066cc</xsl:attribute></xsl:attribute-set>
     <xsl:attribute-set name="h2"><xsl:attribute name="font-size">14pt</xsl:attribute><xsl:attribute name="font-weight">bold</xsl:attribute><xsl:attribute name="color">#333</xsl:attribute><xsl:attribute name="margin-top">12pt</xsl:attribute><xsl:attribute name="margin-bottom">4pt</xsl:attribute><xsl:attribute name="border-bottom">1px solid #eee</xsl:attribute></xsl:attribute-set>
 
@@ -24,7 +25,6 @@
 
     <!-- Lists -->
     <xsl:attribute-set name="list"><xsl:attribute name="margin-left">15pt</xsl:attribute><xsl:attribute name="margin-top">6pt</xsl:attribute></xsl:attribute-set>
-    <xsl:attribute-set name="list-item"><xsl:attribute name="margin-top">6pt</xsl:attribute></xsl:attribute-set>
     <xsl:attribute-set name="indented-list-item"><xsl:attribute name="margin-bottom">4pt</xsl:attribute></xsl:attribute-set>
 
     <!-- Skills & Projects -->
@@ -37,31 +37,32 @@
     <!-- ==== Main Template (Document Root Match) ==== -->
     <!-- ============================================= -->
     <xsl:template match="/">
-        <!-- The root node of the data source has a single child element, e.g., <root> -->
         <xsl:apply-templates select="*"/>
     </xsl:template>
 
-    <xsl:template match="root">
-        <page-sequence>
+    <xsl:template match="/*">
+        <fo:block>
             <!-- Header Section -->
             <flex-container use-attribute-sets="header">
-                <block width="65%">
-                    <block use-attribute-sets="name"><xsl:value-of select="name"/></block>
-                    <block use-attribute-sets="title"><xsl:value-of select="title"/></block>
-                </block>
-                <block use-attribute-sets="contact-info" width="35%">
-                    <xsl:value-of select="email"/><br/>
-                    <xsl:value-of select="phone"/><br/>
-                    <xsl:value-of select="location"/><br/>
-                    <!-- NOTE: Dynamic href requires <xsl:attribute>, which is not yet implemented. Using a placeholder. -->
-                    <link href="#" use-attribute-sets="link-color"><xsl:value-of select="linkedin"/></link><br/>
-                    <link href="#" use-attribute-sets="link-color"><xsl:value-of select="github"/></link>
-                </block>
+                <fo:block width="65%">
+                    <fo:block use-attribute-sets="name"><xsl:value-of select="name"/></fo:block>
+                    <fo:block use-attribute-sets="title"><xsl:value-of select="title"/></fo:block>
+                </fo:block>
+                <fo:block use-attribute-sets="contact-info" width="35%">
+                    <fo:block use-attribute-sets="contact-line"><xsl:value-of select="email"/></fo:block>
+                    <fo:block use-attribute-sets="contact-line"><xsl:value-of select="phone"/></fo:block>
+                    <fo:block use-attribute-sets="contact-line"><xsl:value-of select="location"/></fo:block>
+                    <fo:block use-attribute-sets="contact-line">
+                        <a href="{linkedin}" use-attribute-sets="link-color"><xsl:value-of select="linkedin"/></a>
+                    </fo:block>
+                    <fo:block use-attribute-sets="contact-line">
+                        <a href="{github}" use-attribute-sets="link-color"><xsl:value-of select="github"/></a>
+                    </fo:block>
+                </fo:block>
             </flex-container>
 
-            <!-- Process all direct children of the <root> element in a specific order -->
             <xsl:apply-templates select="summary | experience | skills | projects | education"/>
-        </page-sequence>
+        </fo:block>
     </xsl:template>
 
     <!-- ======================== -->
@@ -69,67 +70,64 @@
     <!-- ======================== -->
 
     <xsl:template match="summary">
-        <block use-attribute-sets="h2">Summary</block>
+        <fo:block use-attribute-sets="h2">Summary</fo:block>
         <p><xsl:value-of select="."/></p>
     </xsl:template>
 
     <xsl:template match="experience">
-        <block use-attribute-sets="h2">Experience</block>
+        <fo:block use-attribute-sets="h2">Experience</fo:block>
         <xsl:apply-templates select="job"/>
     </xsl:template>
 
     <xsl:template match="skills">
-        <block use-attribute-sets="h2">Skills</block>
+        <fo:block use-attribute-sets="h2">Skills</fo:block>
         <xsl:apply-templates select="skill"/>
     </xsl:template>
 
     <xsl:template match="skill">
         <flex-container margin-top="4pt">
-            <block use-attribute-sets="skill-category">
-                <p><xsl:value-of select="category"/><xsl:text>:</xsl:text></p>
-            </block>
-            <block><p><xsl:value-of select="list"/></p></block>
+            <fo:block use-attribute-sets="skill-category">
+                <p><xsl:value-of select="category"/>:</p>
+            </fo:block>
+            <fo:block><p><xsl:value-of select="list"/></p></fo:block>
         </flex-container>
     </xsl:template>
 
     <xsl:template match="projects">
-        <block use-attribute-sets="h2">Projects</block>
+        <fo:block use-attribute-sets="h2">Projects</fo:block>
         <xsl:apply-templates select="project"/>
     </xsl:template>
 
     <xsl:template match="project">
-        <block use-attribute-sets="project">
+        <fo:block use-attribute-sets="project">
             <flex-container>
-                <block use-attribute-sets="project-name" width="70%"><xsl:value-of select="name"/></block>
-                <block use-attribute-sets="job-dates" width="30%">
-                    <!-- NOTE: Dynamic href requires <xsl:attribute>, which is not yet implemented. Using a placeholder. -->
-                    <link href="#" use-attribute-sets="link-color">
+                <fo:block use-attribute-sets="project-name" width="70%"><xsl:value-of select="name"/></fo:block>
+                <fo:block use-attribute-sets="job-dates" width="30%">
+                    <a href="{url}" use-attribute-sets="link-color">
                         <xsl:value-of select="url"/>
-                    </link>
-                </block>
+                    </a>
+                </fo:block>
             </flex-container>
             <p use-attribute-sets="project-description"><xsl:value-of select="description"/></p>
-        </block>
+        </fo:block>
     </xsl:template>
 
     <xsl:template match="education">
-        <block use-attribute-sets="h2">Education</block>
+        <fo:block use-attribute-sets="h2">Education</fo:block>
         <xsl:apply-templates select="entry"/>
     </xsl:template>
 
 
     <xsl:template match="job">
         <flex-container use-attribute-sets="job-header">
-            <block width="70%">
+            <fo:block width="70%">
                 <p>
-                    <span use-attribute-sets="job-title"><xsl:value-of select="title"/></span>
-                    <xsl:text> </xsl:text>
-                    <xsl:value-of select="company"/>
+                    <span use-attribute-sets="job-title"><xsl:value-of select="title"/></span>, <xsl:value-of select="company"/>
                 </p>
-            </block>
-            <block use-attribute-sets="job-dates" width="30%">
+            </fo:block>
+            <fo:block use-attribute-sets="job-dates" width="30%">
                 <p><xsl:value-of select="dates"/></p>
-            </block>
+            </fo:block>
         </flex-container>
         <list use-attribute-sets="list">
             <xsl:for-each select="responsibilities/item">
@@ -142,14 +140,14 @@
 
     <xsl:template match="entry">
         <flex-container use-attribute-sets="job-header">
-            <block width="70%">
+            <fo:block width="70%">
                 <p>
                     <span use-attribute-sets="job-title"><xsl:value-of select="degree"/></span>
                 </p>
-            </block>
-            <block use-attribute-sets="job-dates" width="30%">
+            </fo:block>
+            <fo:block use-attribute-sets="job-dates" width="30%">
                 <p><xsl:value-of select="dates"/></p>
-            </block>
+            </fo:block>
         </flex-container>
         <p use-attribute-sets="institution-text"><xsl:value-of select="institution"/></p>
     </xsl:template>

@@ -1,4 +1,5 @@
 // FILE: /home/sigmund/RustroverProjects/petty/src/parser/json/processor.rs
+// FILE: /home/sigmund/RustroverProjects/petty/src/parser/json/processor.rs
 //! Implements the public interface for the JSON parser, conforming to the
 //! `TemplateParser` and `CompiledTemplate` traits.
 
@@ -8,7 +9,7 @@ use super::executor::TemplateExecutor;
 use crate::core::idf::IRNode;
 use crate::core::style::stylesheet::Stylesheet;
 use crate::error::PipelineError;
-use crate::parser::processor::{CompiledTemplate, TemplateParser};
+use crate::parser::processor::{CompiledTemplate, ExecutionConfig, TemplateParser};
 use crate::parser::ParseError;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -26,7 +27,9 @@ pub struct CompiledJsonTemplate {
 }
 
 impl CompiledTemplate for CompiledJsonTemplate {
-    fn execute(&self, data_source: &str) -> Result<Vec<IRNode>, PipelineError> {
+    fn execute(&self, data_source: &str, _config: ExecutionConfig) -> Result<Vec<IRNode>, PipelineError> {
+        // NOTE: The JSON processor currently ignores the `config` parameter as it
+        // only supports one data format and does not have a "strict" mode.
         let data: Value = serde_json::from_str(data_source)?;
         let mut executor = TemplateExecutor::new(&self.stylesheet, &self.definitions);
         let ir_nodes = executor.build_tree(&self.instructions, &data)?;
@@ -92,6 +95,7 @@ impl TemplateParser for JsonParser {
 mod tests {
     use super::*;
     use crate::core::idf::InlineNode;
+    use crate::parser::processor::DataSourceFormat;
     use serde_json::json;
 
     fn get_test_template() -> &'static str {
@@ -128,7 +132,9 @@ mod tests {
             "products": [ { "name": "Anvil", "price": 100 }, { "name": "Rocket", "price": 5000 } ]
         });
 
-        let tree = compiled_template.execute(&data.to_string()).unwrap();
+        // The config is ignored by the JSON processor, but must be provided.
+        let config = ExecutionConfig { format: DataSourceFormat::Json, ..Default::default() };
+        let tree = compiled_template.execute(&data.to_string(), config).unwrap();
         // The root is not part of the children count from build_tree
         assert_eq!(tree.len(), 1);
         let root_children = match &tree[0] {
@@ -144,7 +150,8 @@ mod tests {
         let parser = JsonParser;
         let compiled_template = parser.parse(get_test_template(), PathBuf::new()).unwrap();
         let data = json!({ "customer": { "name": "Contoso", "is_premium": false }, "products": [] });
-        let tree = compiled_template.execute(&data.to_string()).unwrap();
+        let config = ExecutionConfig { format: DataSourceFormat::Json, ..Default::default() };
+        let tree = compiled_template.execute(&data.to_string(), config).unwrap();
         let root_children = match &tree[0] {
             IRNode::Block { children, .. } => children,
             _ => panic!(),
@@ -179,7 +186,8 @@ mod tests {
 
         let parser = JsonParser;
         let compiled = parser.parse(template_src, PathBuf::new()).unwrap();
-        let tree = compiled.execute(&data.to_string()).unwrap();
+        let config = ExecutionConfig { format: DataSourceFormat::Json, ..Default::default() };
+        let tree = compiled.execute(&data.to_string(), config).unwrap();
 
         let root_children = match &tree[0] {
             IRNode::Block { children, .. } => children,
