@@ -61,7 +61,16 @@
                 </fo:block>
             </flex-container>
 
-            <xsl:apply-templates select="summary | experience | skills | projects | education"/>
+            <!--
+              FIX: Apply templates for each section individually to enforce a specific order.
+              The union operator `|` processes nodes in document order, which is alphabetical
+              for the JSON-to-XML conversion, leading to incorrect section ordering.
+            -->
+            <xsl:apply-templates select="summary"/>
+            <xsl:apply-templates select="experience"/>
+            <xsl:apply-templates select="projects"/>
+            <xsl:apply-templates select="skills"/>
+            <xsl:apply-templates select="education"/>
         </fo:block>
     </xsl:template>
 
@@ -76,15 +85,18 @@
 
     <xsl:template match="experience">
         <fo:block use-attribute-sets="h2">Experience</fo:block>
-        <xsl:apply-templates select="job"/>
+        <!-- FIX: JSON arrays are converted to parent elements containing <item> children. -->
+        <xsl:apply-templates select="item"/>
     </xsl:template>
 
     <xsl:template match="skills">
         <fo:block use-attribute-sets="h2">Skills</fo:block>
-        <xsl:apply-templates select="skill"/>
+        <!-- FIX: Select <item> children. -->
+        <xsl:apply-templates select="item"/>
     </xsl:template>
 
-    <xsl:template match="skill">
+    <!-- FIX: Match the specific <item> child of <skills>. -->
+    <xsl:template match="skills/item">
         <flex-container margin-top="4pt">
             <fo:block use-attribute-sets="skill-category">
                 <p><xsl:value-of select="category"/>:</p>
@@ -95,10 +107,12 @@
 
     <xsl:template match="projects">
         <fo:block use-attribute-sets="h2">Projects</fo:block>
-        <xsl:apply-templates select="project"/>
+        <!-- FIX: Select <item> children. -->
+        <xsl:apply-templates select="item"/>
     </xsl:template>
 
-    <xsl:template match="project">
+    <!-- FIX: Match the specific <item> child of <projects>. -->
+    <xsl:template match="projects/item">
         <fo:block use-attribute-sets="project">
             <flex-container>
                 <fo:block use-attribute-sets="project-name" width="70%"><xsl:value-of select="name"/></fo:block>
@@ -114,11 +128,12 @@
 
     <xsl:template match="education">
         <fo:block use-attribute-sets="h2">Education</fo:block>
-        <xsl:apply-templates select="entry"/>
+        <!-- FIX: Select <item> children. -->
+        <xsl:apply-templates select="item"/>
     </xsl:template>
 
-
-    <xsl:template match="job">
+    <!-- FIX: Match the specific <item> child of <experience>. -->
+    <xsl:template match="experience/item">
         <flex-container use-attribute-sets="job-header">
             <fo:block width="70%">
                 <p>
@@ -138,7 +153,8 @@
         </list>
     </xsl:template>
 
-    <xsl:template match="entry">
+    <!-- FIX: Match the specific <item> child of <education>. -->
+    <xsl:template match="education/item">
         <flex-container use-attribute-sets="job-header">
             <fo:block width="70%">
                 <p>
