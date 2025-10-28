@@ -1,4 +1,4 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/idf_builder.rs
+// FILE: src/parser/xslt/idf_builder.rs
 //! An implementation of the `OutputBuilder` trait that constructs an IDF `IRNode` tree.
 
 use super::ast::PreparsedStyles;
@@ -39,14 +39,18 @@ impl IdfBuilder {
                 | IRNode::FlexContainer { children: c, .. }
                 | IRNode::List { children: c, .. }
                 | IRNode::ListItem { children: c, .. } => c.push(node),
+                // FIX: Correctly handle adding block content (like a <p>) into a table cell.
+                // The parent on the node_stack is the Table, not the cell itself.
                 IRNode::Table { body, .. } => {
                     if let Some(last_row) = body.rows.last_mut() {
                         if let Some(last_cell) = last_row.cells.last_mut() {
                             last_cell.children.push(node);
                         } else {
+                            // This case can happen if a block is placed inside a <row> but not a <cell>.
                             log::warn!("Attempted to add block content to a table row with no cells.");
                         }
                     } else {
+                        // This case can happen if a block is placed inside a <table> but not a <row>.
                         log::warn!("Attempted to add block content to a table with no rows.");
                     }
                 }
@@ -64,16 +68,40 @@ impl IdfBuilder {
                 return;
             }
         }
-        if let Some(IRNode::Paragraph { children: c, .. }) = self.node_stack.last_mut() {
-            c.push(node);
-        } else {
-            // Auto-wrap loose inline content in a paragraph
-            self.push_block_to_parent(IRNode::Paragraph {
-                style_sets: vec![],
-                style_override: None,
-                children: vec![node],
-            });
+
+        if let Some(parent_block) = self.node_stack.last_mut() {
+            match parent_block {
+                IRNode::Paragraph { children: c, .. } => {
+                    c.push(node);
+                    return;
+                },
+                // FIX: If the current block context is a Table, auto-wrap the text
+                // into the last available cell, creating a paragraph if needed.
+                IRNode::Table { body, .. } => {
+                    if let Some(cell) = body.rows.last_mut().and_then(|r| r.cells.last_mut()) {
+                        // Find or create a paragraph in the cell to hold the inline content
+                        if let Some(IRNode::Paragraph { children: p_children, ..}) = cell.children.last_mut() {
+                            p_children.push(node);
+                        } else {
+                            cell.children.push(IRNode::Paragraph {
+                                style_sets: vec![],
+                                style_override: None,
+                                children: vec![node]
+                            });
+                        }
+                        return;
+                    }
+                },
+                _ => {} // Fall through to auto-wrapping logic
+            }
         }
+
+        // Auto-wrap loose inline content in a paragraph
+        self.push_block_to_parent(IRNode::Paragraph {
+            style_sets: vec![],
+            style_override: None,
+            children: vec![node],
+        });
     }
 }
 

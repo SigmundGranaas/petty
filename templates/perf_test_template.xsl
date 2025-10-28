@@ -17,16 +17,24 @@
     <xsl:attribute-set name="td-odd-right" use-attribute-sets="td-odd"><xsl:attribute name="text-align">right</xsl:attribute></xsl:attribute-set>
     <xsl:attribute-set name="td-even" use-attribute-sets="td-odd"><xsl:attribute name="background-color">#F8F9FA</xsl:attribute></xsl:attribute-set>
     <xsl:attribute-set name="td-even-right" use-attribute-sets="td-even"><xsl:attribute name="text-align">right</xsl:attribute></xsl:attribute-set>
-    <xsl:attribute-set name="summary-flex-container"><xsl:attribute name="margin-top">20pt</xsl:attribute><xsl:attribute name="justify-content">flex-end</xsl:attribute></xsl:attribute-set>
+
+    <!-- FIX 1: Replaced the flex-container style with a simple container style -->
+    <xsl:attribute-set name="summary-container">
+        <xsl:attribute name="margin-top">20pt</xsl:attribute>
+    </xsl:attribute-set>
+
     <xsl:attribute-set name="summary-label"><xsl:attribute name="text-align">right</xsl:attribute><xsl:attribute name="padding">5pt 10pt</xsl:attribute><xsl:attribute name="font-weight">bold</xsl:attribute><xsl:attribute name="color">#555</xsl:attribute></xsl:attribute-set>
-    <xsl:attribute-set name="summary-value" use-attribute-sets="summary-label"><xsl:attribute name="font-weight">normal</xsl:attribute><xsl:attribute name="padding">5pt 6pt</xsl:attribute><xsl:attribute name="color">#263238</xsl:attribute></xsl:attribute-set>
+    <xsl:attribute-set name="summary-value" use-attribute-sets="summary-label"><xsl:attribute name="font-weight">normal</xsl:attribute><xsl:attribute name="padding">5pt 6pt</xsl:attribute><xsl:attribute name="color">#263238</xsl:attribute><xsl:attribute name="text-align">right</xsl:attribute></xsl:attribute-set>
     <xsl:attribute-set name="summary-total-label" use-attribute-sets="summary-label"><xsl:attribute name="font-weight">bold</xsl:attribute><xsl:attribute name="color">#0D47A1</xsl:attribute><xsl:attribute name="border-top">1.5pt solid #263238</xsl:attribute><xsl:attribute name="padding-top">10pt</xsl:attribute></xsl:attribute-set>
-    <xsl:attribute-set name="summary-total-value" use-attribute-sets="summary-total-label"><xsl:attribute name="padding">10pt 6pt 5pt 6pt</xsl:attribute><xsl:attribute name="font-weight">normal</xsl:attribute></xsl:attribute-set>
+    <xsl:attribute-set name="summary-total-value" use-attribute-sets="summary-total-label"><xsl:attribute name="padding">10pt 6pt 5pt 6pt</xsl:attribute><xsl:attribute name="font-weight">normal</xsl:attribute><xsl:attribute name="text-align">right</xsl:attribute></xsl:attribute-set>
     <xsl:attribute-set name="footer"><xsl:attribute name="font-size">9pt</xsl:attribute><xsl:attribute name="color">#78909C</xsl:attribute><xsl:attribute name="text-align">center</xsl:attribute></xsl:attribute-set>
 
-
     <!-- 3. DOCUMENT STRUCTURE TEMPLATE -->
-    <xsl:template match="/*">
+    <xsl:template match="/">
+        <xsl:apply-templates select="root"/>
+    </xsl:template>
+
+    <xsl:template match="root">
         <fo:block>
             <p use-attribute-sets="page-title">Transaction Summary</p>
             <p use-attribute-sets="account-info-text">Account: <xsl:value-of select="user/account"/></p>
@@ -51,13 +59,13 @@
                     <xsl:for-each select="items/item">
                         <row>
                             <xsl:choose>
-                                <xsl:when test="position() mod 2 = 1"> <!-- ODD ROW -->
+                                <xsl:when test="position() mod 2 = 1">
                                     <cell use-attribute-sets="td-odd"><p><xsl:value-of select="description"/></p></cell>
                                     <cell use-attribute-sets="td-odd-right"><p><xsl:value-of select="quantity"/></p></cell>
                                     <cell use-attribute-sets="td-odd-right"><p><xsl:value-of select="price"/></p></cell>
                                     <cell use-attribute-sets="td-odd-right"><p><xsl:value-of select="line_total"/></p></cell>
                                 </xsl:when>
-                                <xsl:otherwise> <!-- EVEN ROW -->
+                                <xsl:otherwise>
                                     <cell use-attribute-sets="td-even"><p><xsl:value-of select="description"/></p></cell>
                                     <cell use-attribute-sets="td-even-right"><p><xsl:value-of select="quantity"/></p></cell>
                                     <cell use-attribute-sets="td-even-right"><p><xsl:value-of select="price"/></p></cell>
@@ -69,28 +77,35 @@
                 </tbody>
             </table>
 
-            <flex-container use-attribute-sets="summary-flex-container">
+            <!-- FIX 2: Replaced flex-container with a simple block. -->
+            <fo:block use-attribute-sets="summary-container">
                 <table>
+                    <!-- FIX 3: Added a flexible spacer column to push the other two columns to the right. -->
                     <columns>
-                        <column width="auto"/>
-                        <column width="auto"/>
+                        <column width="60%"/> <!-- Flexible Spacer -->
+                        <column width="auto"/> <!-- Label Column -->
+                        <column width="auto"/> <!-- Value Column -->
                     </columns>
                     <tbody>
                         <row>
+                            <!-- FIX 4: Added an empty cell to occupy the spacer column. -->
+                            <cell/>
                             <cell use-attribute-sets="summary-label"><p>Subtotal:</p></cell>
                             <cell use-attribute-sets="summary-value"><p><xsl:value-of select="summary/total"/></p></cell>
                         </row>
                         <row>
+                            <cell/>
                             <cell use-attribute-sets="summary-label"><p>Tax (8%):</p></cell>
                             <cell use-attribute-sets="summary-value"><p><xsl:value-of select="summary/tax"/></p></cell>
                         </row>
                         <row>
+                            <cell/>
                             <cell use-attribute-sets="summary-total-label"><p>Grand Total:</p></cell>
                             <cell use-attribute-sets="summary-total-value"><p><xsl:value-of select="summary/grand_total"/></p></cell>
                         </row>
                     </tbody>
                 </table>
-            </flex-container>
+            </fo:block>
         </fo:block>
     </xsl:template>
 </xsl:stylesheet>

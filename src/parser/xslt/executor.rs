@@ -1,5 +1,5 @@
 // FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/executor.rs
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/executor.rs
+// FILE: src/parser/xslt/executor.rs
 //! The stateful executor for an XSLT program. It orchestrates the execution flow,
 //! manages state (like variables), and delegates output generation to an `OutputBuilder`.
 
@@ -452,7 +452,7 @@ impl<'s, 'a, N: DataSourceNode<'a> + 'a> TemplateExecutor<'s, 'a, N> {
             "fo:external-graphic" | "img" => builder.start_image(styles),
             // Table elements
             "table" | "fo:table" => builder.start_table(styles),
-            "tbody" | "thead" | "header" => builder.start_block(styles), // Treat as simple containers
+            "tbody" | "thead" | "header" => { /* These are structural and have no direct IDF equivalent; do nothing */ }
             "tr" | "row" | "fo:table-row" => builder.start_table_row(styles),
             "td" | "cell" | "fo:table-cell" => builder.start_table_cell(styles),
             _ => builder.start_block(styles), // Default to a block for unknown tags
@@ -472,7 +472,7 @@ impl<'s, 'a, N: DataSourceNode<'a> + 'a> TemplateExecutor<'s, 'a, N> {
             "fo:external-graphic" | "img" => builder.end_image(),
             // Table elements
             "table" | "fo:table" => builder.end_table(),
-            "tbody" | "thead" | "header" => builder.end_block(),
+            "tbody" | "thead" | "header" => { /* No-op, see start_tag */ }
             "tr" | "row" | "fo:table-row" => builder.end_table_row(),
             "td" | "cell" | "fo:table-cell" => builder.end_table_cell(),
             _ => builder.end_block(),

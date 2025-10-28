@@ -34,7 +34,7 @@ pub(super) fn finish_layout_and_resource_loading(
     let tree = IRNode::Root(ir_nodes.clone()); // TODO: Avoid clone
 
     if debug_mode {
-        log::debug!("[WORKER-{}] Intermediate Representation (IR) tree dump:\n{:#?}", worker_id, &tree);
+        debug!("[WORKER-{}] Intermediate Representation (IR) tree dump:\n{:#?}", worker_id, &tree);
     }
 
     let resource_start = Instant::now();
