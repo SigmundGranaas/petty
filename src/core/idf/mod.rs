@@ -10,6 +10,7 @@
 
 use crate::core::style::dimension::Dimension;
 use crate::core::style::stylesheet::ElementStyle;
+use std::fmt;
 use std::sync::Arc;
 
 /// A thread-safe, shared byte buffer, typically used for resource data like images.
@@ -44,7 +45,7 @@ macro_rules! impl_style_accessors {
 
 /// The primary enum representing all possible block-level elements in a document layout.
 /// This forms the backbone of the `IRNode` tree.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum IRNode {
     /// The structural root for a `sequence`'s content.
     Root(Vec<IRNode>),
@@ -110,6 +111,117 @@ pub enum IRNode {
     PageBreak { master_name: Option<String> },
 }
 
+impl fmt::Debug for IRNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            IRNode::Root(children) => f.debug_tuple("Root").field(children).finish(),
+            IRNode::Block { style_sets, style_override, children } => {
+                let mut dbg = f.debug_struct("Block");
+                if !style_sets.is_empty() {
+                    dbg.field("style_sets", style_sets);
+                }
+                if let Some(val) = style_override {
+                    dbg.field("style_override", val);
+                }
+                if !children.is_empty() {
+                    dbg.field("children", children);
+                }
+                dbg.finish()
+            }
+            IRNode::FlexContainer { style_sets, style_override, children } => {
+                let mut dbg = f.debug_struct("FlexContainer");
+                if !style_sets.is_empty() {
+                    dbg.field("style_sets", style_sets);
+                }
+                if let Some(val) = style_override {
+                    dbg.field("style_override", val);
+                }
+                if !children.is_empty() {
+                    dbg.field("children", children);
+                }
+                dbg.finish()
+            }
+            IRNode::Paragraph { style_sets, style_override, children } => {
+                let mut dbg = f.debug_struct("Paragraph");
+                if !style_sets.is_empty() {
+                    dbg.field("style_sets", style_sets);
+                }
+                if let Some(val) = style_override {
+                    dbg.field("style_override", val);
+                }
+                if !children.is_empty() {
+                    dbg.field("children", children);
+                }
+                dbg.finish()
+            }
+            IRNode::Image { src, style_sets, style_override } => {
+                let mut dbg = f.debug_struct("Image");
+                dbg.field("src", src);
+                if !style_sets.is_empty() {
+                    dbg.field("style_sets", style_sets);
+                }
+                if let Some(val) = style_override {
+                    dbg.field("style_override", val);
+                }
+                dbg.finish()
+            }
+            IRNode::List { style_sets, style_override, start, children } => {
+                let mut dbg = f.debug_struct("List");
+                if !style_sets.is_empty() {
+                    dbg.field("style_sets", style_sets);
+                }
+                if let Some(val) = style_override {
+                    dbg.field("style_override", val);
+                }
+                if let Some(val) = start {
+                    dbg.field("start", val);
+                }
+                if !children.is_empty() {
+                    dbg.field("children", children);
+                }
+                dbg.finish()
+            }
+            IRNode::ListItem { style_sets, style_override, children } => {
+                let mut dbg = f.debug_struct("ListItem");
+                if !style_sets.is_empty() {
+                    dbg.field("style_sets", style_sets);
+                }
+                if let Some(val) = style_override {
+                    dbg.field("style_override", val);
+                }
+                if !children.is_empty() {
+                    dbg.field("children", children);
+                }
+                dbg.finish()
+            }
+            IRNode::Table { style_sets, style_override, columns, header, body } => {
+                let mut dbg = f.debug_struct("Table");
+                if !style_sets.is_empty() {
+                    dbg.field("style_sets", style_sets);
+                }
+                if let Some(val) = style_override {
+                    dbg.field("style_override", val);
+                }
+                if !columns.is_empty() {
+                    dbg.field("columns", columns);
+                }
+                if let Some(val) = header {
+                    dbg.field("header", val);
+                }
+                dbg.field("body", body);
+                dbg.finish()
+            }
+            IRNode::PageBreak { master_name } => {
+                let mut dbg = f.debug_struct("PageBreak");
+                if let Some(val) = master_name {
+                    dbg.field("master_name", val);
+                }
+                dbg.finish()
+            }
+        }
+    }
+}
+
 impl_style_accessors!(
     for IRNode,
     IRNode::Block,
@@ -125,12 +237,28 @@ impl_style_accessors!(
 
 /// Represents the definition of a single column in a table, containing
 /// information needed for layout calculation.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Clone, PartialEq, Default)]
 pub struct TableColumnDefinition {
     pub width: Option<Dimension>,
     // These string styles will be resolved by the TreeBuilder, not the layout engine.
     pub style: Option<String>,
     pub header_style: Option<String>,
+}
+
+impl fmt::Debug for TableColumnDefinition {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut dbg = f.debug_struct("TableColumnDefinition");
+        if let Some(val) = &self.width {
+            dbg.field("width", val);
+        }
+        if let Some(val) = &self.style {
+            dbg.field("style", val);
+        }
+        if let Some(val) = &self.header_style {
+            dbg.field("header_style", val);
+        }
+        dbg.finish()
+    }
 }
 
 /// A container for the header rows of a `Table`.
@@ -153,7 +281,7 @@ pub struct TableRow {
 
 /// Represents a single cell within a `TableRow`. A cell can contain any
 /// block-level `IRNode` elements, allowing for nested structures.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TableCell {
     pub style_sets: Vec<Arc<ElementStyle>>,
     pub style_override: Option<ElementStyle>,
@@ -161,6 +289,28 @@ pub struct TableCell {
     pub children: Vec<IRNode>,
     pub colspan: usize,
     pub rowspan: usize,
+}
+
+impl fmt::Debug for TableCell {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut dbg = f.debug_struct("TableCell");
+        if !self.style_sets.is_empty() {
+            dbg.field("style_sets", &self.style_sets);
+        }
+        if let Some(val) = &self.style_override {
+            dbg.field("style_override", val);
+        }
+        if !self.children.is_empty() {
+            dbg.field("children", &self.children);
+        }
+        if self.colspan != 1 {
+            dbg.field("colspan", &self.colspan);
+        }
+        if self.rowspan != 1 {
+            dbg.field("rowspan", &self.rowspan);
+        }
+        dbg.finish()
+    }
 }
 
 impl Default for TableCell {
@@ -179,7 +329,7 @@ impl Default for TableCell {
 // --- Inline Content Enum ---
 
 /// Represents content that flows within a line-breaking context, such as a `Paragraph`.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum InlineNode {
     /// A raw string of text.
     Text(String),
@@ -208,6 +358,53 @@ pub enum InlineNode {
 
     /// A hard line break, analogous to an HTML `<br>`.
     LineBreak,
+}
+
+impl fmt::Debug for InlineNode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            InlineNode::Text(text) => f.debug_tuple("Text").field(text).finish(),
+            InlineNode::StyledSpan { style_sets, style_override, children } => {
+                let mut dbg = f.debug_struct("StyledSpan");
+                if !style_sets.is_empty() {
+                    dbg.field("style_sets", style_sets);
+                }
+                if let Some(val) = style_override {
+                    dbg.field("style_override", val);
+                }
+                if !children.is_empty() {
+                    dbg.field("children", children);
+                }
+                dbg.finish()
+            }
+            InlineNode::Hyperlink { href, style_sets, style_override, children } => {
+                let mut dbg = f.debug_struct("Hyperlink");
+                dbg.field("href", href);
+                if !style_sets.is_empty() {
+                    dbg.field("style_sets", style_sets);
+                }
+                if let Some(val) = style_override {
+                    dbg.field("style_override", val);
+                }
+                if !children.is_empty() {
+                    dbg.field("children", children);
+                }
+                dbg.finish()
+            }
+            InlineNode::Image { src, style_sets, style_override } => {
+                let mut dbg = f.debug_struct("Image");
+                dbg.field("src", src);
+                if !style_sets.is_empty() {
+                    dbg.field("style_sets", style_sets);
+                }
+                if let Some(val) = style_override {
+                    dbg.field("style_override", val);
+                }
+                dbg.finish()
+            }
+            InlineNode::LineBreak => write!(f, "LineBreak"),
+        }
+    }
 }
 
 impl_style_accessors!(
