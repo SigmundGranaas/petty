@@ -1,4 +1,4 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/table_test.rs
+// src/core/layout/nodes/table_test.rs
 #![cfg(test)]
 
 use crate::core::idf::{IRNode, TableBody, TableCell, TableColumnDefinition, TableHeader, TableRow};
@@ -40,8 +40,7 @@ fn create_test_table(rows: usize) -> IRNode {
     }
 
     IRNode::Table {
-        style_sets: vec![],
-        style_override: None,
+        meta: Default::default(),
         columns: vec![
             TableColumnDefinition {
                 width: Some(Dimension::Percent(50.0)),
@@ -102,7 +101,7 @@ fn test_table_splits_across_pages_and_repeats_header() {
     let nodes = vec![table];
 
     let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
-    assert_eq!(pages.len(), 3, "Expected table to split into 2 pages");
+    assert_eq!(pages.len(), 3, "Expected table to split into 3 pages");
 
     let page1 = &pages[0];
     assert!(find_first_text_box_with_content(page1, "Header 1").is_some());
@@ -120,8 +119,7 @@ fn test_table_splits_across_pages_and_repeats_header() {
 fn test_table_colspan_and_rowspan() {
     let stylesheet = get_stylesheet(520.0, 500.0); // content width 500
     let table = IRNode::Table {
-        style_sets: vec![],
-        style_override: None,
+        meta: Default::default(),
         columns: vec![
             TableColumnDefinition { width: Some(Dimension::Pt(100.0)), ..Default::default() },
             TableColumnDefinition { width: Some(Dimension::Pt(100.0)), ..Default::default() },

@@ -1,6 +1,5 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/flex_test.rs
 #![cfg(test)]
-use crate::core::idf::IRNode;
+use crate::core::idf::{IRNode, NodeMetadata};
 use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
 use crate::core::style::dimension::{Dimension, Margins, PageSize};
 use crate::core::style::flex::{AlignItems, AlignSelf, FlexDirection, FlexWrap};
@@ -9,8 +8,10 @@ use std::collections::HashMap;
 
 fn create_flex_item_with_style(text: &str, style: ElementStyle) -> IRNode {
     IRNode::Block {
-        style_sets: vec![],
-        style_override: Some(style),
+        meta: NodeMetadata {
+            style_override: Some(style),
+            ..Default::default()
+        },
         children: vec![create_paragraph(text)],
     }
 }
@@ -33,8 +34,7 @@ fn get_stylesheet(width: f32, height: f32) -> Stylesheet {
 fn test_flex_direction_row() {
     let stylesheet = get_stylesheet(500.0, 100.0);
     let nodes = vec![IRNode::FlexContainer {
-        style_sets: vec![],
-        style_override: None,
+        meta: Default::default(),
         children: vec![
             create_flex_item_with_style("1", ElementStyle { width: Some(Dimension::Pt(100.0)), ..Default::default() }),
             create_flex_item_with_style("2", ElementStyle { width: Some(Dimension::Pt(100.0)), ..Default::default() }),
@@ -51,8 +51,10 @@ fn test_flex_direction_row() {
 fn test_flex_direction_column() {
     let stylesheet = get_stylesheet(100.0, 500.0);
     let nodes = vec![IRNode::FlexContainer {
-        style_sets: vec![],
-        style_override: Some(ElementStyle { flex_direction: Some(FlexDirection::Column), ..Default::default() }),
+        meta: NodeMetadata {
+            style_override: Some(ElementStyle { flex_direction: Some(FlexDirection::Column), ..Default::default() }),
+            ..Default::default()
+        },
         children: vec![
             create_flex_item_with_style("1", ElementStyle { height: Some(Dimension::Pt(100.0)), ..Default::default() }),
             create_flex_item_with_style("2", ElementStyle { height: Some(Dimension::Pt(100.0)), ..Default::default() }),
@@ -69,8 +71,10 @@ fn test_flex_direction_column() {
 fn test_flex_direction_row_reverse() {
     let stylesheet = get_stylesheet(500.0, 100.0);
     let nodes = vec![IRNode::FlexContainer {
-        style_sets: vec![],
-        style_override: Some(ElementStyle { flex_direction: Some(FlexDirection::RowReverse), ..Default::default() }),
+        meta: NodeMetadata {
+            style_override: Some(ElementStyle { flex_direction: Some(FlexDirection::RowReverse), ..Default::default() }),
+            ..Default::default()
+        },
         children: vec![
             create_flex_item_with_style("1", ElementStyle { width: Some(Dimension::Pt(100.0)), ..Default::default() }),
             create_flex_item_with_style("2", ElementStyle { width: Some(Dimension::Pt(100.0)), ..Default::default() }),
@@ -90,8 +94,7 @@ fn test_flex_direction_row_reverse() {
 fn test_flex_grow() {
     let stylesheet = get_stylesheet(500.0, 100.0);
     let nodes = vec![IRNode::FlexContainer {
-        style_sets: vec![],
-        style_override: None,
+        meta: Default::default(),
         children: vec![
             create_flex_item_with_style("1", ElementStyle { width: Some(Dimension::Pt(100.0)), flex_grow: Some(1.0), ..Default::default() }),
             create_flex_item_with_style("2", ElementStyle { width: Some(Dimension::Pt(100.0)), flex_grow: Some(3.0), ..Default::default() }),
@@ -111,8 +114,7 @@ fn test_flex_grow() {
 fn test_flex_shrink() {
     let stylesheet = get_stylesheet(400.0, 100.0);
     let nodes = vec![IRNode::FlexContainer {
-        style_sets: vec![],
-        style_override: None,
+        meta: Default::default(),
         children: vec![
             create_flex_item_with_style("1", ElementStyle { flex_basis: Some(Dimension::Pt(300.0)), flex_shrink: Some(1.0), ..Default::default() }),
             create_flex_item_with_style("2", ElementStyle { flex_basis: Some(Dimension::Pt(300.0)), flex_shrink: Some(1.0), ..Default::default() }),
@@ -132,8 +134,7 @@ fn test_flex_shrink() {
 fn test_order_property() {
     let stylesheet = get_stylesheet(500.0, 100.0);
     let nodes = vec![IRNode::FlexContainer {
-        style_sets: vec![],
-        style_override: None,
+        meta: Default::default(),
         children: vec![
             create_flex_item_with_style("A", ElementStyle { width: Some(Dimension::Pt(100.0)), order: Some(2), ..Default::default() }),
             create_flex_item_with_style("B", ElementStyle { width: Some(Dimension::Pt(100.0)), order: Some(1), ..Default::default() }),
@@ -151,8 +152,7 @@ fn test_order_property() {
 fn test_margins_on_flex_items() {
     let stylesheet = get_stylesheet(500.0, 100.0);
     let nodes = vec![IRNode::FlexContainer {
-        style_sets: vec![],
-        style_override: None,
+        meta: Default::default(),
         children: vec![
             create_flex_item_with_style("1", ElementStyle { width: Some(Dimension::Pt(100.0)), margin: Some(Margins { left: 20.0, ..Default::default() }), ..Default::default() }),
             create_flex_item_with_style("2", ElementStyle { width: Some(Dimension::Pt(100.0)), margin: Some(Margins { left: 30.0, ..Default::default() }), ..Default::default() }),
@@ -171,8 +171,10 @@ fn test_margins_on_flex_items() {
 fn test_align_items_center() {
     let stylesheet = get_stylesheet(500.0, 100.0);
     let nodes = vec![IRNode::FlexContainer {
-        style_sets: vec![],
-        style_override: Some(ElementStyle { align_items: Some(AlignItems::Center), ..Default::default() }),
+        meta: NodeMetadata {
+            style_override: Some(ElementStyle { align_items: Some(AlignItems::Center), ..Default::default() }),
+            ..Default::default()
+        },
         children: vec![
             create_flex_item_with_style("1", ElementStyle { width: Some(Dimension::Pt(100.0)), height: Some(Dimension::Pt(40.0)), ..Default::default() }),
             create_flex_item_with_style("2", ElementStyle { width: Some(Dimension::Pt(100.0)), height: Some(Dimension::Pt(60.0)), ..Default::default() }),
@@ -189,8 +191,10 @@ fn test_align_items_center() {
 fn test_align_self_override() {
     let stylesheet = get_stylesheet(500.0, 100.0);
     let nodes = vec![IRNode::FlexContainer {
-        style_sets: vec![],
-        style_override: Some(ElementStyle { height: Some(Dimension::Pt(100.0)), align_items: Some(AlignItems::FlexStart), ..Default::default() }),
+        meta: NodeMetadata {
+            style_override: Some(ElementStyle { height: Some(Dimension::Pt(100.0)), align_items: Some(AlignItems::FlexStart), ..Default::default() }),
+            ..Default::default()
+        },
         children: vec![
             create_flex_item_with_style("tall", ElementStyle { width: Some(Dimension::Pt(100.0)), height: Some(Dimension::Pt(80.0)), ..Default::default() }),
             create_flex_item_with_style("short", ElementStyle { width: Some(Dimension::Pt(100.0)), height: Some(Dimension::Pt(20.0)), align_self: Some(AlignSelf::FlexEnd), ..Default::default() }),
@@ -221,8 +225,10 @@ fn test_flex_wrap_with_page_break() {
         ..Default::default()
     };
     let nodes = vec![IRNode::FlexContainer {
-        style_sets: vec![],
-        style_override: Some(ElementStyle { flex_wrap: Some(FlexWrap::Wrap), ..Default::default() }),
+        meta: NodeMetadata {
+            style_override: Some(ElementStyle { flex_wrap: Some(FlexWrap::Wrap), ..Default::default() }),
+            ..Default::default()
+        },
         children: vec![
             create_flex_item_with_style("1", ElementStyle { width: Some(Dimension::Pt(100.0)), height: Some(Dimension::Pt(40.0)), ..Default::default() }), // Line 1
             create_flex_item_with_style("2", ElementStyle { width: Some(Dimension::Pt(100.0)), height: Some(Dimension::Pt(40.0)), ..Default::default() }),

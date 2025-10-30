@@ -1,6 +1,5 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/flex.rs
 use crate::core::idf::IRNode;
-use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult};
+use crate::core::layout::node::{AnchorLocation, LayoutContext, LayoutNode, LayoutResult};
 use crate::core::layout::nodes::block::draw_background_and_borders;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{geom, LayoutEngine, LayoutError};
@@ -11,6 +10,7 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct FlexNode {
+    id: Option<String>,
     children: Vec<Box<dyn LayoutNode>>,
     style: Arc<ComputedStyle>,
     lines: Vec<FlexLine>,
@@ -19,8 +19,8 @@ pub struct FlexNode {
 impl FlexNode {
     pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Self {
         let style = engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
-        let ir_children = match node {
-            IRNode::FlexContainer { children, .. } => children,
+        let (id, ir_children) = match node {
+            IRNode::FlexContainer { meta, children } => (meta.id.clone(), children),
             _ => panic!("FlexNode must be created from an IRNode::FlexContainer"),
         };
         let children = ir_children
@@ -29,6 +29,7 @@ impl FlexNode {
             .collect();
 
         Self {
+            id,
             children,
             style,
             lines: vec![],
@@ -97,6 +98,14 @@ impl LayoutNode for FlexNode {
     }
 
     fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
+        if let Some(id) = &self.id {
+            let location = AnchorLocation {
+                local_page_index: ctx.local_page_index,
+                y_pos: ctx.cursor.1 + ctx.bounds.y,
+            };
+            ctx.defined_anchors.borrow_mut().insert(id.clone(), location);
+        }
+
         // --- Box Model Setup ---
         let margin_to_add = self.style.margin.top.max(ctx.last_v_margin);
         if !ctx.is_empty() && margin_to_add > ctx.available_height() {
@@ -151,6 +160,7 @@ impl LayoutNode for FlexNode {
                 // Since flex items don't have collapsing margins with the container, last_v_margin is not set from children.
 
                 let mut remainder_node = FlexNode {
+                    id: self.id.clone(),
                     children: remaining_children,
                     style: self.style.clone(),
                     lines: vec![], // Will be recalculated
@@ -202,6 +212,8 @@ impl LayoutNode for FlexNode {
                     cursor: (0.0, 0.0),
                     elements: ctx.elements,
                     last_v_margin: 0.0,
+                    local_page_index: ctx.local_page_index,
+                    defined_anchors: ctx.defined_anchors,
                 };
 
                 match self.children[item.original_index].layout(&mut item_ctx) {

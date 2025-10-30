@@ -1,6 +1,7 @@
+// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/test_utils.rs
 #![cfg(test)]
 
-use crate::core::idf::{IRNode, InlineNode};
+use crate::core::idf::{IRNode, InlineNode, NodeMetadata};
 use crate::core::layout::engine::LayoutEngine;
 use crate::core::layout::fonts::FontManager;
 use crate::core::layout::{LayoutElement, PositionedElement, TextElement};
@@ -11,7 +12,6 @@ use std::sync::Arc;
 /// Creates a default layout engine for testing purposes.
 pub fn create_test_engine() -> LayoutEngine {
     let mut font_manager = FontManager::new();
-    // FIX: load_fallback_font now returns (), so no unwrap is needed.
     font_manager.load_fallback_font();
     LayoutEngine::new(Arc::new(font_manager))
 }
@@ -22,7 +22,7 @@ pub fn paginate_test_nodes(
     nodes: Vec<IRNode>,
 ) -> Result<Vec<Vec<PositionedElement>>, PipelineError> {
     let engine = create_test_engine();
-    engine.paginate(&stylesheet, nodes)
+    engine.paginate(&stylesheet, nodes).map(|(pages, _anchors)| pages)
 }
 
 /// Creates a simple paragraph node for testing, converting `\n` to line breaks.
@@ -38,8 +38,7 @@ pub fn create_paragraph(text: &str) -> IRNode {
     }
 
     IRNode::Paragraph {
-        style_sets: vec![],
-        style_override: None,
+        meta: NodeMetadata::default(),
         children,
     }
 }

@@ -1,6 +1,5 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/table.rs
 use crate::core::idf::{IRNode, TableColumnDefinition, TableRow};
-use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult};
+use crate::core::layout::node::{AnchorLocation, LayoutContext, LayoutNode, LayoutResult};
 use crate::core::layout::nodes::block::{draw_background_and_borders, BlockNode};
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{geom, LayoutEngine, LayoutError};
@@ -12,6 +11,7 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct TableNode {
+    id: Option<String>,
     header_rows: Vec<TableRowNode>,
     body_rows: Vec<TableRowNode>,
     style: Arc<ComputedStyle>,
@@ -21,12 +21,12 @@ pub struct TableNode {
 
 impl TableNode {
     pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Self {
-        let (columns, header, body) = match node {
-            IRNode::Table { columns, header, body, .. } => (columns, header, body),
+        let (meta, columns, header, body) = match node {
+            IRNode::Table { meta, columns, header, body, .. } => (meta, columns, header, body),
             _ => panic!("TableNode must be created from IRNode::Table"),
         };
 
-        let style = engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
+        let style = engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), &parent_style);
 
         let header_rows = header
             .as_ref()
@@ -36,6 +36,7 @@ impl TableNode {
         let body_rows = body.rows.iter().map(|r| TableRowNode::new(r, &style, engine)).collect();
 
         Self {
+            id: meta.id.clone(),
             header_rows,
             body_rows,
             style,
@@ -92,6 +93,14 @@ impl LayoutNode for TableNode {
     }
 
     fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
+        if let Some(id) = &self.id {
+            let location = AnchorLocation {
+                local_page_index: ctx.local_page_index,
+                y_pos: ctx.cursor.1 + ctx.bounds.y,
+            };
+            ctx.defined_anchors.borrow_mut().insert(id.clone(), location);
+        }
+
         // --- Box Model Setup ---
         let margin_to_add = self.style.margin.top.max(ctx.last_v_margin);
         if !ctx.is_empty() && margin_to_add > ctx.available_height() {
@@ -126,6 +135,8 @@ impl LayoutNode for TableNode {
             cursor: (0.0, 0.0),
             elements: ctx.elements,
             last_v_margin: 0.0,
+            local_page_index: ctx.local_page_index,
+            defined_anchors: ctx.defined_anchors,
         };
 
         let num_cols = self.columns.len();
@@ -177,6 +188,7 @@ impl LayoutNode for TableNode {
 
 fn create_remainder_table(original_table: &TableNode, remaining_body_rows: Vec<TableRowNode>) -> TableNode {
     TableNode {
+        id: original_table.id.clone(),
         header_rows: original_table.header_rows.clone(),
         body_rows: remaining_body_rows,
         style: original_table.style.clone(),
@@ -256,6 +268,8 @@ impl TableRowNode {
                 cursor: (0.0, 0.0),
                 elements: ctx.elements,
                 last_v_margin: 0.0,
+                local_page_index: ctx.local_page_index,
+                defined_anchors: ctx.defined_anchors,
             };
             cell.layout(&mut cell_ctx)?;
 
@@ -296,7 +310,7 @@ impl TableCellNode {
             .map(|c| engine.build_layout_node_tree(c, cell_style.clone()))
             .collect();
         Self {
-            content: BlockNode::new_from_children(children, cell_style),
+            content: BlockNode::new_from_children(None, children, cell_style),
             height: 0.0,
             preferred_width: 0.0,
             colspan: cell.colspan.max(1),
@@ -307,7 +321,7 @@ impl TableCellNode {
     fn measure(&mut self, engine: &LayoutEngine, available_width: f32) {
         self.height = self.content.measure_content_height(engine, available_width);
         // Measure preferred width by giving it "infinite" space
-        self.preferred_width = self.content.measure_content_height(engine, f32::MAX);
+        self.preferred_width = self.content.measure_intrinsic_width(engine);
     }
 
     fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
@@ -359,9 +373,8 @@ fn calculate_column_widths(
         for cell in &row.cells {
             if col_cursor >= columns.len() { break; }
             if auto_indices.contains(&col_cursor) { // Simplified: only considers first col of a span
-                let mut cell_content = cell.content.clone();
-                // A simple heuristic: measure with a very large width to find natural size.
-                let preferred = cell_content.measure_content_height(engine, 1_000_000.0);
+                let cell_content = cell.content.clone();
+                let preferred = cell_content.measure_intrinsic_width(engine);
                 if cell.colspan == 1 {
                     preferred_widths[col_cursor] = preferred_widths[col_cursor].max(preferred);
                 }

@@ -1,6 +1,5 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/image_test.rs
 #![cfg(test)]
-use crate::core::idf::IRNode;
+use crate::core::idf::{IRNode, NodeMetadata};
 use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
 use crate::core::style::dimension::{Dimension, Margins, PageSize};
 use crate::core::style::stylesheet::{ElementStyle, PageLayout, Stylesheet};
@@ -9,11 +8,13 @@ use std::collections::HashMap;
 fn create_image(height: f32) -> IRNode {
     IRNode::Image {
         src: "test.png".to_string(),
-        style_sets: vec![],
-        style_override: Some(ElementStyle {
-            height: Some(Dimension::Pt(height)),
+        meta: NodeMetadata {
+            style_override: Some(ElementStyle {
+                height: Some(Dimension::Pt(height)),
+                ..Default::default()
+            }),
             ..Default::default()
-        }),
+        },
     }
 }
 
@@ -74,8 +75,10 @@ fn test_image_with_margins() {
     let nodes = vec![
         IRNode::Image {
             src: "test.png".to_string(),
-            style_sets: vec![],
-            style_override: Some(image_style),
+            meta: NodeMetadata {
+                style_override: Some(image_style),
+                ..Default::default()
+            },
         }, // Total height = 15+30+5 = 50
         create_image(20.0), // Starts at y=10+50. Fits (10+50+20 <= 80)
     ];

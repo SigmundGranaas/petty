@@ -1,9 +1,18 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/node.rs
 use super::{geom, ComputedStyle, LayoutEngine, LayoutError, PositionedElement};
 use std::any::Any;
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
+
+/// Stores the resolved location of an anchor target.
+#[derive(Debug, Clone)]
+pub struct AnchorLocation {
+    /// The 0-based index of the page within the current sequence.
+    pub local_page_index: usize,
+    /// The Y position of the anchor on that page, in points.
+    pub y_pos: f32,
+}
 
 /// The canvas given by a parent to a child for a single layout operation.
 ///
@@ -21,6 +30,10 @@ pub struct LayoutContext<'a> {
     pub elements: &'a RefCell<Vec<PositionedElement>>,
     /// The bottom margin of the previously laid-out block-level sibling, for margin collapsing.
     pub last_v_margin: f32,
+    /// The 0-based index of the current page being laid out.
+    pub local_page_index: usize,
+    /// A mutable collection of all anchors defined in the document.
+    pub defined_anchors: &'a RefCell<HashMap<String, AnchorLocation>>,
 }
 
 impl<'a> LayoutContext<'a> {
@@ -29,6 +42,7 @@ impl<'a> LayoutContext<'a> {
         engine: &'a LayoutEngine,
         bounds: geom::Rect,
         elements: &'a RefCell<Vec<PositionedElement>>,
+        defined_anchors: &'a RefCell<HashMap<String, AnchorLocation>>,
     ) -> Self {
         Self {
             engine,
@@ -36,6 +50,8 @@ impl<'a> LayoutContext<'a> {
             cursor: (0.0, 0.0),
             elements,
             last_v_margin: 0.0,
+            local_page_index: 0,
+            defined_anchors,
         }
     }
 
@@ -106,7 +122,6 @@ impl Clone for Box<dyn LayoutNode> {
         self.clone_box()
     }
 }
-
 
 /// The central trait that governs all layout.
 ///

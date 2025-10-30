@@ -1,11 +1,11 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/xpath/functions.rs
-// FILE: src/parser/xpath/functions.rs
 //! Defines the registry and built-in implementations for XPath 1.0 functions.
 
 use super::engine::{EvaluationContext, XPathValue};
 use crate::parser::xslt::datasource::{DataSourceNode, NodeType};
 use crate::parser::xslt::executor::ExecutionError;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::hash::{Hash, Hasher};
 
 // A simple registry that just holds the names of built-in functions.
 pub struct FunctionRegistry {
@@ -40,6 +40,7 @@ pub fn evaluate_function<'a, 'd, N: DataSourceNode<'a>>(
         "local-name" => func_local_name(args, e_ctx),
         "name" => func_name(args, e_ctx),
         "key" => func_key(args, e_ctx),
+        "generate-id" => func_generate_id(args, e_ctx),
 
         // String
         "concat" => func_concat(args),
@@ -236,6 +237,47 @@ fn func_name<'a, 'd, N: DataSourceNode<'a>>(
         }
     })).unwrap_or_default();
     Ok(XPathValue::String(name))
+}
+
+fn func_generate_id<'a, 'd, N: DataSourceNode<'a>>(
+    mut args: Vec<XPathValue<N>>,
+    e_ctx: &EvaluationContext<'a, 'd, N>,
+) -> Result<XPathValue<N>, ExecutionError> {
+    if args.len() > 1 {
+        return Err(ExecutionError::FunctionError {
+            function: "generate-id()".to_string(),
+            message: "Expected 0 or 1 arguments".to_string(),
+        });
+    }
+
+    let node_to_id = if args.is_empty() {
+        Some(e_ctx.context_node)
+    } else {
+        match args.remove(0) {
+            XPathValue::NodeSet(mut nodes) => {
+                if nodes.is_empty() {
+                    None
+                } else {
+                    // The spec requires using the first node in document order.
+                    nodes.sort();
+                    nodes.first().copied()
+                }
+            }
+            // For non-node-set arguments, behavior is undefined; returning empty is safe.
+            _ => None,
+        }
+    };
+
+    if let Some(node) = node_to_id {
+        let mut hasher = DefaultHasher::new();
+        node.hash(&mut hasher);
+        let id = hasher.finish();
+        // Prefix with a letter to ensure it's a valid XML NCName.
+        Ok(XPathValue::String(format!("id{}", id)))
+    } else {
+        // If the node-set is empty, return an empty string.
+        Ok(XPathValue::String("".to_string()))
+    }
 }
 
 // --- String Functions ---
@@ -479,6 +521,7 @@ impl Default for FunctionRegistry {
         registry.register("local-name");
         registry.register("name");
         registry.register("key");
+        registry.register("generate-id");
         // String
         registry.register("concat");
         registry.register("starts-with");

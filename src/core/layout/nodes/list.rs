@@ -1,6 +1,6 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/list.rs
+// src/core/layout/nodes/list.rs
 use crate::core::idf::IRNode;
-use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult};
+use crate::core::layout::node::{AnchorLocation, LayoutContext, LayoutNode, LayoutResult};
 use crate::core::layout::nodes::block::BlockNode;
 use crate::core::layout::nodes::list_item::ListItemNode;
 use crate::core::layout::style::ComputedStyle;
@@ -13,9 +13,10 @@ use std::sync::Arc;
 /// The actual vertical stacking logic is delegated to an inner `BlockNode`.
 #[derive(Debug, Clone)]
 pub struct ListNode {
+    id: Option<String>,
     // Internally, a list is just a block with special children.
     block: BlockNode,
-    depth: usize,
+    _depth: usize,
 }
 
 impl ListNode {
@@ -30,8 +31,8 @@ impl ListNode {
         depth: usize,
     ) -> Self {
         let style = engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
-        let (ir_children, start) = match node {
-            IRNode::List { children, start, .. } => (children, *start),
+        let (meta, ir_children, start) = match node {
+            IRNode::List { meta, children, start, .. } => (meta, children, *start),
             _ => panic!("ListNode must be created from an IRNode::List"),
         };
 
@@ -67,8 +68,12 @@ impl ListNode {
             })
             .collect();
 
-        let block = BlockNode::new_from_children(children, style);
-        Self { block, depth }
+        let block = BlockNode::new_from_children(meta.id.clone(), children, style);
+        Self {
+            id: meta.id.clone(),
+            block,
+            _depth: depth,
+        }
     }
 }
 
@@ -89,6 +94,13 @@ impl LayoutNode for ListNode {
         self.block.measure_content_height(engine, available_width)
     }
     fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
+        if let Some(id) = &self.id {
+            let location = AnchorLocation {
+                local_page_index: ctx.local_page_index,
+                y_pos: ctx.cursor.1 + ctx.bounds.y,
+            };
+            ctx.defined_anchors.borrow_mut().insert(id.clone(), location);
+        }
         // Delegate directly to the inner BlockNode.
         self.block.layout(ctx)
     }

@@ -1,6 +1,6 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/paragraph.rs
+// src/core/layout/nodes/paragraph.rs
 use crate::core::idf::IRNode;
-use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult};
+use crate::core::layout::node::{AnchorLocation, LayoutContext, LayoutNode, LayoutResult};
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::text::{atomize_inlines, LayoutAtom};
 use crate::core::layout::{LayoutEngine, LayoutError, PositionedElement};
@@ -13,6 +13,7 @@ use std::sync::Arc;
 /// A `LayoutNode` implementation for paragraphs, capable of line-breaking and page-splitting.
 #[derive(Debug, Clone)]
 pub struct ParagraphNode {
+    id: Option<String>,
     atoms: Vec<LayoutAtom>,
     style: Arc<ComputedStyle>,
 }
@@ -21,12 +22,16 @@ impl ParagraphNode {
     /// Creates a new `ParagraphNode` from an `IRNode::Paragraph`.
     pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Self {
         let style = engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
-        let inlines = match node {
-            IRNode::Paragraph { children, .. } => children,
+        let (meta, inlines) = match node {
+            IRNode::Paragraph { meta, children } => (meta, children),
             _ => panic!("ParagraphNode must be created from an IRNode::Paragraph"),
         };
         let atoms = atomize_inlines(engine, inlines, &style, None);
-        Self { atoms, style }
+        Self {
+            id: meta.id.clone(),
+            atoms,
+            style,
+        }
     }
 
     /// Prepends text to the paragraph's atoms, useful for list markers.
@@ -50,6 +55,11 @@ impl LayoutNode for ParagraphNode {
         self
     }
 
+    fn measure(&mut self, _engine: &LayoutEngine, _available_width: f32) {
+        // Measurement for paragraph is implicitly handled by the line breaker,
+        // so this method can be empty.
+    }
+
     fn measure_content_height(&mut self, _engine: &LayoutEngine, available_width: f32) -> f32 {
         if let Some(Dimension::Pt(h)) = self.style.height {
             return self.style.margin.top + h + self.style.margin.bottom;
@@ -71,6 +81,14 @@ impl LayoutNode for ParagraphNode {
     }
 
     fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
+        if let Some(id) = &self.id {
+            let location = AnchorLocation {
+                local_page_index: ctx.local_page_index,
+                y_pos: ctx.cursor.1 + ctx.bounds.y,
+            };
+            ctx.defined_anchors.borrow_mut().insert(id.clone(), location);
+        }
+
         // --- Vertical Margin Collapsing ---
         let margin_to_add = self.style.margin.top.max(ctx.last_v_margin);
 
@@ -137,6 +155,7 @@ impl LayoutNode for ParagraphNode {
             let remainder_start_idx = all_line_ranges[lines_that_fit].start;
             let remainder_atoms = self.atoms[remainder_start_idx..].to_vec();
             let remainder = Box::new(ParagraphNode {
+                id: self.id.clone(),
                 atoms: remainder_atoms,
                 style: self.style.clone(),
             });
@@ -289,6 +308,37 @@ fn commit_line_to_context(
                     element: crate::core::layout::LayoutElement::Image(crate::core::layout::ImageElement { src: src.clone() }),
                     style: style.clone(),
                 });
+                current_x += width;
+                atom_idx += 1;
+            }
+            LayoutAtom::PageNumberPlaceholder { target_id, style } => {
+                let text = "XX";
+                let width = ctx.engine.measure_text_width(text, style);
+                let text_el = PositionedElement {
+                    x: current_x,
+                    y: 0.0,
+                    width,
+                    height: style.line_height,
+                    element: crate::core::layout::LayoutElement::Text(crate::core::layout::TextElement {
+                        content: text.to_string(),
+                        href: None,
+                        text_decoration: style.text_decoration.clone(),
+                    }),
+                    style: style.clone(),
+                };
+                ctx.push_element(text_el);
+
+                let placeholder = PositionedElement {
+                    x: current_x,
+                    y: 0.0,
+                    width,
+                    height: style.line_height,
+                    element: crate::core::layout::LayoutElement::PageNumberPlaceholder {
+                        target_id: target_id.clone(),
+                    },
+                    style: style.clone(),
+                };
+                ctx.push_element(placeholder);
                 current_x += width;
                 atom_idx += 1;
             }

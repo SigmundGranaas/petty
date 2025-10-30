@@ -1,18 +1,20 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/engine.rs
 use super::fonts::FontManager;
 use super::geom;
-use super::node::{LayoutContext, LayoutNode, LayoutResult};
+use super::node::{AnchorLocation, LayoutContext, LayoutNode, LayoutResult};
 use super::nodes::block::BlockNode;
 use super::nodes::flex::FlexNode;
+use super::nodes::heading::HeadingNode;
 use super::nodes::image::ImageNode;
 use super::nodes::list::ListNode;
 use super::nodes::page_break::PageBreakNode;
 use super::nodes::paragraph::ParagraphNode;
 use super::nodes::table::TableNode;
+use super::nodes::toc::TableOfContentsNode;
 use super::style::{self, ComputedStyle};
 use super::{IRNode, PipelineError, PositionedElement};
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// The main layout engine. It is responsible for orchestrating the multi-pass
@@ -36,7 +38,8 @@ impl LayoutEngine {
         &self,
         stylesheet: &Stylesheet,
         ir_nodes: Vec<IRNode>,
-    ) -> Result<Vec<Vec<PositionedElement>>, PipelineError> {
+    ) -> Result<(Vec<Vec<PositionedElement>>, HashMap<String, AnchorLocation>), PipelineError>
+    {
         let mut pages = Vec::new();
         let mut current_work: Option<Box<dyn LayoutNode>> =
             Some(self.build_layout_node_tree(&IRNode::Root(ir_nodes), self.get_default_style()));
@@ -45,6 +48,9 @@ impl LayoutEngine {
             .default_page_master_name
             .clone()
             .ok_or_else(|| PipelineError::Layout("No default page master defined".to_string()))?;
+
+        // This map will be populated during the layout pass.
+        let defined_anchors = RefCell::new(HashMap::<String, AnchorLocation>::new());
 
         while let Some(mut work_item) = current_work.take() {
             let page_layout = stylesheet.page_masters.get(&current_master_name).ok_or_else(|| {
@@ -67,7 +73,8 @@ impl LayoutEngine {
             // Before layout, perform the measurement pass on the current work item.
             work_item.measure(self, content_width);
 
-            let mut ctx = LayoutContext::new(self, bounds, &page_elements_cell);
+            let mut ctx = LayoutContext::new(self, bounds, &page_elements_cell, &defined_anchors);
+            ctx.local_page_index = pages.len();
 
             // Layout this page
             let result = work_item.layout(&mut ctx)?;
@@ -93,7 +100,7 @@ impl LayoutEngine {
                 }
             }
         }
-        Ok(pages)
+        Ok((pages, defined_anchors.into_inner()))
     }
 
     /// Factory function to convert an `IRNode` into a `LayoutNode`.
@@ -110,6 +117,8 @@ impl LayoutEngine {
             IRNode::Table { .. } => Box::new(TableNode::new(node, self, parent_style)),
             IRNode::Paragraph { .. } => Box::new(ParagraphNode::new(node, self, parent_style)),
             IRNode::Image { .. } => Box::new(ImageNode::new(node, self, parent_style)),
+            IRNode::Heading { .. } => Box::new(HeadingNode::new(node, self, parent_style)),
+            IRNode::TableOfContents { .. } => Box::new(TableOfContentsNode::new(node, self, parent_style)),
             IRNode::PageBreak { master_name } => Box::new(PageBreakNode::new(master_name.clone())),
             // ListItem is handled internally by ListNode
             IRNode::ListItem { .. } => {

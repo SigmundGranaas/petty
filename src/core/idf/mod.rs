@@ -1,4 +1,6 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/idf/mod.rs
+// src/core/idf/mod.rs
+// FILE: src/core/idf/mod.rs
+
 //! Defines the Intermediate Representation (IR) for the Petty PDF engine.
 //!
 //! The IR is a semantic layout tree (`IRNode`) that represents a single, self-contained
@@ -16,15 +18,35 @@ use std::sync::Arc;
 /// A thread-safe, shared byte buffer, typically used for resource data like images.
 pub type SharedData = Arc<Vec<u8>>;
 
+/// Metadata common to all block-level nodes.
+#[derive(Clone, Default)]
+pub struct NodeMetadata {
+    /// A unique identifier for this node, used as an anchor target.
+    pub id: Option<String>,
+    /// Pre-resolved, shared pointers to named styles.
+    pub style_sets: Vec<Arc<ElementStyle>>,
+    /// Parsed inline style override.
+    pub style_override: Option<ElementStyle>,
+}
+
+/// Metadata common to all inline-level nodes.
+#[derive(Clone, Default)]
+pub struct InlineMetadata {
+    /// Pre-resolved, shared pointers to named styles.
+    pub style_sets: Vec<Arc<ElementStyle>>,
+    /// Parsed inline style override.
+    pub style_override: Option<ElementStyle>,
+}
+
 /// Helper macro to generate repetitive style accessor methods.
 macro_rules! impl_style_accessors {
-    (for $T:ty, $($variant:path),*) => {
+    (for $T:ty, $($variant:path),+) => {
         impl $T {
             /// Returns the pre-resolved, shared pointers to named styles.
             pub(crate) fn style_sets(&self) -> &[Arc<ElementStyle>] {
                 match self {
                     $(
-                        $variant { style_sets, .. } => style_sets,
+                        $variant { meta, .. } => &meta.style_sets,
                     )*
                     _ => &[],
                 }
@@ -34,7 +56,7 @@ macro_rules! impl_style_accessors {
             pub(crate) fn style_override(&self) -> Option<&ElementStyle> {
                 match self {
                     $(
-                        $variant { style_override, .. } => style_override.as_ref(),
+                        $variant { meta, .. } => meta.style_override.as_ref(),
                     )*
                     _ => None,
                 }
@@ -51,39 +73,22 @@ pub enum IRNode {
     Root(Vec<IRNode>),
 
     /// A generic block-level container, analogous to an HTML `<div>`.
-    Block {
-        style_sets: Vec<Arc<ElementStyle>>,
-        style_override: Option<ElementStyle>,
-        children: Vec<IRNode>,
-    },
+    Block { meta: NodeMetadata, children: Vec<IRNode> },
 
     /// A container that lays out its children horizontally.
-    FlexContainer {
-        style_sets: Vec<Arc<ElementStyle>>,
-        style_override: Option<ElementStyle>,
-        children: Vec<IRNode>,
-    },
+    FlexContainer { meta: NodeMetadata, children: Vec<IRNode> },
 
     /// A paragraph, which is a specialized block container that can only hold
     /// inline-level content (`InlineNode`). It serves as the primary context
     /// for text wrapping and line breaking.
-    Paragraph {
-        style_sets: Vec<Arc<ElementStyle>>,
-        style_override: Option<ElementStyle>,
-        children: Vec<InlineNode>,
-    },
+    Paragraph { meta: NodeMetadata, children: Vec<InlineNode> },
 
     /// A block-level image element.
-    Image {
-        src: String,
-        style_sets: Vec<Arc<ElementStyle>>,
-        style_override: Option<ElementStyle>,
-    },
+    Image { meta: NodeMetadata, src: String },
 
     /// An ordered or unordered list container. Its children should exclusively be `ListItem` nodes.
     List {
-        style_sets: Vec<Arc<ElementStyle>>,
-        style_override: Option<ElementStyle>,
+        meta: NodeMetadata,
         /// The starting number for an ordered list. Defaults to 1.
         start: Option<usize>,
         /// Children are expected to be `IRNode::ListItem`.
@@ -91,20 +96,21 @@ pub enum IRNode {
     },
 
     /// A single item within a `List`.
-    ListItem {
-        style_sets: Vec<Arc<ElementStyle>>,
-        style_override: Option<ElementStyle>,
-        children: Vec<IRNode>,
-    },
+    ListItem { meta: NodeMetadata, children: Vec<IRNode> },
 
     /// A highly structured table node that enforces a clear component hierarchy.
     Table {
-        style_sets: Vec<Arc<ElementStyle>>,
-        style_override: Option<ElementStyle>,
+        meta: NodeMetadata,
         columns: Vec<TableColumnDefinition>,
         header: Option<Box<TableHeader>>,
         body: Box<TableBody>,
     },
+
+    /// A semantic heading element.
+    Heading { meta: NodeMetadata, level: u8, children: Vec<InlineNode> },
+
+    /// A placeholder for a generated table of contents.
+    TableOfContents { meta: NodeMetadata },
 
     /// Inserts a hard page break, optionally switching to a new page master.
     /// If `master_name` is None, the current page master is used for the next page.
@@ -115,64 +121,39 @@ impl fmt::Debug for IRNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             IRNode::Root(children) => f.debug_tuple("Root").field(children).finish(),
-            IRNode::Block { style_sets, style_override, children } => {
+            IRNode::Block { meta, children } => {
                 let mut dbg = f.debug_struct("Block");
-                if !style_sets.is_empty() {
-                    dbg.field("style_sets", style_sets);
-                }
-                if let Some(val) = style_override {
-                    dbg.field("style_override", val);
-                }
+                dbg.field("meta", meta);
                 if !children.is_empty() {
                     dbg.field("children", children);
                 }
                 dbg.finish()
             }
-            IRNode::FlexContainer { style_sets, style_override, children } => {
+            IRNode::FlexContainer { meta, children } => {
                 let mut dbg = f.debug_struct("FlexContainer");
-                if !style_sets.is_empty() {
-                    dbg.field("style_sets", style_sets);
-                }
-                if let Some(val) = style_override {
-                    dbg.field("style_override", val);
-                }
+                dbg.field("meta", meta);
                 if !children.is_empty() {
                     dbg.field("children", children);
                 }
                 dbg.finish()
             }
-            IRNode::Paragraph { style_sets, style_override, children } => {
+            IRNode::Paragraph { meta, children } => {
                 let mut dbg = f.debug_struct("Paragraph");
-                if !style_sets.is_empty() {
-                    dbg.field("style_sets", style_sets);
-                }
-                if let Some(val) = style_override {
-                    dbg.field("style_override", val);
-                }
+                dbg.field("meta", meta);
                 if !children.is_empty() {
                     dbg.field("children", children);
                 }
                 dbg.finish()
             }
-            IRNode::Image { src, style_sets, style_override } => {
+            IRNode::Image { meta, src } => {
                 let mut dbg = f.debug_struct("Image");
                 dbg.field("src", src);
-                if !style_sets.is_empty() {
-                    dbg.field("style_sets", style_sets);
-                }
-                if let Some(val) = style_override {
-                    dbg.field("style_override", val);
-                }
+                dbg.field("meta", meta);
                 dbg.finish()
             }
-            IRNode::List { style_sets, style_override, start, children } => {
+            IRNode::List { meta, start, children } => {
                 let mut dbg = f.debug_struct("List");
-                if !style_sets.is_empty() {
-                    dbg.field("style_sets", style_sets);
-                }
-                if let Some(val) = style_override {
-                    dbg.field("style_override", val);
-                }
+                dbg.field("meta", meta);
                 if let Some(val) = start {
                     dbg.field("start", val);
                 }
@@ -181,27 +162,17 @@ impl fmt::Debug for IRNode {
                 }
                 dbg.finish()
             }
-            IRNode::ListItem { style_sets, style_override, children } => {
+            IRNode::ListItem { meta, children } => {
                 let mut dbg = f.debug_struct("ListItem");
-                if !style_sets.is_empty() {
-                    dbg.field("style_sets", style_sets);
-                }
-                if let Some(val) = style_override {
-                    dbg.field("style_override", val);
-                }
+                dbg.field("meta", meta);
                 if !children.is_empty() {
                     dbg.field("children", children);
                 }
                 dbg.finish()
             }
-            IRNode::Table { style_sets, style_override, columns, header, body } => {
+            IRNode::Table { meta, columns, header, body } => {
                 let mut dbg = f.debug_struct("Table");
-                if !style_sets.is_empty() {
-                    dbg.field("style_sets", style_sets);
-                }
-                if let Some(val) = style_override {
-                    dbg.field("style_override", val);
-                }
+                dbg.field("meta", meta);
                 if !columns.is_empty() {
                     dbg.field("columns", columns);
                 }
@@ -210,6 +181,18 @@ impl fmt::Debug for IRNode {
                 }
                 dbg.field("body", body);
                 dbg.finish()
+            }
+            IRNode::Heading { meta, level, children } => {
+                let mut dbg = f.debug_struct("Heading");
+                dbg.field("meta", meta);
+                dbg.field("level", level);
+                if !children.is_empty() {
+                    dbg.field("children", children);
+                }
+                dbg.finish()
+            }
+            IRNode::TableOfContents { meta } => {
+                f.debug_struct("TableOfContents").field("meta", meta).finish()
             }
             IRNode::PageBreak { master_name } => {
                 let mut dbg = f.debug_struct("PageBreak");
@@ -222,6 +205,22 @@ impl fmt::Debug for IRNode {
     }
 }
 
+impl fmt::Debug for NodeMetadata {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut dbg = f.debug_struct("NodeMetadata");
+        if let Some(id) = &self.id {
+            dbg.field("id", id);
+        }
+        if !self.style_sets.is_empty() {
+            dbg.field("style_sets", &self.style_sets);
+        }
+        if let Some(val) = &self.style_override {
+            dbg.field("style_override", val);
+        }
+        dbg.finish()
+    }
+}
+
 impl_style_accessors!(
     for IRNode,
     IRNode::Block,
@@ -230,7 +229,9 @@ impl_style_accessors!(
     IRNode::Image,
     IRNode::List,
     IRNode::ListItem,
-    IRNode::Table
+    IRNode::Table,
+    IRNode::Heading,
+    IRNode::TableOfContents
 );
 
 // --- Table Component Structs ---
@@ -280,7 +281,7 @@ pub struct TableRow {
 }
 
 /// Represents a single cell within a `TableRow`. A cell can contain any
-/// block-level `IRNode` elements, allowing for nested structures.
+/// block-level `IRNode` elements, allowing for complex nested layouts.
 #[derive(Clone)]
 pub struct TableCell {
     pub style_sets: Vec<Arc<ElementStyle>>,
@@ -325,7 +326,6 @@ impl Default for TableCell {
     }
 }
 
-
 // --- Inline Content Enum ---
 
 /// Represents content that flows within a line-breaking context, such as a `Paragraph`.
@@ -335,25 +335,23 @@ pub enum InlineNode {
     Text(String),
 
     /// A styled text container, analogous to an HTML `<span>`.
-    StyledSpan {
-        style_sets: Vec<Arc<ElementStyle>>,
-        style_override: Option<ElementStyle>,
-        children: Vec<InlineNode>,
-    },
+    StyledSpan { meta: InlineMetadata, children: Vec<InlineNode> },
 
     /// An interactive hyperlink.
     Hyperlink {
         href: String,
-        style_sets: Vec<Arc<ElementStyle>>,
-        style_override: Option<ElementStyle>,
+        meta: InlineMetadata,
         children: Vec<InlineNode>,
     },
 
     /// An image placed inline with text.
-    Image {
-        src: String,
-        style_sets: Vec<Arc<ElementStyle>>,
-        style_override: Option<ElementStyle>,
+    Image { meta: InlineMetadata, src: String },
+
+    /// An inline placeholder for a page number that will be resolved later.
+    PageReference {
+        target_id: String,
+        meta: InlineMetadata,
+        children: Vec<InlineNode>,
     },
 
     /// A hard line break, analogous to an HTML `<br>`.
@@ -364,41 +362,35 @@ impl fmt::Debug for InlineNode {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             InlineNode::Text(text) => f.debug_tuple("Text").field(text).finish(),
-            InlineNode::StyledSpan { style_sets, style_override, children } => {
+            InlineNode::StyledSpan { meta, children } => {
                 let mut dbg = f.debug_struct("StyledSpan");
-                if !style_sets.is_empty() {
-                    dbg.field("style_sets", style_sets);
-                }
-                if let Some(val) = style_override {
-                    dbg.field("style_override", val);
-                }
+                dbg.field("meta", meta);
                 if !children.is_empty() {
                     dbg.field("children", children);
                 }
                 dbg.finish()
             }
-            InlineNode::Hyperlink { href, style_sets, style_override, children } => {
+            InlineNode::Hyperlink { href, meta, children } => {
                 let mut dbg = f.debug_struct("Hyperlink");
                 dbg.field("href", href);
-                if !style_sets.is_empty() {
-                    dbg.field("style_sets", style_sets);
-                }
-                if let Some(val) = style_override {
-                    dbg.field("style_override", val);
-                }
+                dbg.field("meta", meta);
                 if !children.is_empty() {
                     dbg.field("children", children);
                 }
                 dbg.finish()
             }
-            InlineNode::Image { src, style_sets, style_override } => {
+            InlineNode::Image { meta, src } => {
                 let mut dbg = f.debug_struct("Image");
                 dbg.field("src", src);
-                if !style_sets.is_empty() {
-                    dbg.field("style_sets", style_sets);
-                }
-                if let Some(val) = style_override {
-                    dbg.field("style_override", val);
+                dbg.field("meta", meta);
+                dbg.finish()
+            }
+            InlineNode::PageReference { target_id, meta, children } => {
+                let mut dbg = f.debug_struct("PageReference");
+                dbg.field("target_id", target_id);
+                dbg.field("meta", meta);
+                if !children.is_empty() {
+                    dbg.field("children", children);
                 }
                 dbg.finish()
             }
@@ -407,9 +399,33 @@ impl fmt::Debug for InlineNode {
     }
 }
 
-impl_style_accessors!(
-    for InlineNode,
-    InlineNode::StyledSpan,
-    InlineNode::Hyperlink,
-    InlineNode::Image
-);
+impl fmt::Debug for InlineMetadata {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut dbg = f.debug_struct("InlineMetadata");
+        if !self.style_sets.is_empty() {
+            dbg.field("style_sets", &self.style_sets);
+        }
+        if let Some(val) = &self.style_override {
+            dbg.field("style_override", val);
+        }
+        dbg.finish()
+    }
+}
+
+impl IRNode {
+    /// Returns a mutable reference to the node's metadata, if it has any.
+    pub fn meta_mut(&mut self) -> Option<&mut NodeMetadata> {
+        match self {
+            IRNode::Block { meta, .. }
+            | IRNode::FlexContainer { meta, .. }
+            | IRNode::Paragraph { meta, .. }
+            | IRNode::Image { meta, .. }
+            | IRNode::List { meta, .. }
+            | IRNode::ListItem { meta, .. }
+            | IRNode::Table { meta, .. }
+            | IRNode::Heading { meta, .. }
+            | IRNode::TableOfContents { meta, .. } => Some(meta),
+            _ => None,
+        }
+    }
+}

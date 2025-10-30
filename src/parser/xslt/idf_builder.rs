@@ -1,15 +1,20 @@
 // FILE: src/parser/xslt/idf_builder.rs
+
 //! An implementation of the `OutputBuilder` trait that constructs an IDF `IRNode` tree.
 
-use super::ast::PreparsedStyles;
-use super::output::OutputBuilder;
-use crate::core::idf::{IRNode, InlineNode, TableBody, TableCell, TableColumnDefinition, TableRow};
+use super::{output::OutputBuilder};
+use crate::core::idf::{
+    IRNode, InlineMetadata, InlineNode, NodeMetadata, TableBody, TableCell, TableColumnDefinition,
+    TableHeader, TableRow,
+};
 use crate::core::style::dimension::Dimension;
+use crate::parser::xslt::ast::PreparsedStyles;
 
 /// An `OutputBuilder` that creates a `Vec<IRNode>`.
 pub struct IdfBuilder {
     node_stack: Vec<IRNode>,
     inline_stack: Vec<InlineNode>,
+    in_table_header: bool,
 }
 
 impl IdfBuilder {
@@ -17,6 +22,7 @@ impl IdfBuilder {
         Self {
             node_stack: vec![IRNode::Root(Vec::with_capacity(16))],
             inline_stack: vec![],
+            in_table_header: false,
         }
     }
 
@@ -39,17 +45,21 @@ impl IdfBuilder {
                 | IRNode::FlexContainer { children: c, .. }
                 | IRNode::List { children: c, .. }
                 | IRNode::ListItem { children: c, .. } => c.push(node),
-                // FIX: Correctly handle adding block content (like a <p>) into a table cell.
                 // The parent on the node_stack is the Table, not the cell itself.
-                IRNode::Table { body, .. } => {
-                    if let Some(last_row) = body.rows.last_mut() {
+                IRNode::Table { header, body, .. } => {
+                    let row_to_modify = if self.in_table_header {
+                        header.as_mut().and_then(|h| h.rows.last_mut())
+                    } else {
+                        body.rows.last_mut()
+                    };
+                    if let Some(last_row) = row_to_modify {
                         if let Some(last_cell) = last_row.cells.last_mut() {
                             last_cell.children.push(node);
                         } else {
                             // This case can happen if a block is placed inside a <row> but not a <cell>.
                             log::warn!("Attempted to add block content to a table row with no cells.");
                         }
-                    } else {
+                    }  else {
                         // This case can happen if a block is placed inside a <table> but not a <row>.
                         log::warn!("Attempted to add block content to a table with no rows.");
                     }
@@ -61,45 +71,53 @@ impl IdfBuilder {
 
     fn push_inline_to_parent(&mut self, node: InlineNode) {
         if let Some(parent_inline) = self.inline_stack.last_mut() {
-            if let InlineNode::StyledSpan { children: c, .. }
-            | InlineNode::Hyperlink { children: c, .. } = parent_inline
-            {
-                c.push(node);
-                return;
+            match parent_inline {
+                InlineNode::StyledSpan { children: c, .. }
+                | InlineNode::Hyperlink { children: c, .. }
+                | InlineNode::PageReference { children: c, .. } => {
+                    c.push(node);
+                    return;
+                }
+                _ => {}
             }
         }
 
         if let Some(parent_block) = self.node_stack.last_mut() {
             match parent_block {
-                IRNode::Paragraph { children: c, .. } => {
+                IRNode::Paragraph { children: c, .. } | IRNode::Heading { children: c, .. } => {
                     c.push(node);
                     return;
-                },
+                }
                 // FIX: If the current block context is a Table, auto-wrap the text
                 // into the last available cell, creating a paragraph if needed.
-                IRNode::Table { body, .. } => {
-                    if let Some(cell) = body.rows.last_mut().and_then(|r| r.cells.last_mut()) {
+                IRNode::Table { header, body, .. } => {
+                    let row_to_modify = if self.in_table_header {
+                        header.as_mut().and_then(|h| h.rows.last_mut())
+                    } else {
+                        body.rows.last_mut()
+                    };
+                    if let Some(cell) = row_to_modify.and_then(|r| r.cells.last_mut()) {
                         // Find or create a paragraph in the cell to hold the inline content
-                        if let Some(IRNode::Paragraph { children: p_children, ..}) = cell.children.last_mut() {
+                        if let Some(IRNode::Paragraph { children: p_children, .. }) =
+                            cell.children.last_mut()
+                        {
                             p_children.push(node);
                         } else {
                             cell.children.push(IRNode::Paragraph {
-                                style_sets: vec![],
-                                style_override: None,
-                                children: vec![node]
+                                meta: Default::default(),
+                                children: vec![node],
                             });
                         }
                         return;
                     }
-                },
+                }
                 _ => {} // Fall through to auto-wrapping logic
             }
         }
 
         // Auto-wrap loose inline content in a paragraph
         self.push_block_to_parent(IRNode::Paragraph {
-            style_sets: vec![],
-            style_override: None,
+            meta: Default::default(),
             children: vec![node],
         });
     }
@@ -108,8 +126,11 @@ impl IdfBuilder {
 impl OutputBuilder for IdfBuilder {
     fn start_block(&mut self, styles: &PreparsedStyles) {
         let node = IRNode::Block {
-            style_sets: styles.style_sets.clone(),
-            style_override: styles.style_override.clone(),
+            meta: NodeMetadata {
+                id: styles.id.clone(),
+                style_sets: styles.style_sets.clone(),
+                style_override: styles.style_override.clone(),
+            },
             children: vec![],
         };
         self.node_stack.push(node);
@@ -124,8 +145,11 @@ impl OutputBuilder for IdfBuilder {
 
     fn start_flex_container(&mut self, styles: &PreparsedStyles) {
         let node = IRNode::FlexContainer {
-            style_sets: styles.style_sets.clone(),
-            style_override: styles.style_override.clone(),
+            meta: NodeMetadata {
+                id: styles.id.clone(),
+                style_sets: styles.style_sets.clone(),
+                style_override: styles.style_override.clone(),
+            },
             children: vec![],
         };
         self.node_stack.push(node);
@@ -134,10 +158,15 @@ impl OutputBuilder for IdfBuilder {
         self.end_block(); // Same logic as block
     }
 
+
+
     fn start_paragraph(&mut self, styles: &PreparsedStyles) {
         let node = IRNode::Paragraph {
-            style_sets: styles.style_sets.clone(),
-            style_override: styles.style_override.clone(),
+            meta: NodeMetadata {
+                id: styles.id.clone(),
+                style_sets: styles.style_sets.clone(),
+                style_override: styles.style_override.clone(),
+            },
             children: vec![],
         };
         self.node_stack.push(node);
@@ -148,8 +177,11 @@ impl OutputBuilder for IdfBuilder {
 
     fn start_list(&mut self, styles: &PreparsedStyles) {
         let node = IRNode::List {
-            style_sets: styles.style_sets.clone(),
-            style_override: styles.style_override.clone(),
+            meta: NodeMetadata {
+                id: styles.id.clone(),
+                style_sets: styles.style_sets.clone(),
+                style_override: styles.style_override.clone(),
+            },
             start: None,
             children: vec![],
         };
@@ -161,8 +193,11 @@ impl OutputBuilder for IdfBuilder {
 
     fn start_list_item(&mut self, styles: &PreparsedStyles) {
         let node = IRNode::ListItem {
-            style_sets: styles.style_sets.clone(),
-            style_override: styles.style_override.clone(),
+            meta: NodeMetadata {
+                id: styles.id.clone(),
+                style_sets: styles.style_sets.clone(),
+                style_override: styles.style_override.clone(),
+            },
             children: vec![],
         };
         self.node_stack.push(node);
@@ -174,8 +209,11 @@ impl OutputBuilder for IdfBuilder {
     fn start_image(&mut self, styles: &PreparsedStyles) {
         let node = IRNode::Image {
             src: "".to_string(),
-            style_sets: styles.style_sets.clone(),
-            style_override: styles.style_override.clone(),
+            meta: NodeMetadata {
+                id: styles.id.clone(),
+                style_sets: styles.style_sets.clone(),
+                style_override: styles.style_override.clone(),
+            },
         };
         self.node_stack.push(node);
     }
@@ -186,8 +224,11 @@ impl OutputBuilder for IdfBuilder {
     // --- Table Implementation ---
     fn start_table(&mut self, styles: &PreparsedStyles) {
         let node = IRNode::Table {
-            style_sets: styles.style_sets.clone(),
-            style_override: styles.style_override.clone(),
+            meta: NodeMetadata {
+                id: styles.id.clone(),
+                style_sets: styles.style_sets.clone(),
+                style_override: styles.style_override.clone(),
+            },
             columns: vec![],
             header: None,
             body: Box::new(TableBody::default()),
@@ -211,8 +252,13 @@ impl OutputBuilder for IdfBuilder {
     }
 
     fn start_table_row(&mut self, _styles: &PreparsedStyles) {
-        if let Some(IRNode::Table { body, .. }) = self.node_stack.last_mut() {
-            body.rows.push(TableRow { cells: vec![] });
+        if let Some(IRNode::Table { header, body, .. }) = self.node_stack.last_mut() {
+            if self.in_table_header {
+                let h = header.get_or_insert_with(|| Box::new(TableHeader { rows: Vec::new() }));
+                h.rows.push(TableRow { cells: vec![] });
+            } else {
+                body.rows.push(TableRow { cells: vec![] });
+            }
         }
     }
     fn end_table_row(&mut self) {
@@ -220,8 +266,14 @@ impl OutputBuilder for IdfBuilder {
     }
 
     fn start_table_cell(&mut self, styles: &PreparsedStyles) {
-        if let Some(IRNode::Table { body, .. }) = self.node_stack.last_mut() {
-            if let Some(last_row) = body.rows.last_mut() {
+        if let Some(IRNode::Table { header, body, .. }) = self.node_stack.last_mut() {
+            let row_to_modify = if self.in_table_header {
+                header.as_mut().and_then(|h| h.rows.last_mut())
+            } else {
+                body.rows.last_mut()
+            };
+
+            if let Some(last_row) = row_to_modify {
                 last_row.cells.push(TableCell {
                     style_sets: styles.style_sets.clone(),
                     style_override: styles.style_override.clone(),
@@ -241,10 +293,13 @@ impl OutputBuilder for IdfBuilder {
         }
     }
 
+
     fn start_styled_span(&mut self, styles: &PreparsedStyles) {
         let node = InlineNode::StyledSpan {
-            style_sets: styles.style_sets.clone(),
-            style_override: styles.style_override.clone(),
+            meta: InlineMetadata {
+                style_sets: styles.style_sets.clone(),
+                style_override: styles.style_override.clone(),
+            },
             children: vec![],
         };
         self.inline_stack.push(node);
@@ -258,8 +313,10 @@ impl OutputBuilder for IdfBuilder {
     fn start_hyperlink(&mut self, styles: &PreparsedStyles) {
         let node = InlineNode::Hyperlink {
             href: "".to_string(),
-            style_sets: styles.style_sets.clone(),
-            style_override: styles.style_override.clone(),
+            meta: InlineMetadata {
+                style_sets: styles.style_sets.clone(),
+                style_override: styles.style_override.clone(),
+            },
             children: vec![],
         };
         self.inline_stack.push(node);
@@ -269,6 +326,15 @@ impl OutputBuilder for IdfBuilder {
     }
 
     fn set_attribute(&mut self, name: &str, value: &str) {
+        if name == "id" {
+            if let Some(block_parent) = self.node_stack.last_mut() {
+                if let Some(meta) = block_parent.meta_mut() {
+                    meta.id = Some(value.to_string());
+                    return;
+                }
+            }
+        }
+
         if let Some(inline_parent) = self.inline_stack.last_mut() {
             if let InlineNode::Hyperlink { href, .. } = inline_parent {
                 if name == "href" {
@@ -278,13 +344,62 @@ impl OutputBuilder for IdfBuilder {
             }
         }
         if let Some(block_parent) = self.node_stack.last_mut() {
-            if let IRNode::Image { src, .. } = block_parent {
-                if name == "src" {
-                    *src = value.to_string();
-                    return;
+            match block_parent {
+                IRNode::Image { src, .. } => {
+                    if name == "src" {
+                        *src = value.to_string();
+                        return;
+                    }
                 }
+                IRNode::List { start, .. } => {
+                    if name == "start" {
+                        *start = value.parse::<usize>().ok();
+                        return;
+                    }
+                }
+                _ => {}
             }
         }
         log::warn!("Cannot set attribute '{}' on current builder state.", name);
+    }
+
+    fn start_heading(&mut self, styles: &PreparsedStyles, level: u8) {
+        let node = IRNode::Heading {
+            meta: NodeMetadata {
+                id: styles.id.clone(),
+                style_sets: styles.style_sets.clone(),
+                style_override: styles.style_override.clone(),
+            },
+            level,
+            children: vec![],
+        };
+        self.node_stack.push(node);
+    }
+    fn end_heading(&mut self) {
+        self.end_block();
+    }
+
+    fn add_table_of_contents(&mut self, styles: &PreparsedStyles) {
+        let node = IRNode::TableOfContents {
+            meta: NodeMetadata {
+                id: styles.id.clone(),
+                style_sets: styles.style_sets.clone(),
+                style_override: styles.style_override.clone(),
+            },
+        };
+        self.push_block_to_parent(node);
+    }
+
+    fn add_page_break(&mut self, master_name: Option<String>) {
+        let node = IRNode::PageBreak { master_name };
+        self.push_block_to_parent(node);
+    }
+
+    fn start_table_header(&mut self) {
+        self.in_table_header = true;
+    }
+
+    fn end_table_header(&mut self) {
+        self.in_table_header = false;
     }
 }

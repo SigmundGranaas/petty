@@ -1,6 +1,5 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/list_item.rs
 use crate::core::idf::IRNode;
-use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult};
+use crate::core::layout::node::{AnchorLocation, LayoutContext, LayoutNode, LayoutResult};
 use crate::core::layout::nodes::block::draw_background_and_borders;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{geom, LayoutElement, LayoutEngine, LayoutError, PositionedElement, TextElement};
@@ -15,6 +14,7 @@ use std::sync::Arc;
 /// laying out its own children in an indented area.
 #[derive(Debug, Clone)]
 pub struct ListItemNode {
+    id: Option<String>,
     children: Vec<Box<dyn LayoutNode>>,
     style: Arc<ComputedStyle>,
     marker_text: String,
@@ -29,8 +29,8 @@ impl ListItemNode {
         depth: usize,
     ) -> Self {
         let style = engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
-        let ir_children = match node {
-            IRNode::ListItem { children, .. } => children,
+        let (meta, ir_children) = match node {
+            IRNode::ListItem { meta, children } => (meta, children),
             _ => panic!("ListItemNode must be created from an IRNode::ListItem"),
         };
 
@@ -70,6 +70,7 @@ impl ListItemNode {
         }
 
         Self {
+            id: meta.id.clone(),
             children,
             style,
             marker_text,
@@ -157,6 +158,14 @@ impl LayoutNode for ListItemNode {
             + border_bottom_width
     }
     fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
+        if let Some(id) = &self.id {
+            let location = AnchorLocation {
+                local_page_index: ctx.local_page_index,
+                y_pos: ctx.cursor.1 + ctx.bounds.y,
+            };
+            ctx.defined_anchors.borrow_mut().insert(id.clone(), location);
+        }
+
         const MARKER_SPACING_FACTOR: f32 = 0.4;
         let is_outside_marker = self.style.list_style_position == ListStylePosition::Outside;
 
@@ -213,6 +222,8 @@ impl LayoutNode for ListItemNode {
             cursor: (0.0, 0.0),
             elements: ctx.elements,
             last_v_margin: 0.0, // List items create a new block formatting context
+            local_page_index: ctx.local_page_index,
+            defined_anchors: ctx.defined_anchors,
         };
 
         for (i, child) in self.children.iter_mut().enumerate() {
@@ -227,6 +238,7 @@ impl LayoutNode for ListItemNode {
                     remaining_children.extend(self.children.drain((i + 1)..));
 
                     let next_page_item = Box::new(ListItemNode {
+                        id: self.id.clone(),
                         children: remaining_children,
                         style: self.style.clone(),
                         marker_text: String::new(), // No marker on subsequent pages

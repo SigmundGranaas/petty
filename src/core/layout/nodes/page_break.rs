@@ -1,4 +1,3 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/page_break.rs
 
 use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult};
 use crate::core::layout::style::ComputedStyle;

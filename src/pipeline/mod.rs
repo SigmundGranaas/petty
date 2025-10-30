@@ -5,7 +5,7 @@
 mod builder;
 mod config;
 mod orchestrator;
-mod worker;
+pub(crate) mod worker;
 
 pub use builder::PipelineBuilder;
 pub use config::PdfBackend;

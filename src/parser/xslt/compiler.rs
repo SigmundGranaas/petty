@@ -1,5 +1,3 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/compiler.rs
-// FILE: src/parser/xslt/compiler.rs
 //! Defines the CompilerBuilder, which constructs a `CompiledStylesheet` by listening to a parser driver.
 use super::ast::{
     CompiledStylesheet, KeyDefinition, PreparsedStyles, PreparsedTemplate, When, XsltInstruction,
@@ -124,6 +122,8 @@ impl CompilerBuilder {
         let mut style_sets = Vec::new();
         let mut style_override = ElementStyle::default();
 
+        let id = get_attr_owned_optional(attrs, b"id")?;
+
         // 1. Process `use-attribute-sets`
         if let Some(sets_str) = get_attr_owned_optional(attrs, b"use-attribute-sets")? {
             for set_name in sets_str.split_whitespace() {
@@ -150,6 +150,7 @@ impl CompilerBuilder {
         }
 
         Ok(PreparsedStyles {
+            id,
             style_sets,
             style_override: if style_override == ElementStyle::default() {
                 None
@@ -200,7 +201,7 @@ impl StylesheetBuilder for CompilerBuilder {
             b"xsl:text" => self.handle_text_start(),
             b"fo:table" | b"table" => self.handle_table_start(attrs),
             b"columns" => self.handle_table_columns_start(),
-            b"header" | b"fo:table-header" => self.handle_table_header_start(),
+            b"header" | b"fo:table-header" | b"thead" => self.handle_table_header_start(),
             b"xsl:call-template" => self.handle_call_template_start(attrs, pos, source)?,
             b"xsl:choose" => self.handle_choose_start(),
             b"xsl:when" => self.handle_when_start(attrs, pos, source)?,
@@ -235,6 +236,14 @@ impl StylesheetBuilder for CompilerBuilder {
             b"xsl:variable" => self.handle_variable(attrs, pos, source)?,
             b"xsl:apply-templates" => self.handle_apply_templates_empty(attrs)?,
             b"page-break" => self.handle_page_break(attrs)?,
+            b"toc" | b"fo:table-of-contents" => {
+                let instr = XsltInstruction::TableOfContents {
+                    styles: self.resolve_styles(&attrs, location)?,
+                };
+                if let Some(parent) = self.instruction_stack.last_mut() {
+                    parent.push(instr);
+                }
+            }
             b"column" | b"fo:table-column" => self.handle_table_column(attrs)?,
             _ => {
                 // Handle literal result elements which are not XSLT instructions
@@ -263,6 +272,9 @@ impl StylesheetBuilder for CompilerBuilder {
             b"xsl:if" => self.handle_if_end(current_state, body, pos, source)?,
             b"xsl:copy" => self.handle_copy_end(current_state, body, pos, source)?,
             b"fo:table" | b"table" => self.handle_table_end(current_state, body, pos, source)?,
+            b"columns" | b"header" | b"fo:table-header" | b"thead" => {
+                // These are handled by handle_table_end popping them from the state stack
+            }
             b"xsl:call-template" => self.handle_call_template_end(current_state)?,
             b"xsl:when" => self.handle_when_end(current_state, body, pos, source)?,
             b"xsl:otherwise" => self.handle_otherwise_end(current_state, body, pos, source)?,

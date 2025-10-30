@@ -1,4 +1,3 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/mod.rs
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -11,11 +10,12 @@ pub enum LayoutError {
 
 // Re-export the main entry point and key types for external use.
 pub use self::engine::LayoutEngine;
+pub use self::node::AnchorLocation;
 
 // Declare the modules that make up the layout engine.
 mod elements;
 mod engine;
-mod fonts;
+pub mod fonts;
 pub mod geom;
 pub mod node;
 pub mod nodes;

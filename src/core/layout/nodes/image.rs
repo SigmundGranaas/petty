@@ -1,6 +1,5 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/image.rs
 use crate::core::idf::IRNode;
-use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult};
+use crate::core::layout::node::{AnchorLocation, LayoutContext, LayoutNode, LayoutResult};
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{ImageElement, LayoutElement, LayoutEngine, LayoutError, PositionedElement};
 use crate::core::style::dimension::Dimension;
@@ -9,6 +8,7 @@ use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct ImageNode {
+    id: Option<String>,
     src: String,
     style: Arc<ComputedStyle>,
     width: f32,
@@ -17,13 +17,14 @@ pub struct ImageNode {
 
 impl ImageNode {
     pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Self {
-        let src = match node {
-            IRNode::Image { src, .. } => src.clone(),
+        let (meta, src) = match node {
+            IRNode::Image { meta, src } => (meta, src.clone()),
             _ => panic!("ImageNode must be created from IRNode::Image"),
         };
-        let style = engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
+        let style = engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), &parent_style);
 
         Self {
+            id: meta.id.clone(),
             src,
             style,
             width: 0.0, // Resolved in measure pass
@@ -65,6 +66,14 @@ impl LayoutNode for ImageNode {
     }
 
     fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
+        if let Some(id) = &self.id {
+            let location = AnchorLocation {
+                local_page_index: ctx.local_page_index,
+                y_pos: ctx.cursor.1 + ctx.bounds.y,
+            };
+            ctx.defined_anchors.borrow_mut().insert(id.clone(), location);
+        }
+
         let total_height = self.style.margin.top + self.height + self.style.margin.bottom;
 
         if total_height > ctx.bounds.height {

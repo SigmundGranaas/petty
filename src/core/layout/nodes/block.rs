@@ -1,6 +1,6 @@
 use crate::core::idf::IRNode;
 use crate::core::layout::elements::RectElement;
-use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult};
+use crate::core::layout::node::{AnchorLocation, LayoutContext, LayoutNode, LayoutResult};
 use crate::core::layout::nodes::page_break::PageBreakNode;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{geom, LayoutElement, LayoutEngine, LayoutError, PositionedElement};
@@ -14,6 +14,7 @@ use std::sync::Arc;
 /// margins, padding, and background color.
 #[derive(Debug, Clone)]
 pub struct BlockNode {
+    id: Option<String>,
     children: Vec<Box<dyn LayoutNode>>,
     style: Arc<ComputedStyle>,
 }
@@ -21,15 +22,16 @@ pub struct BlockNode {
 impl BlockNode {
     pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Self {
         let style = engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
-        let ir_children = match node {
-            IRNode::Block { children, .. } | IRNode::ListItem { children, .. } => children,
+        let (id, ir_children) = match node {
+            IRNode::Block { meta, children } => (meta.id.clone(), children),
+            IRNode::ListItem { meta, children } => (meta.id.clone(), children),
             _ => panic!("BlockNode must be created from a compatible IRNode"),
         };
         let children = ir_children
             .iter()
             .map(|child_ir| engine.build_layout_node_tree(child_ir, style.clone()))
             .collect();
-        Self { children, style }
+        Self { id, children, style }
     }
 
     pub fn new_root(
@@ -46,7 +48,11 @@ impl BlockNode {
             .iter()
             .map(|child_ir| engine.build_layout_node_tree(child_ir, style.clone()))
             .collect();
-        Self { children, style }
+        Self {
+            id: None,
+            children,
+            style,
+        }
     }
 }
 
@@ -118,6 +124,14 @@ impl LayoutNode for BlockNode {
     }
 
     fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
+        if let Some(id) = &self.id {
+            let location = AnchorLocation {
+                local_page_index: ctx.local_page_index,
+                y_pos: ctx.cursor.1 + ctx.bounds.y,
+            };
+            ctx.defined_anchors.borrow_mut().insert(id.clone(), location);
+        }
+
         // --- Vertical Margin Collapsing ---
         let margin_to_add = self.style.margin.top.max(ctx.last_v_margin);
         if !ctx.is_empty() && margin_to_add > ctx.available_height() {
@@ -151,6 +165,8 @@ impl LayoutNode for BlockNode {
             cursor: (0.0, 0.0),
             elements: ctx.elements,
             last_v_margin: 0.0,
+            local_page_index: ctx.local_page_index,
+            defined_anchors: ctx.defined_anchors,
         };
 
         for (i, child) in self.children.iter_mut().enumerate() {
@@ -167,6 +183,7 @@ impl LayoutNode for BlockNode {
                     remaining_children.extend(self.children.drain((i + 1)..));
 
                     let next_page_block = Box::new(BlockNode {
+                        id: self.id.clone(),
                         children: remaining_children,
                         style: self.style.clone(),
                     });
@@ -266,10 +283,13 @@ pub(super) fn draw_background_and_borders(
     draw_border(ctx, &style.border_right, geom::Rect { x: bounds_width - border_right_width, y: 0.0, width: border_right_width, height: total_height });
 }
 
-
 // Add a constructor to BlockNode for internal use.
 impl BlockNode {
-    pub fn new_from_children(children: Vec<Box<dyn LayoutNode>>, style: Arc<ComputedStyle>) -> Self {
-        Self { children, style }
+    pub fn new_from_children(
+        id: Option<String>,
+        children: Vec<Box<dyn LayoutNode>>,
+        style: Arc<ComputedStyle>,
+    ) -> Self {
+        Self { id, children, style }
     }
 }

@@ -1,7 +1,7 @@
 // FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/text_test.rs
 #![cfg(test)]
 
-use crate::core::idf::{IRNode, InlineNode};
+use crate::core::idf::{IRNode, InlineNode, NodeMetadata};
 use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
 use crate::core::style::dimension::{Margins, PageSize};
 use crate::core::style::stylesheet::{ElementStyle, PageLayout, Stylesheet};
@@ -63,8 +63,11 @@ fn test_text_alignment_center() {
     };
 
     let para = IRNode::Paragraph {
-        style_sets: vec![],
-        style_override: Some(style_override),
+        meta: NodeMetadata {
+            id: None,
+            style_sets: vec![],
+            style_override: Some(style_override),
+        },
         children: vec![InlineNode::Text(text.to_string())],
     };
 
@@ -108,7 +111,7 @@ fn test_widow_control() {
 
     // Use the helper which correctly creates LineBreak nodes
     let mut para = create_paragraph("Line 1\nLine 2\nLine 3\nLine 4");
-    if let IRNode::Paragraph { ref mut style_override, .. } = para {
+    if let IRNode::Paragraph { meta: NodeMetadata{ ref mut style_override, ..}, .. } = para {
         *style_override = Some(ElementStyle { widows: Some(2), ..Default::default() });
     } else {
         panic!("Expected a paragraph node");
@@ -153,8 +156,8 @@ fn test_orphan_control() {
         ..Default::default()
     };
 
-    let mut para2 = create_paragraph("Orphan 1\nOrphan 2\nOrphan 3"); // 3 lines
-    if let IRNode::Paragraph { ref mut style_override, .. } = para2 {
+    let mut para2 = create_paragraph("Orphan 1\nOrphan 2\nOrphan 3");
+    if let IRNode::Paragraph { meta: NodeMetadata {ref mut style_override, .. } , .. } = para2 {
         *style_override = Some(ElementStyle { orphans: Some(2), widows: Some(1), ..Default::default() });
     } else {
         panic!("Expected a paragraph node");

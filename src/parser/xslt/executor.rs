@@ -1,5 +1,5 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/executor.rs
 // FILE: src/parser/xslt/executor.rs
+
 //! The stateful executor for an XSLT program. It orchestrates the execution flow,
 //! manages state (like variables), and delegates output generation to an `OutputBuilder`.
 
@@ -347,6 +347,20 @@ impl<'s, 'a, N: DataSourceNode<'a> + 'a> TemplateExecutor<'s, 'a, N> {
             XsltInstruction::Table { styles, columns, header, body } => {
                 executor_handlers::table::handle_table(self, styles, columns, header, body, context_node, context_position, context_size, builder)?
             }
+            XsltInstruction::TableOfContents { styles } => {
+                builder.add_table_of_contents(styles);
+            }
+            XsltInstruction::PageBreak { master_name } => {
+                let evaluated_name = if let Some(avt) = master_name {
+                    let merged_vars = self.get_merged_variables();
+                    let e_ctx =
+                        self.get_eval_context(context_node, &merged_vars, context_position, context_size);
+                    Some(self.evaluate_avt(avt, &e_ctx)?)
+                } else {
+                    None
+                };
+                builder.add_page_break(evaluated_name);
+            }
             _ => log::warn!("XSLT instruction not yet implemented: {:?}", instruction),
         }
         Ok(())
@@ -450,6 +464,7 @@ impl<'s, 'a, N: DataSourceNode<'a> + 'a> TemplateExecutor<'s, 'a, N> {
             "fo:inline" | "span" | "strong" | "b" | "em" | "i" => builder.start_styled_span(styles),
             "fo:basic-link" | "a" | "link" => builder.start_hyperlink(styles),
             "fo:external-graphic" | "img" => builder.start_image(styles),
+            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => builder.start_heading(styles, tag_name.last().map_or(1, |&c| c - b'0')),
             // Table elements
             "table" | "fo:table" => builder.start_table(styles),
             "tbody" | "thead" | "header" => { /* These are structural and have no direct IDF equivalent; do nothing */ }
@@ -470,6 +485,7 @@ impl<'s, 'a, N: DataSourceNode<'a> + 'a> TemplateExecutor<'s, 'a, N> {
             "fo:inline" | "span" | "strong" | "b" | "em" | "i" => builder.end_styled_span(),
             "fo:basic-link" | "a" | "link" => builder.end_hyperlink(),
             "fo:external-graphic" | "img" => builder.end_image(),
+            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => builder.end_heading(),
             // Table elements
             "table" | "fo:table" => builder.end_table(),
             "tbody" | "thead" | "header" => { /* No-op, see start_tag */ }

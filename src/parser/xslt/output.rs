@@ -1,4 +1,5 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/output.rs
+// FILE: src/parser/xslt/output.rs
+
 //! Defines the `OutputBuilder` trait, which decouples the XSLT executor
 //! from the specific output tree format (e.g., IDF).
 
@@ -30,6 +31,8 @@ pub trait OutputBuilder {
     // --- Table elements ---
     fn start_table(&mut self, styles: &PreparsedStyles);
     fn end_table(&mut self);
+    fn start_table_header(&mut self);
+    fn end_table_header(&mut self);
     fn set_table_columns(&mut self, columns: &[Dimension]);
     fn start_table_row(&mut self, styles: &PreparsedStyles);
     fn end_table_row(&mut self);
@@ -38,6 +41,12 @@ pub trait OutputBuilder {
 
     // --- Inline-level elements ---
     fn add_text(&mut self, text: &str);
+
+    // --- Special elements ---
+    fn add_table_of_contents(&mut self, styles: &PreparsedStyles);
+    fn start_heading(&mut self, styles: &PreparsedStyles, level: u8);
+    fn end_heading(&mut self);
+    fn add_page_break(&mut self, master_name: Option<String>);
 
     fn start_styled_span(&mut self, styles: &PreparsedStyles);
     fn end_styled_span(&mut self);

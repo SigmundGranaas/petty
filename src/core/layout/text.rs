@@ -22,6 +22,10 @@ pub enum LayoutAtom {
         style: Arc<ComputedStyle>,
         href: Option<String>,
     },
+    PageNumberPlaceholder {
+        target_id: String,
+        style: Arc<ComputedStyle>,
+    },
     LineBreak,
 }
 
@@ -31,6 +35,11 @@ impl LayoutAtom {
             LayoutAtom::Word { width, .. } => *width,
             LayoutAtom::Space { width, .. } => *width,
             LayoutAtom::Image { width, .. } => *width,
+            LayoutAtom::PageNumberPlaceholder { style, .. } => {
+                // Use a standard placeholder width for measurement.
+                // The actual width will be determined by the renderer.
+                style.font_size * 2.0 // Approx "XX"
+            }
             LayoutAtom::LineBreak => 0.0,
         }
     }
@@ -74,23 +83,18 @@ pub fn atomize_inlines(
                     }
                 }
             }
-            InlineNode::StyledSpan {
-                style_sets,
-                style_override,
-                children,
-            } => {
+            InlineNode::StyledSpan { meta, children } => {
                 let style =
-                    engine.compute_style(style_sets, style_override.as_ref(), parent_style);
+                    engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), parent_style);
                 atoms.extend(atomize_inlines(engine, children, &style, parent_href.clone()));
             }
             InlineNode::Hyperlink {
                 href,
-                style_sets,
-                style_override,
+                meta,
                 children,
             } => {
                 let style =
-                    engine.compute_style(style_sets, style_override.as_ref(), parent_style);
+                    engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), parent_style);
                 atoms.extend(atomize_inlines(
                     engine,
                     children,
@@ -98,8 +102,8 @@ pub fn atomize_inlines(
                     Some(href.clone()),
                 ));
             }
-            InlineNode::Image { src, style_sets, style_override } => {
-                let style = engine.compute_style(style_sets, style_override.as_ref(), parent_style);
+            InlineNode::Image { meta, src } => {
+                let style = engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), parent_style);
                 let height = style.font_size; // Basic heuristic for inline image height
                 let width = height; // Assume square for now
                 atoms.push(LayoutAtom::Image {
@@ -107,7 +111,18 @@ pub fn atomize_inlines(
                     width,
                     height,
                     style,
-                    href: parent_href.clone()
+                    href: parent_href.clone(),
+                });
+            }
+            InlineNode::PageReference { target_id, meta, children } => {
+                let style = engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), parent_style);
+
+                // FIX: Process children first, then add the placeholder.
+                // This correctly handles text like `(see page <ref/>)`.
+                atoms.extend(atomize_inlines(engine, children, &style, parent_href.clone()));
+                atoms.push(LayoutAtom::PageNumberPlaceholder {
+                    target_id: target_id.clone(),
+                    style: style.clone(),
                 });
             }
             InlineNode::LineBreak => {

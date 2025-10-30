@@ -1,7 +1,7 @@
 // FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/block_test.rs
 #![cfg(test)]
 
-use crate::core::idf::IRNode;
+use crate::core::idf::{IRNode, NodeMetadata};
 use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
 use crate::core::layout::LayoutElement;
 use crate::core::style::border::{Border, BorderStyle};
@@ -36,8 +36,10 @@ fn test_block_with_padding_indents_child() {
         ..Default::default()
     };
     let nodes = vec![IRNode::Block {
-        style_sets: vec![],
-        style_override: Some(block_style),
+        meta: NodeMetadata {
+            style_override: Some(block_style),
+            ..Default::default()
+        },
         children: vec![create_paragraph("Indented text.")],
     }];
 
@@ -73,8 +75,10 @@ fn test_block_with_border_and_padding_indents_content() {
         ..Default::default()
     };
     let nodes = vec![IRNode::Block {
-        style_sets: vec![],
-        style_override: Some(block_style),
+        meta: NodeMetadata {
+            style_override: Some(block_style),
+            ..Default::default()
+        },
         children: vec![create_paragraph("Content")],
     }];
 
@@ -116,8 +120,10 @@ fn test_multipage_block_with_background_is_drawn_on_all_pages() {
         ..Default::default()
     };
     let nodes = vec![IRNode::Block {
-        style_sets: vec![],
-        style_override: Some(block_style_override),
+        meta: NodeMetadata {
+            style_override: Some(block_style_override),
+            ..Default::default()
+        },
         children: vec![
             create_paragraph("Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6"), // 6 lines
         ],
@@ -171,8 +177,10 @@ fn test_block_splits_across_pages() {
         ..Default::default()
     };
     let nodes = vec![IRNode::Block {
-        style_sets: vec![],
-        style_override: Some(block_style_override),
+        meta: NodeMetadata {
+            style_override: Some(block_style_override),
+            ..Default::default()
+        },
         children: vec![
             create_paragraph("Line 1\nLine 2\nLine 3"), // 3 lines
             create_paragraph("Line 4\nLine 5\nLine 6"), // 3 lines
@@ -223,13 +231,17 @@ fn test_vertical_margin_collapse() {
 
     let nodes = vec![
         IRNode::Block {
-            style_sets: vec![],
-            style_override: Some(block_style_1),
+            meta: NodeMetadata {
+                style_override: Some(block_style_1),
+                ..Default::default()
+            },
             children: vec![create_paragraph("Block 1")],
         },
         IRNode::Block {
-            style_sets: vec![],
-            style_override: Some(block_style_2),
+            meta: NodeMetadata {
+                style_override: Some(block_style_2),
+                ..Default::default()
+            },
             children: vec![create_paragraph("Block 2")],
         },
     ];

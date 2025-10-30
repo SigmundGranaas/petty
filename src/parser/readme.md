@@ -33,6 +33,8 @@ The template uses special object keys to define logic:
 -   `"each": "jpath-to-array"`: Iterates over an array. The `template` key defines the structure to be rendered for each item. Inside the loop, the context (`.`) shifts to the current array item.
 -   `"if": "jpath-expression"`: Conditionally renders a block. It requires a `then` branch and supports an optional `else` branch.
 
+A full list of element types like `Paragraph`, `Image`, `Table`, `Heading`, and `TableOfContents` can be used via the `"type"` property.
+
 #### b. Data Binding
 
 Dynamic values are inserted into strings (like `"content"`, `"src"`, `"href"`) using a `{{...}}` syntax.
@@ -134,6 +136,7 @@ The compiler and executor support a substantial subset of XSLT 1.0, enabling com
 -   **Iteration:** `<xsl:for-each select="...">`
 -   **Variables:** `<xsl:variable name="..." select="...">`
 -   **Output Generation:** `<xsl:value-of>`, `<xsl:copy-of>`, `<xsl:copy>`, `<xsl:attribute>`, `<xsl:element>`, `<xsl:text>`
+-   **Structure:** `<page-break>`, `<toc/>` (or `<fo:table-of-contents/>`) for table of contents.
 -   **Sorting:** `<xsl:sort select="..." data-type="..." order="...">`
 -   **Indexing:** `<xsl:key name="..." match="..." use="...">`
 -   **Literal Result Elements:** Standard HTML/FO tags like `<p>`, `<div>`, `<table>`, etc., are directly transformed into the corresponding `IRNode`s.

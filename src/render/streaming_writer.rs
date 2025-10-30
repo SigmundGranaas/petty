@@ -1,330 +1,239 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/render/streaming_writer.rs
-// src/render/streaming_writer.rs
-
 use lopdf::content::Content;
 use lopdf::xref::{Xref, XrefEntry, XrefType};
 use lopdf::{dictionary, Dictionary, Object, ObjectId, Stream};
-use std::io::{self, Write};
+use std::collections::BTreeMap;
+use std::io::{self, Seek, Write};
 
-/// Manages the process of writing a PDF document to a stream incrementally.
-pub struct StreamingPdfWriter<W: Write> {
-    writer: internal_writer::CountingWrite<W>,
+pub struct StreamingPdfWriter<W: Write + Seek> {
+    writer: W,
     xref: Xref,
     max_id: u32,
-    pub page_ids: Vec<ObjectId>,
-    catalog_id: ObjectId,
+    pub catalog_id: ObjectId,
     pub pages_id: ObjectId,
     pub resources_id: ObjectId,
+    page_ids: Vec<ObjectId>,
+    outline_root_id: Option<ObjectId>,
+    buffered_objects: BTreeMap<ObjectId, Object>,
 }
 
-impl<W: Write> StreamingPdfWriter<W> {
-    /// Creates a new streaming writer and immediately writes the PDF header and
-    /// essential document scaffolding (Catalog, Pages, Resources) to the output stream.
-    pub fn new(writer: W, version: &str, font_dict: Dictionary) -> io::Result<Self> { // <-- MODIFIED
-        let mut writer = internal_writer::CountingWrite::new(writer);
+impl<W: Write + Seek> StreamingPdfWriter<W> {
+    pub fn new(mut writer: W, version: &str, font_dict: Dictionary) -> io::Result<Self> {
+        writer.write_all(format!("%PDF-{}\n%âãÏÓ\n", version).as_bytes())?;
 
-        writeln!(writer, "%PDF-{}", version)?;
-        writeln!(writer, "%âãÏÓ")?; // Binary mark for PDF/A compatibility
+        let mut buffered_objects = BTreeMap::new();
+        let mut max_id = 0;
 
-        let mut xref = Xref::new(0, XrefType::CrossReferenceTable);
+        let resources_id = (max_id + 1, 0);
+        let pages_id = (max_id + 2, 0);
+        let catalog_id = (max_id + 3, 0);
+        max_id = 3;
 
-        // Reserve Object IDs
-        let catalog_id = (1, 0);
-        let pages_id = (2, 0);
-        let resources_id = (3, 0);
-        let max_id = 3;
-
-        // --- Resources Object ---
-        let resources_dict = dictionary! {
-            "Font" => font_dict, // <-- USE THE PASSED-IN DICTIONARY
-        };
-        internal_writer::write_indirect_object(&mut writer, resources_id.0, resources_id.1, &resources_dict.into(), &mut xref)?;
-
-        // --- Initial (empty) Pages Object ---
-        let pages_dict = dictionary! {
-            "Type" => "Pages",
-            "Kids" => vec![],
-            "Count" => 0,
-        };
-        internal_writer::write_indirect_object(&mut writer, pages_id.0, pages_id.1, &pages_dict.into(), &mut xref)?;
-
-        // --- Catalog Object ---
-        let catalog_dict = dictionary! {
-            "Type" => "Catalog",
-            "Pages" => pages_id,
-        };
-        internal_writer::write_indirect_object(&mut writer, catalog_id.0, catalog_id.1, &catalog_dict.into(), &mut xref)?;
+        buffered_objects.insert(resources_id, dictionary! { "Font" => font_dict }.into());
 
         Ok(Self {
             writer,
-            xref,
+            xref: Xref::new(0, XrefType::CrossReferenceTable),
             max_id,
-            page_ids: Vec::new(),
             catalog_id,
             pages_id,
             resources_id,
+            page_ids: Vec::new(),
+            outline_root_id: None,
+            buffered_objects,
         })
     }
 
-    /// Generates a new unique object ID for the document.
     pub fn new_object_id(&mut self) -> ObjectId {
         self.max_id += 1;
         (self.max_id, 0)
     }
 
-    pub fn add_page_ids(&mut self, ids: impl Iterator<Item = ObjectId>) {
-        self.page_ids.extend(ids);
+    pub fn buffer_object(&mut self, object: Object) -> ObjectId {
+        let id = self.new_object_id();
+        self.buffered_objects.insert(id, object);
+        id
     }
 
-    pub fn write_pre_rendered_objects(&mut self, bytes: Vec<u8>) -> io::Result<()> {
-        self.writer.write_all(&bytes)
+    pub fn buffer_object_at_id(&mut self, id: ObjectId, object: Object) {
+        if id.0 > self.max_id {
+            self.max_id = id.0;
+        }
+        self.buffered_objects.insert(id, object);
     }
 
-    /// Renders a single page and writes its objects directly to the output stream.
-    pub fn add_page(&mut self, content: Content, media_box: [f32; 4]) -> io::Result<()> {
-        // --- Page Content Stream ---
-        let content_stream = Stream::new(dictionary!{}, content.encode().unwrap());
-        let content_id = self.new_object_id();
-        internal_writer::write_indirect_object(&mut self.writer, content_id.0, content_id.1, &content_stream.into(), &mut self.xref)?;
-
-        // --- Page Object ---
-        let page_dict = dictionary! {
-            "Type" => "Page",
-            "Parent" => self.pages_id,
-            "MediaBox" => media_box.iter().map(|&v| v.into()).collect::<Vec<Object>>(),
-            "Contents" => content_id,
-            "Resources" => self.resources_id,
-        };
-        let page_id = self.new_object_id();
-        internal_writer::write_indirect_object(&mut self.writer, page_id.0, page_id.1, &page_dict.into(), &mut self.xref)?;
-
-        self.page_ids.push(page_id);
-        Ok(())
+    pub fn buffer_content_stream(&mut self, content: Content) -> ObjectId {
+        let stream = Stream::new(dictionary! {}, content.encode().unwrap_or_default());
+        self.buffer_object(Object::Stream(stream))
     }
 
-    /// Finalizes the document by writing the updated Pages object, XRef table, and trailer.
-    pub fn finish(mut self) -> io::Result<()> {
-        // --- Update the Pages object ---
+    pub fn set_page_ids(&mut self, page_ids: Vec<ObjectId>) {
+        self.page_ids = page_ids;
+    }
+
+    pub fn set_outline_root_id(&mut self, outline_root_id: Option<ObjectId>) {
+        self.outline_root_id = outline_root_id;
+    }
+
+    pub fn finish(mut self) -> io::Result<W> {
         let pages_dict = dictionary! {
             "Type" => "Pages",
-            "Kids" => self.page_ids.iter().map(|&id| Object::from(id)).collect::<Vec<Object>>(),
-            "Count" => self.page_ids.len() as i32,
+            "Kids" => self.page_ids.iter().map(|id| Object::Reference(*id)).collect::<Vec<Object>>(),
+            "Count" => self.page_ids.len() as i64,
         };
-        internal_writer::write_indirect_object(&mut self.writer, self.pages_id.0, self.pages_id.1, &pages_dict.into(), &mut self.xref)?;
+        self.buffer_object_at_id(self.pages_id, pages_dict.into());
 
-        // --- Write XRef Table and Trailer ---
-        let xref_start = self.writer.bytes_written;
+        let mut catalog_dict = dictionary! { "Type" => "Catalog", "Pages" => self.pages_id };
+        if let Some(outline_id) = self.outline_root_id {
+            catalog_dict.set("Outlines", outline_id);
+            catalog_dict.set("PageMode", "UseOutlines");
+        }
+        self.buffer_object_at_id(self.catalog_id, catalog_dict.into());
+
+        for (id, object) in &self.buffered_objects {
+            internal_writer::write_indirect_object(&mut self.writer, *id, object, &mut self.xref)?;
+        }
+
+        let xref_start = self.writer.stream_position()?;
         self.xref.size = self.max_id + 1;
-
         internal_writer::write_xref(&mut self.writer, &self.xref)?;
 
-        let trailer = dictionary! {
-            "Size" => self.xref.size as i64,
-            "Root" => self.catalog_id,
-        };
-
+        let trailer = dictionary! { "Size" => self.xref.size as i64, "Root" => self.catalog_id };
         writeln!(self.writer, "trailer")?;
         internal_writer::write_dictionary(&mut self.writer, &trailer)?;
         writeln!(self.writer, "\nstartxref")?;
         writeln!(self.writer, "{}", xref_start)?;
         write!(self.writer, "%%EOF")?;
 
-        self.writer.flush()
+        self.writer.flush()?;
+        Ok(self.writer)
     }
 }
 
-/// This internal module replicates the necessary functions from `lopdf::writer`
-/// to avoid needing to fork the library.
-pub(crate) mod internal_writer {
+mod internal_writer {
     use super::*;
     use lopdf::StringFormat;
+    use std::collections::BTreeMap;
 
-    pub struct CountingWrite<W: Write> {
-        pub inner: W,
-        pub bytes_written: usize,
-    }
-
-    impl<W: Write> CountingWrite<W> {
-        pub fn new(inner: W) -> Self {
-            Self { inner, bytes_written: 0 }
-        }
-    }
-
-    impl<W: Write> Write for CountingWrite<W> {
-        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-            let bytes = self.inner.write(buf)?;
-            self.bytes_written += bytes;
-            Ok(bytes)
-        }
-        fn flush(&mut self) -> io::Result<()> {
-            self.inner.flush()
-        }
-    }
-
-    pub fn write_indirect_object<W: Write>(
-        file: &mut CountingWrite<W>, id: u32, generation: u16, object: &Object, xref: &mut Xref,
-    ) -> io::Result<()> {
-        let offset = file.bytes_written as u32;
-        xref.insert(id, XrefEntry::Normal { offset, generation });
-        write!(file, "{} {} obj\n", id, generation)?;
-        write_object(file, object)?;
-        writeln!(file, "\nendobj")?;
+    pub fn write_indirect_object<W: Write + Seek>(writer: &mut W, id: ObjectId, object: &Object, xref: &mut Xref) -> io::Result<()> {
+        let offset = writer.stream_position()?;
+        xref.insert(id.0, XrefEntry::Normal { offset: offset as u32, generation: id.1 as u16 });
+        write!(writer, "{} {} obj\n", id.0, id.1)?;
+        write_object(writer, object)?;
+        writeln!(writer, "\nendobj")?;
         Ok(())
     }
 
-    pub fn write_object(file: &mut dyn Write, object: &Object) -> io::Result<()> {
+    pub fn write_object(writer: &mut dyn Write, object: &Object) -> io::Result<()> {
         match object {
-            Object::Null => file.write_all(b"null"),
-            Object::Boolean(value) => file.write_all(if *value { b"true" } else { b"false" }),
-            Object::Integer(value) => {
-                let mut buf = itoa::Buffer::new();
-                file.write_all(buf.format(*value).as_bytes())
+            Object::Null => writer.write_all(b"null"),
+            Object::Boolean(b) => writer.write_all(if *b { b"true" } else { b"false" }),
+            Object::Integer(i) => write!(writer, "{}", i),
+            Object::Real(r) => write!(writer, "{:.3}", r),
+            Object::Name(n) => {
+                writer.write_all(b"/")?;
+                writer.write_all(n)
             }
-            Object::Real(value) => write!(file, "{value}"),
-            Object::Name(name) => write_name(file, name),
-            Object::String(text, format) => write_string(file, text, format),
-            Object::Array(array) => write_array(file, array),
-            Object::Dictionary(dict) => write_dictionary(file, dict),
-            Object::Stream(stream) => write_stream(file, stream),
-            Object::Reference(id) => write!(file, "{} {} R", id.0, id.1),
-        }
-    }
-
-    fn write_name(file: &mut dyn Write, name: &[u8]) -> io::Result<()> {
-        file.write_all(b"/")?;
-        for &byte in name {
-            if b" \t\n\r\x0C()<>[]{}/%#".contains(&byte) || !(33..=126).contains(&byte) {
-                write!(file, "#{byte:02X}")?;
-            } else {
-                file.write_all(&[byte])?;
-            }
-        }
-        Ok(())
-    }
-
-    fn write_string(file: &mut dyn Write, text: &[u8], format: &StringFormat) -> io::Result<()> {
-        match *format {
-            StringFormat::Literal => {
-                file.write_all(b"(")?;
-                for &byte in text {
-                    match byte {
-                        b'(' | b')' | b'\\' => {
-                            file.write_all(b"\\")?;
-                            file.write_all(&[byte])?;
+            Object::String(s, format) => match format {
+                StringFormat::Literal => {
+                    writer.write_all(b"(")?;
+                    for &byte in s {
+                        if byte == b'(' || byte == b')' || byte == b'\\' {
+                            writer.write_all(b"\\")?;
                         }
-                        _ => {
-                            file.write_all(&[byte])?;
-                        }
+                        writer.write_all(&[byte])?;
                     }
+                    writer.write_all(b")")
                 }
-                file.write_all(b")")
-            }
-            StringFormat::Hexadecimal => {
-                file.write_all(b"<")?;
-                for &byte in text {
-                    write!(file, "{byte:02X}")?;
+                StringFormat::Hexadecimal => {
+                    write!(writer, "<{}>", s.iter().map(|b| format!("{:02X}", b)).collect::<String>())
                 }
-                file.write_all(b">")
+            },
+            Object::Array(arr) => {
+                writer.write_all(b"[")?;
+                for (i, obj) in arr.iter().enumerate() {
+                    if i > 0 { writer.write_all(b" ")?; }
+                    write_object(writer, obj)?;
+                }
+                writer.write_all(b"]")
             }
-        }
-    }
-
-    fn write_array(file: &mut dyn Write, array: &[Object]) -> io::Result<()> {
-        file.write_all(b"[")?;
-        for (i, object) in array.iter().enumerate() {
-            if i > 0 {
-                file.write_all(b" ")?;
+            Object::Dictionary(dict) => write_dictionary(writer, dict),
+            Object::Stream(stream) => {
+                let mut dict = stream.dict.clone();
+                dict.set("Length", stream.content.len() as i64);
+                write_dictionary(writer, &dict)?;
+                writer.write_all(b"\nstream\n")?;
+                writer.write_all(&stream.content)?;
+                writer.write_all(b"\nendstream")
             }
-            write_object(file, object)?;
+            Object::Reference(id) => write!(writer, "{} {} R", id.0, id.1),
         }
-        file.write_all(b"]")
     }
 
-    pub fn write_dictionary(file: &mut dyn Write, dictionary: &Dictionary) -> io::Result<()> {
-        file.write_all(b"<<")?;
-        for (key, value) in dictionary {
-            write_name(file, key)?;
-            file.write_all(b" ")?;
-            write_object(file, value)?;
+    pub fn write_dictionary(writer: &mut dyn Write, dict: &Dictionary) -> io::Result<()> {
+        writer.write_all(b"<<")?;
+        let sorted_keys: BTreeMap<_, _> = dict.iter().collect();
+        for (key, value) in sorted_keys {
+            writer.write_all(b"/")?;
+            writer.write_all(key)?;
+            writer.write_all(b" ")?;
+            write_object(writer, value)?;
+            writer.write_all(b" ")?;
         }
-        file.write_all(b">>")
+        writer.write_all(b">>")
     }
 
-    fn write_stream(file: &mut dyn Write, stream: &Stream) -> io::Result<()> {
-        write_dictionary(file, &stream.dict)?;
-        file.write_all(b"\nstream\n")?;
-        file.write_all(&stream.content)?;
-        file.write_all(b"\nendstream")
-    }
+    pub fn write_xref<W: Write>(writer: &mut W, xref: &Xref) -> io::Result<()> {
+        writeln!(writer, "xref")?;
+        let mut sorted_entries: Vec<_> = xref.entries.iter().collect();
+        sorted_entries.sort_by_key(|(k, _)| *k);
 
-    // --- XrefSection implementation copied from lopdf internals ---
-    #[derive(Debug, Clone)]
-    struct XrefSection {
-        pub start_id: u32,
-        pub entries: Vec<XrefEntry>,
-    }
-
-    impl XrefSection {
-        pub fn new(start_id: u32) -> XrefSection {
-            XrefSection {
-                start_id,
-                entries: vec![],
-            }
+        if sorted_entries.is_empty() {
+            writeln!(writer, "0 1")?;
+            writeln!(writer, "0000000000 65535 f ")?;
+            return Ok(());
         }
 
-        pub fn add_entry(&mut self, entry: XrefEntry) {
-            self.entries.push(entry);
-        }
+        let mut start_id = 0;
+        let mut entries_in_section = Vec::new();
 
-        pub fn add_unusable_free_entry(&mut self) {
-            self.add_entry(XrefEntry::Free);
-        }
-
-        pub fn is_empty(&self) -> bool {
-            self.entries.is_empty()
-        }
-
-        pub fn write_xref_section(&self, file: &mut dyn Write) -> io::Result<()> {
-            writeln!(file, "{} {}", self.start_id, self.entries.len())?;
-            for entry in &self.entries {
-                match *entry {
-                    XrefEntry::Normal {
-                        offset,
-                        generation,
-                    } => {
-                        writeln!(file, "{:010} {:05} n ", offset, generation)?;
-                    }
-                    XrefEntry::Free => {
-                        writeln!(file, "{:010} {:05} f ", 0, 65535)?;
-                    }
-                    _ => {}
+        // This closure is now defined to not capture `writer`, but to accept it as an argument.
+        // This avoids the borrow checker issue where the closure holds a mutable borrow on `writer`
+        // while other code tries to use it.
+        let mut write_section = |w: &mut W, start_id: u32, entries: &Vec<XrefEntry>| -> io::Result<()> {
+            if entries.is_empty() { return Ok(()); }
+            writeln!(w, "{} {}", start_id, entries.len())?;
+            for entry in entries {
+                if let XrefEntry::Normal { offset, generation } = *entry {
+                    writeln!(w, "{:010} {:05} n ", offset, generation)?;
+                } else {
+                    writeln!(w, "0000000000 65535 f ")?;
                 }
             }
             Ok(())
-        }
-    }
+        };
 
-    pub fn write_xref(file: &mut dyn Write, xref: &Xref) -> io::Result<()> {
-        writeln!(file, "xref")?;
-        let mut section = XrefSection::new(0);
-        section.add_unusable_free_entry();
+        // The pattern `|(&id, _)| id` caused a reference pattern error with modern match ergonomics.
+        // A clearer way to get the ID is to access the tuple element directly and dereference it.
+        if sorted_entries.get(0).map(|entry| *entry.0) != Some(0) {
+            writeln!(writer, "0 1")?;
+            writeln!(writer, "0000000000 65535 f ")?;
+        }
 
-        for obj_id in 1..xref.size {
-            if section.is_empty() {
-                section = XrefSection::new(obj_id);
+        // Iterating over `sorted_entries` gives `(&u32, &XrefEntry)` tuples.
+        // The pattern `(&id, entry)` destructures this, binding `id` to `u32` and `entry` to `&XrefEntry`.
+        for (&id, entry) in sorted_entries {
+            if id > 0 && id != start_id + entries_in_section.len() as u32 {
+                // Pass the writer explicitly to the closure.
+                write_section(writer, start_id, &entries_in_section)?;
+                entries_in_section.clear();
             }
-            if let Some(entry) = xref.get(obj_id) {
-                section.add_entry(entry.clone());
-            } else {
-                if !section.is_empty() {
-                    section.write_xref_section(file)?;
-                }
-                section = XrefSection::new(obj_id);
+            if entries_in_section.is_empty() && id > 0 {
+                start_id = id;
             }
+            entries_in_section.push(entry.clone());
         }
-        if !section.is_empty() {
-            section.write_xref_section(file)?;
-        }
+        // Pass the writer explicitly to the final closure call.
+        write_section(writer, start_id, &entries_in_section)?;
         Ok(())
     }
 }

@@ -15,6 +15,7 @@ pub struct PreparsedTemplate(pub Vec<XsltInstruction>);
 /// A struct to hold pre-resolved styles for a single instruction.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PreparsedStyles {
+    pub id: Option<String>,
     pub style_sets: Vec<Arc<ElementStyle>>,
     pub style_override: Option<ElementStyle>,
 }
@@ -168,6 +169,9 @@ pub enum XsltInstruction {
         columns: Vec<Dimension>,
         header: Option<PreparsedTemplate>,
         body: PreparsedTemplate,
+    },
+    TableOfContents {
+        styles: PreparsedStyles,
     },
     PageBreak {
         master_name: Option<AttributeValueTemplate>,

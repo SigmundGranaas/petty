@@ -1,5 +1,3 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/processor.rs
-// FILE: src/parser/xslt/processor.rs
 use super::ast::CompiledStylesheet;
 use super::compiler;
 use super::executor::{self, ExecutionError};
@@ -7,7 +5,7 @@ use crate::core::idf::IRNode;
 use crate::core::style::stylesheet::Stylesheet;
 use crate::error::PipelineError;
 use crate::parser::xslt::json_ds::JsonVDocument;
-use crate::parser::processor::{CompiledTemplate, ExecutionConfig, TemplateParser, DataSourceFormat};
+use crate::parser::processor::{CompiledTemplate, ExecutionConfig, DataSourceFormat, TemplateParser};
 use crate::parser::xslt::xml::XmlDocument;
 use crate::parser::ParseError;
 use std::path::{Path, PathBuf};
@@ -711,7 +709,8 @@ mod tests {
                         s.push_str(&child.get_text_content());
                     }
                 }
-                IRNode::Paragraph { children, .. } => {
+                IRNode::Paragraph { children, .. }
+                | IRNode::Heading { children, .. } => {
                     for inline in children {
                         s.push_str(&inline.get_text_content());
                     }

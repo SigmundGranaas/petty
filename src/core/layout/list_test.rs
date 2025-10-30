@@ -1,8 +1,8 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/list_test.rs
+// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/list_test.rs
 #![cfg(test)]
 
 use super::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
-use crate::core::idf::IRNode;
+use crate::core::idf::{IRNode, NodeMetadata};
 use crate::core::layout::{LayoutElement, TextElement};
 use crate::core::style::dimension::{Margins, PageSize};
 use crate::core::style::list::{ListStylePosition, ListStyleType};
@@ -11,24 +11,24 @@ use std::collections::HashMap;
 
 fn create_list_item(text: &str) -> IRNode {
     IRNode::ListItem {
-        style_sets: vec![],
-        style_override: None,
+        meta: Default::default(),
         children: vec![create_paragraph(text)],
     }
 }
 
 fn create_list_item_with_children(children: Vec<IRNode>) -> IRNode {
     IRNode::ListItem {
-        style_sets: vec![],
-        style_override: None,
+        meta: Default::default(),
         children,
     }
 }
 
 fn create_list(children: Vec<IRNode>, style: Option<ElementStyle>, start: Option<usize>) -> IRNode {
     IRNode::List {
-        style_sets: vec![],
-        style_override: style,
+        meta: NodeMetadata {
+            style_override: style,
+            ..Default::default()
+        },
         start,
         children,
     }
@@ -245,8 +245,8 @@ fn test_list_with_complex_item_splits_correctly() {
     let style_override = Some(ElementStyle { widows: Some(1), ..Default::default() });
     let mut p1 = create_paragraph("Line 1\nLine 2");
     let mut p2 = create_paragraph("Line 3\nLine 4\nLine 5");
-    if let IRNode::Paragraph { style_override: so, .. } = &mut p1 { *so = style_override.clone(); }
-    if let IRNode::Paragraph { style_override: so, .. } = &mut p2 { *so = style_override; }
+    if let IRNode::Paragraph { meta, .. } = &mut p1 { meta.style_override = style_override.clone(); }
+    if let IRNode::Paragraph { meta, .. } = &mut p2 { meta.style_override = style_override; }
 
     let complex_item = create_list_item_with_children(vec![p1, p2]);
     let nodes = vec![create_list(vec![complex_item], None, None)];

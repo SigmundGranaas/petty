@@ -1,30 +1,29 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/pipeline/orchestrator.rs
-// FILE: /home/sigmund/RustroverProjects/petty/src/pipeline/orchestrator.rs
 use super::config::PdfBackend;
 use super::worker::{finish_layout_and_resource_loading, LaidOutSequence};
 use crate::core::layout::{FontManager, LayoutEngine};
-use crate::core::style::stylesheet::Stylesheet;
 use crate::error::PipelineError;
-use crate::parser::processor::{CompiledTemplate, ExecutionConfig, DataSourceFormat};
-use crate::render::lopdf_renderer::{render_lopdf_page_to_bytes, LopdfDocumentRenderer, LopdfPageRenderTask};
-use crate::render::pdf::{render_footer_to_ops, render_page_to_ops, PdfDocumentRenderer, RenderContext};
+use crate::parser::processor::{CompiledTemplate, DataSourceFormat, ExecutionConfig};
+use crate::render::lopdf_renderer::LopdfDocumentRenderer;
+use crate::render::pdf::PdfDocumentRenderer;
+use crate::render::renderer::ResolvedAnchor;
 use crate::render::DocumentRenderer;
 use async_channel;
-use handlebars::{no_escape, Context, Handlebars, Helper, HelperResult, Output, RenderContext as HandlebarsRenderContext};
+use handlebars::{
+    no_escape, Context, Handlebars, Helper, HelperResult, Output,
+    RenderContext as HandlebarsRenderContext,
+};
 use log::{debug, info, warn};
-use printpdf::{Layer, Op, PdfPage};
 use serde_json::Value;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::runtime::Builder;
-use tokio::task::{self, JoinSet};
+use tokio::task;
 
 /// The main document generation pipeline.
-/// It orchestrates parsing, layout, and rendering in a concurrent fashion.
 pub struct DocumentPipeline {
     template_engine: Handlebars<'static>,
     compiled_template: Arc<dyn CompiledTemplate>,
@@ -56,7 +55,6 @@ impl DocumentPipeline {
         let mut template_engine = Handlebars::new();
         template_engine.set_strict_mode(false);
         template_engine.register_helper("formatCurrency", Box::new(format_currency_helper));
-        // Disable HTML escaping, as we are rendering to PDF, not HTML.
         template_engine.register_escape_fn(no_escape);
 
         DocumentPipeline {
@@ -68,8 +66,11 @@ impl DocumentPipeline {
         }
     }
 
-    /// Generates a complete document and writes it to the provided `writer`.
-    pub async fn generate_to_writer_async<W, I>(&self, data_iterator: I, writer: W) -> Result<(), PipelineError>
+    pub async fn generate_to_writer_async<W, I>(
+        &self,
+        data_iterator: I,
+        writer: W,
+    ) -> Result<(), PipelineError>
     where
         W: io::Write + Send + 'static,
         I: Iterator<Item = Value> + Send + 'static,
@@ -80,8 +81,10 @@ impl DocumentPipeline {
 
         info!("Starting pipeline with {} layout workers.", num_layout_threads);
 
-        let (tx1, rx1) = async_channel::bounded::<Result<(usize, Arc<Value>), PipelineError>>(channel_buffer_size);
-        let (tx2, rx2) = async_channel::bounded::<(usize, Result<LaidOutSequence, PipelineError>)>(channel_buffer_size);
+        let (tx1, rx1) =
+            async_channel::bounded::<Result<(usize, Arc<Value>), PipelineError>>(channel_buffer_size);
+        let (tx2, rx2) =
+            async_channel::bounded::<(usize, Result<LaidOutSequence, PipelineError>)>(channel_buffer_size);
 
         // --- STAGE 1: Producer ---
         let producer_handle = task::spawn(async move {
@@ -112,25 +115,27 @@ impl DocumentPipeline {
                 while let Ok(result) = rx1_clone.recv_blocking() {
                     let (index, work_result) = match result {
                         Ok((index, context_arc)) => {
-                            let data_source_string = serde_json::to_string(&*context_arc).map_err(PipelineError::from).unwrap();
+                            let data_source_string =
+                                serde_json::to_string(&*context_arc).map_err(PipelineError::from).unwrap();
 
                             let exec_config = ExecutionConfig {
-                                // This orchestrator processes an iterator of serde_json::Value, so the format is always JSON.
                                 format: DataSourceFormat::Json,
                                 strict: debug_mode,
                             };
 
-                            let layout_result = template_clone.execute(&data_source_string, exec_config).and_then(|ir_nodes| {
-                                finish_layout_and_resource_loading(
-                                    worker_id,
-                                    ir_nodes,
-                                    context_arc.clone(),
-                                    template_clone.resource_base_path(),
-                                    &layout_engine_clone,
-                                    template_clone.stylesheet(),
-                                    debug_mode,
-                                )
-                            });
+                            let layout_result = template_clone
+                                .execute(&data_source_string, exec_config)
+                                .and_then(|ir_nodes| {
+                                    finish_layout_and_resource_loading(
+                                        worker_id,
+                                        ir_nodes,
+                                        context_arc.clone(),
+                                        template_clone.resource_base_path(),
+                                        &layout_engine_clone,
+                                        template_clone.stylesheet(),
+                                        debug_mode,
+                                    )
+                                });
                             (index, layout_result)
                         }
                         Err(e) => (0, Err(e)),
@@ -152,42 +157,36 @@ impl DocumentPipeline {
         let consumer_template_engine = self.template_engine.clone();
         let pdf_backend = self.pdf_backend;
         let final_layout_engine = layout_engine.clone();
-        let final_stylesheet = self.compiled_template.stylesheet().clone(); // Clone stylesheet for consumer
+        let final_stylesheet = self.compiled_template.stylesheet().clone();
 
         let consumer_handle = task::spawn_blocking(move || {
             info!("[CONSUMER] Started. Awaiting laid-out sequences.");
-            let result = match pdf_backend {
-                PdfBackend::PrintPdfParallel => consume_and_render_pages_printpdf_parallel(
-                    rx2,
-                    final_layout_engine,
-                    final_stylesheet,
-                    consumer_template_engine,
-                    writer,
-                ),
-                PdfBackend::LopdfParallel => consume_and_render_pages_lopdf_parallel(
-                    rx2,
-                    final_layout_engine,
-                    final_stylesheet,
-                    consumer_template_engine,
-                    writer,
-                ),
-                _ => {
-                    let mut renderer: Box<dyn DocumentRenderer<Box<dyn io::Write + Send>>> = match pdf_backend {
-                        PdfBackend::PrintPdf => Box::new(PdfDocumentRenderer::new(final_layout_engine, final_stylesheet)?),
-                        PdfBackend::Lopdf => Box::new(LopdfDocumentRenderer::new(final_layout_engine, final_stylesheet)?),
-                        _ => unreachable!(),
+            let result = {
+                let mut renderer: Box<dyn DocumentRenderer<Box<dyn io::Write + Send>>> =
+                    match pdf_backend {
+                        PdfBackend::PrintPdf | PdfBackend::PrintPdfParallel => Box::new(PdfDocumentRenderer::new(
+                            final_layout_engine,
+                            final_stylesheet,
+                        )?),
+                        PdfBackend::Lopdf | PdfBackend::LopdfParallel => Box::new(LopdfDocumentRenderer::new(
+                            final_layout_engine,
+                            final_stylesheet,
+                        )?),
                     };
-                    renderer.begin_document(writer)?;
-                    consume_and_render_pages_sequential(rx2, renderer.as_mut(), &consumer_template_engine)?;
-                    info!("[CONSUME] Finalizing document.");
-                    renderer.finalize().map_err(Into::into)
-                }
+                renderer.begin_document(writer)?;
+                let (sequences, anchors) = consume_and_render_pages_sequential(
+                    rx2,
+                    renderer.as_mut(),
+                    &consumer_template_engine,
+                )?;
+                info!("[CONSUME] Finalizing document.");
+                renderer.finalize(&anchors, &sequences)?;
+                renderer.finish().map_err(Into::into)
             };
             info!("[CONSUME] Finished.");
             result
         });
 
-        // --- Wait for all stages to complete ---
         producer_handle.await.unwrap();
         for handle in layout_worker_handles {
             handle.await.unwrap();
@@ -195,7 +194,6 @@ impl DocumentPipeline {
         consumer_handle.await.unwrap()
     }
 
-    /// A convenience method that creates a file and runs the async pipeline.
     pub fn generate_to_file<P: AsRef<Path>>(
         &self,
         data_iterator: impl Iterator<Item = Value> + Send + 'static,
@@ -208,269 +206,54 @@ impl DocumentPipeline {
         let file = fs::File::create(output_path)?;
         let writer = io::BufWriter::new(file);
 
-        let rt = Builder::new_multi_thread().enable_all().build().expect("Failed to create Tokio runtime");
+        let rt = Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("Failed to create Tokio runtime");
 
         rt.block_on(self.generate_to_writer_async(data_iterator, writer))
     }
 }
 
-// --- Consumer Implementations ---
-
-/// Sequential Consumer: Renders pages one by one using a generic `DocumentRenderer`.
 fn consume_and_render_pages_sequential<W: io::Write + Send>(
     rx: async_channel::Receiver<(usize, Result<LaidOutSequence, PipelineError>)>,
     renderer: &mut dyn DocumentRenderer<W>,
     template_engine: &Handlebars,
-) -> Result<(), PipelineError> {
+) -> Result<(Vec<LaidOutSequence>, HashMap<String, ResolvedAnchor>), PipelineError> {
     let mut buffer = BTreeMap::new();
     let mut next_sequence_to_render = 0;
+    let mut global_page_offset = 0;
+    let mut all_sequences = Vec::new();
+    let mut resolved_anchors = HashMap::new();
 
     while let Ok((index, result)) = rx.recv_blocking() {
         buffer.insert(index, result);
         while let Some(res) = buffer.remove(&next_sequence_to_render) {
             let render_start_time = Instant::now();
             info!("[CONSUMER] Rendering sequence #{}", next_sequence_to_render);
-            let seq = res?;
-            renderer.add_resources(&seq.resources)?;
-            for (page_idx, page_elements) in seq.pages.into_iter().enumerate() {
-                debug!("[CONSUMER] Rendering page {} of sequence #{}.", page_idx + 1, next_sequence_to_render);
-                renderer.render_page(&seq.context, page_elements, template_engine)?;
-            }
-            info!(
-                "[CONSUMER] Finished rendering sequence #{} in {:.2?}.",
-                next_sequence_to_render,
-                render_start_time.elapsed()
-            );
-            next_sequence_to_render += 1;
-        }
-    }
-    Ok(())
-}
-
-type RenderChunkResult = Vec<(Vec<Op>, Option<Vec<Op>>)>;
-
-/// Parallel Consumer for `PrintPdf` backend.
-fn consume_and_render_pages_printpdf_parallel<W: io::Write + Send>(
-    rx: async_channel::Receiver<(usize, Result<LaidOutSequence, PipelineError>)>,
-    layout_engine: LayoutEngine,
-    stylesheet: Stylesheet,
-    template_engine: Handlebars<'static>,
-    writer: W,
-) -> Result<(), PipelineError> {
-    let mut renderer = PdfDocumentRenderer::new(layout_engine, stylesheet)?;
-    renderer.begin_document(writer)?;
-
-    let mut buffer = BTreeMap::new();
-    let mut next_sequence_to_render = 0;
-    let mut global_page_count = 0;
-
-    let rt = tokio::runtime::Handle::current();
-    let num_render_threads = num_cpus::get();
-    let template_engine_arc = Arc::new(template_engine);
-
-    while let Ok((index, result)) = rx.recv_blocking() {
-        buffer.insert(index, result);
-
-        while let Some(res) = buffer.remove(&next_sequence_to_render) {
-            let seq = res?;
-            if seq.pages.is_empty() {
-                next_sequence_to_render += 1;
-                continue;
-            }
-
+            let mut seq = res?;
             renderer.add_resources(&seq.resources)?;
 
-            let mut render_tasks: JoinSet<Result<(usize, RenderChunkResult), PipelineError>> = JoinSet::new();
-            let chunk_size = (seq.pages.len() + num_render_threads - 1) / num_render_threads;
-            let layout_engine_arc = Arc::new(renderer.layout_engine.clone());
-            let image_xobjects_arc = Arc::new(renderer.image_xobjects.clone());
-            let fonts_arc = Arc::new(renderer.fonts.clone());
-            let default_font_arc = Arc::new(renderer.default_font.clone());
-            let ss_clone = Arc::new(renderer.stylesheet.clone());
-            let default_master_name = ss_clone.default_page_master_name.as_ref().unwrap();
-            let page_layout = ss_clone.page_masters.get(default_master_name).unwrap();
-            let (_, page_height_pt) = PdfDocumentRenderer::<W>::get_page_dimensions_pt(page_layout);
-
-            for (chunk_idx, page_chunk) in seq.pages.chunks(chunk_size).enumerate() {
-                let task_data = (
-                    page_chunk.to_vec(),
-                    global_page_count + (chunk_idx * chunk_size) + 1,
-                    Arc::clone(&seq.context),
-                    Arc::clone(&layout_engine_arc),
-                    Arc::clone(&template_engine_arc),
-                    Arc::clone(&image_xobjects_arc),
-                    Arc::clone(&fonts_arc),
-                    Arc::clone(&default_font_arc),
-                    Arc::clone(&ss_clone),
-                );
-                render_tasks.spawn_blocking_on(
-                    move || {
-                        let (
-                            page_chunk_owned,
-                            start_page_num,
-                            context_clone,
-                            le_clone,
-                            te_clone,
-                            ix_clone,
-                            f_clone,
-                            df_clone,
-                            ss_clone_inner,
-                        ) = task_data;
-                        let mut chunk_results = Vec::with_capacity(page_chunk_owned.len());
-                        for (i, page_elements) in page_chunk_owned.into_iter().enumerate() {
-                            let ctx = RenderContext {
-                                image_xobjects: &ix_clone,
-                                fonts: &f_clone,
-                                default_font: &df_clone,
-                                page_height_pt,
-                            };
-                            let content_ops = render_page_to_ops(ctx, page_elements)?;
-                            let default_master_name = ss_clone_inner.default_page_master_name.as_ref().unwrap();
-                            let page_layout = ss_clone_inner.page_masters.get(default_master_name).unwrap();
-                            let footer_ops = render_footer_to_ops::<Vec<u8>>(
-                                &le_clone,
-                                &ss_clone_inner,
-                                &f_clone,
-                                &df_clone,
-                                &context_clone,
-                                page_layout,
-                                start_page_num + i,
-                                &te_clone,
-                            )?;
-                            chunk_results.push((content_ops, footer_ops));
-                        }
-                        Ok((chunk_idx, chunk_results))
-                    },
-                    &rt,
-                );
-            }
-
-            let mut rendered_chunks = BTreeMap::new();
-            while let Some(join_result) = rt.block_on(render_tasks.join_next()) {
-                let (chunk_idx, chunk_data) = join_result.unwrap()?;
-                rendered_chunks.insert(chunk_idx, chunk_data);
-            }
-
-            let default_master_name = renderer.stylesheet.default_page_master_name.as_ref().unwrap();
-            let page_layout = renderer.stylesheet.page_masters.get(default_master_name).unwrap();
-            let (page_width_mm, page_height_mm) = PdfDocumentRenderer::<W>::get_page_dimensions_mm(page_layout);
-
-            for chunk_data in rendered_chunks.into_values() {
-                for (content_ops, footer_ops) in chunk_data {
-                    global_page_count += 1;
-                    let mut final_ops = Vec::new();
-                    let layer_name = format!("Page {} Layer 1", global_page_count);
-                    let layer_id = renderer.document.add_layer(&Layer::new(&layer_name));
-                    final_ops.push(Op::BeginLayer { layer_id });
-                    final_ops.extend(content_ops);
-                    if let Some(ops) = footer_ops {
-                        final_ops.extend(ops);
+            for (local_page_idx, page_elements) in seq.pages.iter_mut().enumerate() {
+                for (name, anchor) in &seq.defined_anchors {
+                    if anchor.local_page_index == local_page_idx {
+                        resolved_anchors.insert( name.clone(), ResolvedAnchor {
+                            global_page_index: global_page_offset + local_page_idx + 1,
+                            y_pos: anchor.y_pos,
+                        },
+                        );
                     }
-                    renderer.document.pages.push(PdfPage::new(page_width_mm, page_height_mm, final_ops));
                 }
+                debug!("[CONSUMER] Rendering page {} of sequence #{}.", local_page_idx + 1, next_sequence_to_render);
+                let elements_to_render = std::mem::take(page_elements);
+                renderer.render_page(&seq.context, elements_to_render, template_engine)?;
             }
+
+            global_page_offset += seq.pages.len();
+            all_sequences.push(seq);
+            info!("[CONSUMER] Finished rendering sequence #{} in {:.2?}.", next_sequence_to_render, render_start_time.elapsed());
             next_sequence_to_render += 1;
         }
     }
-    Box::new(renderer).finalize().map_err(Into::into)
-}
-
-/// Parallel Consumer for `Lopdf` streaming backend.
-fn consume_and_render_pages_lopdf_parallel<W: io::Write + Send>(
-    rx: async_channel::Receiver<(usize, Result<LaidOutSequence, PipelineError>)>,
-    layout_engine: LayoutEngine,
-    stylesheet: Stylesheet,
-    template_engine: Handlebars<'static>,
-    writer: W,
-) -> Result<(), PipelineError> {
-    let mut renderer = LopdfDocumentRenderer::new(layout_engine, stylesheet)?;
-    renderer.begin_document(writer)?;
-
-    let mut buffer = BTreeMap::new();
-    let mut next_sequence_to_render = 0;
-    let mut global_page_count = 0;
-
-    let rt = tokio::runtime::Handle::current();
-    let num_render_threads = num_cpus::get();
-    let template_engine_arc = Arc::new(template_engine);
-
-    while let Ok((index, result)) = rx.recv_blocking() {
-        buffer.insert(index, result);
-
-        while let Some(res) = buffer.remove(&next_sequence_to_render) {
-            let seq = res?;
-            if seq.pages.is_empty() {
-                next_sequence_to_render += 1;
-                continue;
-            }
-
-            let writer_mut = renderer.writer.as_mut().unwrap();
-            let page_tasks: Vec<LopdfPageRenderTask> = seq
-                .pages
-                .into_iter()
-                .map(|elems| LopdfPageRenderTask {
-                    page_object_id: writer_mut.new_object_id(),
-                    content_object_id: writer_mut.new_object_id(),
-                    elements: elems,
-                    context: Arc::clone(&seq.context),
-                })
-                .collect();
-            writer_mut.add_page_ids(page_tasks.iter().map(|t| t.page_object_id));
-
-            let mut render_tasks: JoinSet<Result<(usize, Vec<u8>), PipelineError>> = JoinSet::new();
-            let chunk_size = (page_tasks.len() + num_render_threads - 1) / num_render_threads;
-            let layout_engine_arc = Arc::new(renderer.layout_engine.clone());
-            let stylesheet_arc = Arc::clone(&renderer.stylesheet);
-            let resources_id = writer_mut.resources_id;
-            let parent_pages_id = writer_mut.pages_id;
-
-            for (chunk_idx, task_chunk) in page_tasks.chunks(chunk_size).enumerate() {
-                let task_data = (
-                    task_chunk.to_vec(),
-                    global_page_count + (chunk_idx * chunk_size) + 1,
-                    Arc::clone(&layout_engine_arc),
-                    Arc::clone(&template_engine_arc),
-                    Arc::clone(&stylesheet_arc),
-                );
-
-                render_tasks.spawn_blocking_on(
-                    move || {
-                        let (task_chunk_owned, start_page_num, le_clone, te_clone, ss_clone) = task_data;
-                        let mut chunk_bytes = Vec::new();
-                        let default_master_name = ss_clone.default_page_master_name.as_ref().unwrap();
-                        let page_layout = ss_clone.page_masters.get(default_master_name).unwrap();
-
-                        for (i, task) in task_chunk_owned.into_iter().enumerate() {
-                            let bytes = render_lopdf_page_to_bytes(
-                                task,
-                                page_layout,
-                                start_page_num + i,
-                                resources_id,
-                                parent_pages_id,
-                                &le_clone,
-                                &te_clone,
-                                &ss_clone,
-                            )?;
-                            chunk_bytes.extend(bytes);
-                        }
-                        Ok((chunk_idx, chunk_bytes))
-                    },
-                    &rt,
-                );
-            }
-
-            let mut rendered_chunks = BTreeMap::new();
-            while let Some(join_result) = rt.block_on(render_tasks.join_next()) {
-                let (chunk_idx, bytes) = join_result.unwrap()?;
-                rendered_chunks.insert(chunk_idx, bytes);
-            }
-
-            for bytes in rendered_chunks.into_values() {
-                renderer.writer.as_mut().unwrap().write_pre_rendered_objects(bytes)?;
-            }
-            global_page_count += page_tasks.len();
-            next_sequence_to_render += 1;
-        }
-    }
-    Box::new(renderer).finalize().map_err(Into::into)
+    Ok((all_sequences, resolved_anchors))
 }
