@@ -1,11 +1,12 @@
+// src/render/renderer.rs
 use crate::core::idf::SharedData;
 use crate::core::layout::PositionedElement;
-use crate::pipeline::worker::LaidOutSequence;
-use handlebars::Handlebars;
-use serde_json::Value;
+use crate::pipeline::worker::TocEntry;
+use lopdf::ObjectId;
 use std::collections::HashMap;
 use std::io::Write;
 use thiserror::Error;
+use std::any::Any;
 
 #[derive(Error, Debug)]
 pub enum RenderError {
@@ -38,31 +39,50 @@ pub struct ResolvedAnchor {
     pub y_pos: f32,
 }
 
-/// A trait for document renderers, abstracting the final output format (e.g., PDF).
+/// Result of the analysis pass, containing all forward-reference data.
+#[derive(Debug, Clone, Default)]
+pub struct Pass1Result {
+    pub resolved_anchors: HashMap<String, ResolvedAnchor>,
+    pub toc_entries: Vec<TocEntry>,
+    pub total_pages: usize,
+}
+
+/// A trait for document renderers, abstracting the PDF-writing primitives.
+/// This trait is designed to be driven by a higher-level "strategy" which
+/// manages document-level state and orchestration.
 pub trait DocumentRenderer<W: Write + Send> {
-    /// Initializes the document and sets up the writer.
+    /// Initializes the document and sets up the underlying writer. This should
+    /// also prepare any document-wide resources like fonts.
     fn begin_document(&mut self, writer: W) -> Result<(), RenderError>;
 
-    /// Adds binary resources (like images) to the document.
+    /// Adds binary resources (like images) to the document. This is not yet
+    /// implemented for the lopdf backend.
     fn add_resources(&mut self, resources: &HashMap<String, SharedData>) -> Result<(), RenderError>;
 
-    /// Renders a single page of elements.
-    fn render_page(
+    /// Renders the content stream for a single page and returns its ID.
+    fn render_page_content(
         &mut self,
-        context: &Value,
         elements: Vec<PositionedElement>,
-        template_engine: &Handlebars,
-    ) -> Result<(), RenderError>;
+        page_width: f32,
+        page_height: f32,
+    ) -> Result<ObjectId, RenderError>;
 
-    /// Performs the final "fix-up" pass after all pages have been streamed.
-    /// This is used to write objects that depend on the final location of all content,
-    /// such as the table of contents and cross-references.
-    fn finalize(
+    /// Writes a Page object dictionary, linking to content stream(s) and annotations.
+    fn write_page_object(
         &mut self,
-        resolved_anchors: &HashMap<String, ResolvedAnchor>,
-        sequences: &[LaidOutSequence],
-    ) -> Result<(), RenderError>;
+        content_stream_ids: Vec<ObjectId>,
+        annotations: Vec<ObjectId>,
+        page_width: f32,
+        page_height: f32,
+    ) -> Result<ObjectId, RenderError>;
 
-    /// Writes the final document trailer and closes the stream.
-    fn finish(self: Box<Self>) -> Result<(), RenderError>;
+    /// Informs the renderer of the root outline object ID, which will be linked
+    /// into the document catalog during `finish`.
+    fn set_outline_root(&mut self, outline_root_id: ObjectId);
+
+    /// Writes the final document structures (like the page tree) and trailer.
+    fn finish(self: Box<Self>, page_ids: Vec<ObjectId>) -> Result<(), RenderError>;
+
+    // Helper for downcasting, since the orchestrator needs to access the concrete type.
+    fn as_any_mut(&mut self) -> &mut dyn Any;
 }

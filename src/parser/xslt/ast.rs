@@ -58,7 +58,7 @@ pub struct KeyDefinition {
 
 #[derive(Debug, Clone)]
 pub struct CompiledStylesheet {
-    pub stylesheet: Stylesheet,
+    pub stylesheet: Arc<Stylesheet>,
     pub template_rules: HashMap<Option<String>, Vec<TemplateRule>>,
     pub named_templates: HashMap<String, Arc<NamedTemplate>>,
     pub keys: Vec<KeyDefinition>,

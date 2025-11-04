@@ -22,7 +22,6 @@ pub(super) fn draw_element<W: io::Write + Send>(
         LayoutElement::Image(image_el) => image::draw_image(page, image_el, element)?,
         LayoutElement::Rectangle(_) => { /* Content is the background, already handled */ }
         LayoutElement::PageNumberPlaceholder { .. } => { /* Rendered in finalize step */ }
-        LayoutElement::TableOfContentsPlaceholder => { /* Rendered in finalize step */ }
     }
     Ok(())
 }
@@ -48,7 +47,6 @@ pub(super) fn draw_element_stateless(
         }
         LayoutElement::Rectangle(_) => { /* Content is the background, already handled */ }
         LayoutElement::PageNumberPlaceholder { .. } => { /* Rendered in finalize step */ }
-        LayoutElement::TableOfContentsPlaceholder => { /* Rendered in finalize step */ }
     }
     Ok(())
 }

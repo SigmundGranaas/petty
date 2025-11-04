@@ -1,3 +1,4 @@
+// src/pipeline/builder.rs
 use super::config::PdfBackend;
 use super::orchestrator::DocumentPipeline;
 use crate::core::layout::FontManager;
@@ -70,9 +71,7 @@ impl PipelineBuilder {
 
     /// Configures the pipeline with a programmatically-built `Template` object.
     pub fn with_template_object(mut self, template: Template) -> Result<Self, PipelineError> {
-        let template_source = template.to_json().map_err(|e| {
-            PipelineError::Config(format!("Failed to serialize template object to JSON: {}", e))
-        })?;
+        let template_source = template.to_json()?;
 
         let parser = JsonParser;
         let resource_base_path = PathBuf::new();

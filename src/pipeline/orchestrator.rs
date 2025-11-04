@@ -1,11 +1,13 @@
+// src/pipeline/orchestrator.rs
 use super::config::PdfBackend;
 use super::worker::{finish_layout_and_resource_loading, LaidOutSequence};
-use crate::core::layout::{FontManager, LayoutEngine};
+use crate::core::layout::{FontManager, LayoutEngine, LayoutElement, PositionedElement, TextElement};
 use crate::error::PipelineError;
 use crate::parser::processor::{CompiledTemplate, DataSourceFormat, ExecutionConfig};
-use crate::render::lopdf_renderer::LopdfDocumentRenderer;
+use crate::render::lopdf_helpers;
+use crate::render::lopdf_renderer::LopdfRenderer;
 use crate::render::pdf::PdfDocumentRenderer;
-use crate::render::renderer::ResolvedAnchor;
+use crate::render::renderer::{Pass1Result, ResolvedAnchor};
 use crate::render::DocumentRenderer;
 use async_channel;
 use handlebars::{
@@ -19,9 +21,9 @@ use std::fs;
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
-use std::time::Instant;
 use tokio::runtime::Builder;
 use tokio::task;
+use crate::core::style::stylesheet::PageLayout;
 
 /// The main document generation pipeline.
 pub struct DocumentPipeline {
@@ -116,7 +118,7 @@ impl DocumentPipeline {
                     let (index, work_result) = match result {
                         Ok((index, context_arc)) => {
                             let data_source_string =
-                                serde_json::to_string(&*context_arc).map_err(PipelineError::from).unwrap();
+                                serde_json::to_string(&*context_arc)?;
 
                             let exec_config = ExecutionConfig {
                                 format: DataSourceFormat::Json,
@@ -132,7 +134,7 @@ impl DocumentPipeline {
                                         context_arc.clone(),
                                         template_clone.resource_base_path(),
                                         &layout_engine_clone,
-                                        template_clone.stylesheet(),
+                                        &template_clone.stylesheet(),
                                         debug_mode,
                                     )
                                 });
@@ -147,6 +149,7 @@ impl DocumentPipeline {
                     }
                 }
                 info!("[WORKER-{}] Shutting down.", worker_id);
+                Ok::<(), PipelineError>(())
             });
             layout_worker_handles.push(worker_handle);
         }
@@ -154,34 +157,135 @@ impl DocumentPipeline {
         drop(rx1);
 
         // --- STAGE 3: Consumer / Renderer ---
-        let consumer_template_engine = self.template_engine.clone();
         let pdf_backend = self.pdf_backend;
         let final_layout_engine = layout_engine.clone();
-        let final_stylesheet = self.compiled_template.stylesheet().clone();
+        let final_stylesheet = self.compiled_template.stylesheet();
 
         let consumer_handle = task::spawn_blocking(move || {
             info!("[CONSUMER] Started. Awaiting laid-out sequences.");
-            let result = {
+            let result: Result<(), PipelineError> = {
+                let sequences = consume_and_reorder(rx2)?;
+
+                // --- Analysis Pass (In-Memory) ---
+                let mut pass1_result = Pass1Result::default();
+                let mut global_page_offset = 0;
+                for seq in &sequences {
+                    pass1_result.total_pages += seq.pages.len();
+                    pass1_result.toc_entries.extend(seq.toc_entries.clone());
+                    for (name, anchor) in &seq.defined_anchors {
+                        pass1_result.resolved_anchors.insert(
+                            name.clone(),
+                            ResolvedAnchor {
+                                global_page_index: global_page_offset + anchor.local_page_index + 1,
+                                y_pos: anchor.y_pos,
+                            },
+                        );
+                    }
+                    global_page_offset += seq.pages.len();
+                }
+
+                // --- Generation & Assembly Pass ---
                 let mut renderer: Box<dyn DocumentRenderer<Box<dyn io::Write + Send>>> =
                     match pdf_backend {
-                        PdfBackend::PrintPdf | PdfBackend::PrintPdfParallel => Box::new(PdfDocumentRenderer::new(
-                            final_layout_engine,
-                            final_stylesheet,
-                        )?),
-                        PdfBackend::Lopdf | PdfBackend::LopdfParallel => Box::new(LopdfDocumentRenderer::new(
-                            final_layout_engine,
-                            final_stylesheet,
-                        )?),
+                        PdfBackend::PrintPdf | PdfBackend::PrintPdfParallel => {
+                            warn!("The 'printpdf' backend is not fully supported by the new rendering pipeline yet.");
+                            Box::new(PdfDocumentRenderer::new(final_layout_engine.clone(), final_stylesheet.clone())?)
+                        }
+                        PdfBackend::Lopdf | PdfBackend::LopdfParallel => {
+                            Box::new(LopdfRenderer::new(final_layout_engine.clone(), final_stylesheet.clone())?)
+                        }
                     };
                 renderer.begin_document(writer)?;
-                let (sequences, anchors) = consume_and_render_pages_sequential(
-                    rx2,
-                    renderer.as_mut(),
-                    &consumer_template_engine,
-                )?;
-                info!("[CONSUME] Finalizing document.");
-                renderer.finalize(&anchors, &sequences)?;
-                renderer.finish().map_err(Into::into)
+
+                let default_master_name = final_stylesheet.default_page_master_name.as_ref().unwrap();
+                let page_layout = final_stylesheet.page_masters.get(default_master_name).unwrap();
+                let (page_width, page_height) = get_page_dimensions_pt(page_layout);
+
+                // --- Content Rendering ---
+                let mut page_content_ids = Vec::new();
+                let mut fixup_elements_by_page: HashMap<usize, Vec<PositionedElement>> = HashMap::new();
+                let mut global_page_idx = 0;
+
+                for seq in &sequences {
+                    renderer.add_resources(&seq.resources)?;
+                    for page_elements in &seq.pages {
+                        for el in page_elements {
+                            if let LayoutElement::PageNumberPlaceholder { target_id, href } = &el.element {
+                                let page_num_str = pass1_result.resolved_anchors
+                                    .get(target_id)
+                                    .map(|anchor| anchor.global_page_index.to_string())
+                                    .unwrap_or_else(|| "XX".to_string());
+
+                                let text_el = PositionedElement {
+                                    element: LayoutElement::Text(TextElement {
+                                        content: page_num_str,
+                                        href: href.clone(),
+                                        text_decoration: el.style.text_decoration.clone(),
+                                    }),
+                                    ..el.clone()
+                                };
+                                fixup_elements_by_page.entry(global_page_idx).or_default().push(text_el);
+                            }
+                        }
+
+                        let content_id = renderer.render_page_content(page_elements.clone(), page_width, page_height)?;
+                        page_content_ids.push(content_id);
+                        global_page_idx += 1;
+                    }
+                }
+
+                // --- Final Assembly ---
+                let final_page_ids = if let Some(lopdf_renderer) = renderer.as_any_mut().downcast_mut::<LopdfRenderer<Box<dyn io::Write + Send>>>() {
+                    // This IIFE captures the environment and executes the finalization logic.
+                    // It's structured in phases to manage mutable borrows correctly.
+                    let result: Result<Vec<lopdf::ObjectId>, PipelineError> = (|| {
+                        // Phase 1: Use writer to create objects and get IDs for outlines and annotations.
+                        // The borrow of `writer` is contained within this block.
+                        let (final_page_ids, link_annots_by_page, outline_root_id) = {
+                            let writer = lopdf_renderer.writer_mut()
+                                .ok_or_else(|| PipelineError::Other("Renderer not initialized".to_string()))?;
+                            let page_ids: Vec<_> = (0..pass1_result.total_pages).map(|_| writer.new_object_id()).collect();
+                            let annots = lopdf_helpers::create_link_annotations(writer, &pass1_result, &sequences, &page_ids, page_height)?;
+                            let outline = lopdf_helpers::build_outlines(writer, &pass1_result, &page_ids, page_height)?;
+                            Ok::<_, PipelineError>((page_ids, annots, outline))
+                        }?;
+
+                        // Phase 2: Update renderer state now that `writer` is no longer borrowed.
+                        if let Some(id) = outline_root_id {
+                            lopdf_renderer.set_outline_root(id);
+                        }
+
+                        // Phase 3: Create fixup content streams. `writer` is borrowed again in a new, limited scope.
+                        let mut fixup_content_streams = HashMap::new();
+                        {
+                            let writer = lopdf_renderer.writer_mut()
+                                .ok_or_else(|| PipelineError::Other("Renderer not initialized".to_string()))?;
+                            for (page_idx, elements) in fixup_elements_by_page {
+                                let content = lopdf_helpers::render_elements_to_content(elements, &final_layout_engine, &final_stylesheet, page_width, page_height)?;
+                                let content_id = writer.buffer_content_stream(content);
+                                fixup_content_streams.insert(page_idx, content_id);
+                            }
+                        }
+
+                        // Phase 4: Write the final page objects. This mutably borrows `lopdf_renderer`, which is now fine.
+                        for i in 0..pass1_result.total_pages {
+                            let mut contents = vec![page_content_ids[i]];
+                            if let Some(fixup_id) = fixup_content_streams.get(&i) {
+                                contents.push(*fixup_id);
+                            }
+                            let annots = link_annots_by_page.get(&i).cloned().unwrap_or_default();
+                            let page_id = final_page_ids[i];
+                            lopdf_renderer.write_page_object_at_id(page_id, contents, annots, page_width, page_height)?;
+                        }
+
+                        Ok(final_page_ids)
+                    })();
+                    result?
+                } else {
+                    vec![]
+                };
+
+                renderer.finish(final_page_ids).map_err(Into::into)
             };
             info!("[CONSUME] Finished.");
             result
@@ -189,7 +293,7 @@ impl DocumentPipeline {
 
         producer_handle.await.unwrap();
         for handle in layout_worker_handles {
-            handle.await.unwrap();
+            handle.await.unwrap()?;
         }
         consumer_handle.await.unwrap()
     }
@@ -215,45 +319,25 @@ impl DocumentPipeline {
     }
 }
 
-fn consume_and_render_pages_sequential<W: io::Write + Send>(
+/// Consumes all results from the worker channel and re-orders them into a vector.
+fn consume_and_reorder(
     rx: async_channel::Receiver<(usize, Result<LaidOutSequence, PipelineError>)>,
-    renderer: &mut dyn DocumentRenderer<W>,
-    template_engine: &Handlebars,
-) -> Result<(Vec<LaidOutSequence>, HashMap<String, ResolvedAnchor>), PipelineError> {
+) -> Result<Vec<LaidOutSequence>, PipelineError> {
     let mut buffer = BTreeMap::new();
-    let mut next_sequence_to_render = 0;
-    let mut global_page_offset = 0;
+    let mut next_sequence_idx = 0;
     let mut all_sequences = Vec::new();
-    let mut resolved_anchors = HashMap::new();
 
     while let Ok((index, result)) = rx.recv_blocking() {
         buffer.insert(index, result);
-        while let Some(res) = buffer.remove(&next_sequence_to_render) {
-            let render_start_time = Instant::now();
-            info!("[CONSUMER] Rendering sequence #{}", next_sequence_to_render);
-            let mut seq = res?;
-            renderer.add_resources(&seq.resources)?;
-
-            for (local_page_idx, page_elements) in seq.pages.iter_mut().enumerate() {
-                for (name, anchor) in &seq.defined_anchors {
-                    if anchor.local_page_index == local_page_idx {
-                        resolved_anchors.insert( name.clone(), ResolvedAnchor {
-                            global_page_index: global_page_offset + local_page_idx + 1,
-                            y_pos: anchor.y_pos,
-                        },
-                        );
-                    }
-                }
-                debug!("[CONSUMER] Rendering page {} of sequence #{}.", local_page_idx + 1, next_sequence_to_render);
-                let elements_to_render = std::mem::take(page_elements);
-                renderer.render_page(&seq.context, elements_to_render, template_engine)?;
-            }
-
-            global_page_offset += seq.pages.len();
+        while let Some(res) = buffer.remove(&next_sequence_idx) {
+            let seq = res?;
             all_sequences.push(seq);
-            info!("[CONSUMER] Finished rendering sequence #{} in {:.2?}.", next_sequence_to_render, render_start_time.elapsed());
-            next_sequence_to_render += 1;
+            next_sequence_idx += 1;
         }
     }
-    Ok((all_sequences, resolved_anchors))
+    Ok(all_sequences)
+}
+
+fn get_page_dimensions_pt(page_layout: &PageLayout) -> (f32, f32) {
+    page_layout.size.dimensions_pt()
 }

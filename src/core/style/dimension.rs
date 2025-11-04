@@ -10,6 +10,12 @@ pub enum Dimension {
     Auto,
 }
 
+impl Default for Dimension {
+    fn default() -> Self {
+        Dimension::Auto
+    }
+}
+
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct Margins {
     pub top: f32,

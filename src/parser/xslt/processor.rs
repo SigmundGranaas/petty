@@ -1,11 +1,11 @@
-use super::ast::CompiledStylesheet;
-use super::compiler;
+// src/parser/xslt/processor.rs
+use super::{ast, compiler};
 use super::executor::{self, ExecutionError};
 use crate::core::idf::IRNode;
 use crate::core::style::stylesheet::Stylesheet;
 use crate::error::PipelineError;
+use crate::parser::processor::{CompiledTemplate, DataSourceFormat, ExecutionConfig, TemplateParser};
 use crate::parser::xslt::json_ds::JsonVDocument;
-use crate::parser::processor::{CompiledTemplate, ExecutionConfig, DataSourceFormat, TemplateParser};
 use crate::parser::xslt::xml::XmlDocument;
 use crate::parser::ParseError;
 use std::path::{Path, PathBuf};
@@ -17,84 +17,54 @@ impl From<ExecutionError> for PipelineError {
     }
 }
 
-impl CompiledTemplate for CompiledStylesheet {
-    /// Executes the compiled XSLT stylesheet against a given data source.
-    ///
-    /// # Arguments
-    ///
-    /// * `data_source_str`: A string slice containing the data (e.g., XML or JSON) to transform.
-    /// * `config`: An `ExecutionConfig` specifying the data format and other runtime options like strict mode.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing either the root-level nodes of the generated IDF tree
-    /// or a `PipelineError` if parsing or execution fails.
+// A wrapper struct to implement the `CompiledTemplate` trait.
+pub struct XsltTemplate {
+    compiled: ast::CompiledStylesheet,
+}
+
+impl CompiledTemplate for XsltTemplate {
     fn execute(&self, data_source_str: &str, config: ExecutionConfig) -> Result<Vec<IRNode>, PipelineError> {
         match config.format {
             DataSourceFormat::Xml => {
                 let doc = XmlDocument::parse(data_source_str)
                     .map_err(|e| PipelineError::Parse(ParseError::TemplateParse(e.to_string())))?;
                 let root_node = doc.root_node();
-                let mut executor = executor::TemplateExecutor::new(self, root_node, config.strict)?;
-                let ir_nodes = executor.build_tree()?;
-                Ok(ir_nodes)
+                let mut executor = executor::TemplateExecutor::new(&self.compiled, root_node, config.strict)?;
+                Ok(executor.build_tree()?)
             }
             DataSourceFormat::Json => {
                 let json_data: serde_json::Value = serde_json::from_str(data_source_str)
                     .map_err(|e| PipelineError::Parse(ParseError::JsonParse(e)))?;
                 let doc = JsonVDocument::new(&json_data);
                 let root_node = doc.root_node();
-                let mut executor = executor::TemplateExecutor::new(self, root_node, config.strict)?;
-                let ir_nodes = executor.build_tree()?;
-                Ok(ir_nodes)
+                let mut executor = executor::TemplateExecutor::new(&self.compiled, root_node, config.strict)?;
+                Ok(executor.build_tree()?)
             }
         }
     }
 
-    /// Returns a reference to the stylesheet containing resolved styles and page masters
-    /// associated with this template.
-    fn stylesheet(&self) -> &Stylesheet {
-        &self.stylesheet
+    fn stylesheet(&self) -> Arc<Stylesheet> {
+        Arc::clone(&self.compiled.stylesheet)
     }
 
-    /// Returns the base path for resolving relative resource paths (e.g., for images).
-    /// This path is typically the directory where the original template file was located.
     fn resource_base_path(&self) -> &Path {
-        &self.resource_base_path
+        &self.compiled.resource_base_path
     }
 }
-
-// --- The Parser ---
 
 /// An implementation of `TemplateParser` for XSLT 1.0 stylesheets.
 pub struct XsltParser;
 
 impl TemplateParser for XsltParser {
-    /// Parses an XSLT stylesheet source string into a `CompiledStylesheet`.
-    ///
-    /// This "compilation" step validates the XSLT, resolves styles, parses XPath
-    /// expressions, and creates an optimized, executable representation of the
-    /// stylesheet that can be reused for multiple transformations.
-    ///
-    /// # Arguments
-    ///
-    /// * `template_source`: The string content of the XSLT stylesheet.
-    /// * `resource_base_path`: The directory containing the template file, used to resolve
-    ///   relative paths for resources like images.
-    ///
-    /// # Returns
-    ///
-    /// A `Result` containing a thread-safe `Arc` pointer to a `CompiledStylesheet`
-    /// or a `ParseError` if compilation fails.
     fn parse(
         &self,
         template_source: &str,
         resource_base_path: PathBuf,
-    ) -> Result<Arc<dyn CompiledTemplate>, ParseError> {
-        // The new compiler entry point uses the builder pattern internally.
-        let compiled_stylesheet =
-            compiler::compile(template_source, resource_base_path)?;
-        Ok(Arc::new(compiled_stylesheet))
+    ) -> Result<Arc<dyn CompiledTemplate>, PipelineError> {
+        let compiled_stylesheet = compiler::compile(template_source, resource_base_path)?;
+        Ok(Arc::new(XsltTemplate {
+            compiled: compiled_stylesheet,
+        }))
     }
 }
 

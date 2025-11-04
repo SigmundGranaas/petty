@@ -9,7 +9,6 @@ pub mod list_item;
 pub mod page_break;
 pub mod paragraph;
 pub mod table;
-pub mod toc;
 
 #[cfg(test)]
 mod block_test;

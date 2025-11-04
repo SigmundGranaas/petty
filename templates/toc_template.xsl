@@ -27,10 +27,8 @@
     </xsl:attribute-set>
 
     <xsl:attribute-set name="toc-style">
-        <xsl:attribute name="border">1pt solid #ccc</xsl:attribute>
         <xsl:attribute name="padding">12pt</xsl:attribute>
         <xsl:attribute name="margin-bottom">24pt</xsl:attribute>
-        <xsl:attribute name="background-color">#f9f9f9</xsl:attribute>
     </xsl:attribute-set>
 
     <!-- Main Template -->

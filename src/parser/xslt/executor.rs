@@ -361,7 +361,6 @@ impl<'s, 'a, N: DataSourceNode<'a> + 'a> TemplateExecutor<'s, 'a, N> {
                 };
                 builder.add_page_break(evaluated_name);
             }
-            _ => log::warn!("XSLT instruction not yet implemented: {:?}", instruction),
         }
         Ok(())
     }

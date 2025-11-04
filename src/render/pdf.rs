@@ -1,6 +1,8 @@
+// src/render/pdf.rs
 use super::{drawing, renderer}; // Import renderer for its RenderError type
 use crate::render::DocumentRenderer;
 use handlebars::Handlebars;
+use lopdf::ObjectId;
 use printpdf::font::ParsedFont;
 use printpdf::image::RawImage;
 use printpdf::ops::Op;
@@ -11,6 +13,7 @@ use printpdf::{
 };
 use serde::Serialize;
 use serde_json::Value;
+use std::any::Any;
 use std::collections::HashMap;
 use std::io;
 use std::sync::Arc;
@@ -20,23 +23,22 @@ use crate::core::style::dimension::Margins;
 use crate::core::style::font::FontWeight;
 use crate::core::style::stylesheet::{PageLayout, Stylesheet};
 use crate::core::style::text::TextAlign;
-use crate::pipeline::worker::LaidOutSequence;
-use crate::render::renderer::ResolvedAnchor;
 
 /// Manages the state of the entire PDF document, including pages, fonts, and global resources.
 pub struct PdfDocumentRenderer<W: io::Write + Send> {
     pub(crate) document: PdfDocument,
     pub(crate) fonts: HashMap<String, FontId>,
     pub(crate) default_font: FontId,
-    pub(crate) stylesheet: Stylesheet,
+    pub(crate) stylesheet: Arc<Stylesheet>,
     pub(crate) image_xobjects: HashMap<String, (XObjectId, (u32, u32))>,
     pub(crate) layout_engine: LayoutEngine,
     pub(crate) writer: Option<W>,
+    buffered_page_ops: Vec<Vec<Op>>,
 }
 
 impl<W: io::Write + Send> PdfDocumentRenderer<W> {
     /// Creates a new document renderer.
-    pub fn new(layout_engine: LayoutEngine, stylesheet: Stylesheet) -> Result<Self, renderer::RenderError> {
+    pub fn new(layout_engine: LayoutEngine, stylesheet: Arc<Stylesheet>) -> Result<Self, renderer::RenderError> {
         let title = stylesheet
             .page_masters
             .values()
@@ -81,6 +83,7 @@ impl<W: io::Write + Send> PdfDocumentRenderer<W> {
             image_xobjects: HashMap::new(),
             layout_engine,
             writer: None,
+            buffered_page_ops: Vec::new(),
         })
     }
 
@@ -101,11 +104,6 @@ impl<W: io::Write + Send> PdfDocumentRenderer<W> {
         Ok((xobj_id, dims))
     }
 
-    /// Gets the dimensions of the page in points.
-    pub(crate) fn get_page_dimensions_pt(page_layout: &PageLayout) -> (f32, f32) {
-        page_layout.size.dimensions_pt()
-    }
-
     /// Gets the dimensions of the page in millimeters.
     pub(crate) fn get_page_dimensions_mm(page_layout: &PageLayout) -> (Mm, Mm) {
         let (w, h) = page_layout.size.dimensions_pt();
@@ -113,7 +111,7 @@ impl<W: io::Write + Send> PdfDocumentRenderer<W> {
     }
 }
 
-impl<W: io::Write + Send> DocumentRenderer<W> for PdfDocumentRenderer<W> {
+impl<W: io::Write + Send + 'static> DocumentRenderer<W> for PdfDocumentRenderer<W> {
     fn begin_document(&mut self, writer: W) -> Result<(), renderer::RenderError> {
         self.writer = Some(writer);
         Ok(())
@@ -128,60 +126,65 @@ impl<W: io::Write + Send> DocumentRenderer<W> for PdfDocumentRenderer<W> {
         Ok(())
     }
 
-    fn render_page(
+    fn render_page_content(
         &mut self,
-        context: &Value,
         elements: Vec<PositionedElement>,
-        template_engine: &Handlebars,
-    ) -> Result<(), renderer::RenderError> {
-        let default_master_name = self.stylesheet.default_page_master_name.as_ref().unwrap();
-        let page_layout = self
-            .stylesheet
-            .page_masters
-            .get(default_master_name)
-            .unwrap()
-            .clone();
-
-        let (width_mm, height_mm) = Self::get_page_dimensions_mm(&page_layout);
-        let (_, page_height_pt) = Self::get_page_dimensions_pt(&page_layout);
-        let page_num = self.document.pages.len() + 1;
-
-        let page_ops = {
-            let mut page_renderer = PageRenderer::new(self, page_height_pt);
-            page_renderer.render_elements(elements)?;
-            page_renderer.into_ops()
+        _page_width_pt: f32,
+        page_height_pt: f32,
+    ) -> Result<ObjectId, renderer::RenderError> {
+        let ctx = RenderContext {
+            image_xobjects: &self.image_xobjects,
+            fonts: &self.fonts,
+            default_font: &self.default_font,
+            page_height_pt,
         };
+        let ops = render_page_to_ops(ctx, elements)?;
+        let content_id = self.buffered_page_ops.len();
+        self.buffered_page_ops.push(ops);
+        // Return a dummy ObjectId for trait compatibility
+        Ok((content_id as u32, 0))
+    }
 
+    fn write_page_object(
+        &mut self,
+        content_stream_ids: Vec<ObjectId>,
+        _annotations: Vec<ObjectId>,
+        page_width_pt: f32,
+        page_height_pt: f32,
+    ) -> Result<ObjectId, renderer::RenderError> {
+        // `printpdf` doesn't work with pre-made content streams this way.
+        // We'll combine the buffered ops and add a page.
         let mut final_ops = Vec::new();
+        for (content_id, _) in content_stream_ids {
+            if let Some(ops) = self.buffered_page_ops.get(content_id as usize) {
+                final_ops.extend(ops.clone());
+            }
+        }
+
+        let width_mm = Pt(page_width_pt).into();
+        let height_mm = Pt(page_height_pt).into();
+
+        let page_num = self.document.pages.len() + 1;
         let layer_name = format!("Page {} Layer 1", page_num);
         let layer = Layer::new(&*layer_name);
         let layer_id = self.document.add_layer(&layer);
-        final_ops.push(Op::BeginLayer { layer_id });
-        final_ops.extend(page_ops);
 
-        if let Some(footer_ops) = self.render_footer(context, &page_layout, page_num, template_engine)? {
-            final_ops.extend(footer_ops);
-        }
+        let mut ops_with_layer = vec![Op::BeginLayer { layer_id }];
+        ops_with_layer.extend(final_ops);
 
-        let pdf_page = PdfPage::new(width_mm, height_mm, final_ops);
+        let pdf_page = PdfPage::new(width_mm, height_mm, ops_with_layer);
         self.document.pages.push(pdf_page);
+        let page_id = self.document.pages.len();
 
-        Ok(())
+        // Return a dummy ObjectId for trait compatibility
+        Ok((page_id as u32, 0))
     }
 
-    fn finalize(
-        &mut self,
-        _resolved_anchors: &HashMap<String, ResolvedAnchor>,
-        _sequences: &[LaidOutSequence],
-    ) -> Result<(), renderer::RenderError> {
-        // The `printpdf` backend does not support streaming updates, so a full
-        // "fix-up" pass is very complex. For now, this is a no-op. A full
-        // implementation would require rebuilding the document or using a
-        // different strategy than the `lopdf` streaming renderer.
-        Ok(())
+    fn set_outline_root(&mut self, _outline_root_id: ObjectId) {
+        // Not supported in this simplified implementation for printpdf
     }
 
-    fn finish(self: Box<Self>) -> Result<(), renderer::RenderError> {
+    fn finish(self: Box<Self>, _page_ids: Vec<ObjectId>) -> Result<(), renderer::RenderError> {
         let mut writer = self.writer.ok_or_else(|| {
             renderer::RenderError::Other("Document was never started with begin_document".into())
         })?;
@@ -197,72 +200,20 @@ impl<W: io::Write + Send> DocumentRenderer<W> for PdfDocumentRenderer<W> {
 
         Ok(())
     }
+
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
+    }
 }
 
+
+// ... existing helper structs and functions ...
 #[derive(Serialize)]
 struct FooterRenderContext<'a> {
     #[serde(flatten)]
     data: &'a Value,
     page_num: usize,
     total_pages: &'static str,
-}
-
-impl<W: io::Write + Send> PdfDocumentRenderer<W> {
-    /// Renders the footer for a given page and returns the PDF operations.
-    fn render_footer(
-        &self,
-        context: &Value,
-        page_layout: &PageLayout,
-        page_num: usize,
-        template_engine: &Handlebars,
-    ) -> Result<Option<Vec<Op>>, renderer::RenderError> {
-        let footer_template = match &page_layout.footer_text {
-            Some(text) => text,
-            None => return Ok(None),
-        };
-
-        let footer_context = FooterRenderContext { data: context, page_num, total_pages: "?", };
-
-        let style_sets = if let Some(style_name) = page_layout.footer_style.as_deref() {
-            self.stylesheet.styles.get(style_name).map(|style_arc| vec![Arc::clone(style_arc)]).unwrap_or_default()
-        } else {
-            vec![]
-        };
-
-        let style = self.layout_engine.compute_style(&style_sets, None, &self.layout_engine.get_default_style());
-        let rendered_text = template_engine.render_template(footer_template, &footer_context)?;
-        let final_text = rendered_text;
-        let default_margins = Margins::default();
-        let margins = page_layout.margins.as_ref().unwrap_or(&default_margins);
-        let (page_width_pt, _) = Self::get_page_dimensions_pt(page_layout);
-        let styled_font_name = get_styled_font_name(&style);
-        let font_id = self.fonts.get(&styled_font_name).unwrap_or(&self.default_font);
-
-        let color = Rgb::new( style.color.r as f32 / 255.0, style.color.g as f32 / 255.0, style.color.b as f32 / 255.0, None, );
-
-        let mut footer_ops = Vec::new();
-        footer_ops.push(Op::StartTextSection);
-        footer_ops.push(Op::SetFillColor { col: printpdf::color::Color::Rgb(color), });
-        footer_ops.push(Op::SetFontSize { size: Pt(style.font_size), font: font_id.clone(), });
-
-        let y = margins.bottom - style.font_size;
-        let line_width = self.layout_engine.measure_text_width(&final_text, &style);
-        let content_width = page_width_pt - margins.left - margins.right;
-
-        let mut x = margins.left;
-        match style.text_align {
-            TextAlign::Right => x = page_width_pt - margins.right - line_width,
-            TextAlign::Center => x = margins.left + (content_width - line_width) / 2.0,
-            _ => {}
-        }
-
-        let matrix = TextMatrix::Translate(Pt(x), Pt(y));
-        footer_ops.push(Op::SetTextMatrix { matrix });
-        footer_ops.push(Op::WriteText { items: vec![TextItem::Text(final_text)], font: font_id.clone(), });
-        footer_ops.push(Op::EndTextSection);
-
-        Ok(Some(footer_ops))
-    }
 }
 
 pub(super) struct PageRenderer<'a, W: io::Write + Send> {
@@ -323,12 +274,12 @@ pub(crate) fn render_page_to_ops( ctx: RenderContext, elements: Vec<PositionedEl
     Ok(ops)
 }
 
-pub(crate) fn render_footer_to_ops<W: io::Write + Send>(
+pub(crate) fn render_footer_to_ops(
     layout_engine: &LayoutEngine, stylesheet: &Stylesheet, fonts: &HashMap<String, FontId>, default_font: &FontId,
-    context: &Value, page_layout: &PageLayout, page_num: usize, template_engine: &Handlebars,
+    _context: &Value, page_layout: &PageLayout, page_num: usize, template_engine: &Handlebars,
 ) -> Result<Option<Vec<Op>>, renderer::RenderError> {
     let footer_template = match &page_layout.footer_text { Some(text) => text, None => return Ok(None) };
-    let footer_context = FooterRenderContext { data: context, page_num, total_pages: "?", };
+    let footer_context = FooterRenderContext { data: &Value::Null, page_num, total_pages: "?", };
     let style_sets = if let Some(style_name) = page_layout.footer_style.as_deref() {
         stylesheet.styles.get(style_name).map(|style_arc| vec![Arc::clone(style_arc)]).unwrap_or_default()
     } else { vec![] };
@@ -337,7 +288,7 @@ pub(crate) fn render_footer_to_ops<W: io::Write + Send>(
     let style = layout_engine.compute_style(&style_sets, None, &layout_engine.get_default_style());
     let rendered_text = template_engine.render_template(footer_template, &footer_context)?;
     let final_text = rendered_text;
-    let (page_width_pt, _) = PdfDocumentRenderer::<W>::get_page_dimensions_pt(page_layout);
+    let (page_width_pt, _) = page_layout.size.dimensions_pt();
     let styled_font_name = get_styled_font_name(&style);
     let font_id = fonts.get(&styled_font_name).unwrap_or(default_font);
     let color = Rgb::new(style.color.r as f32 / 255.0, style.color.g as f32 / 255.0, style.color.b as f32 / 255.0, None);

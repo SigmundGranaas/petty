@@ -40,8 +40,10 @@ pub enum LayoutElement {
     Text(TextElement),
     Rectangle(RectElement),
     Image(ImageElement),
-    PageNumberPlaceholder { target_id: String },
-    TableOfContentsPlaceholder,
+    PageNumberPlaceholder {
+        target_id: String,
+        href: Option<String>,
+    },
 }
 
 impl std::fmt::Display for LayoutElement {
@@ -50,10 +52,9 @@ impl std::fmt::Display for LayoutElement {
             LayoutElement::Text(t) => write!(f, "Text(\"{}\")", t.content),
             LayoutElement::Rectangle(_) => write!(f, "Rectangle"),
             LayoutElement::Image(i) => write!(f, "Image(src=\"{}\")", i.src),
-            LayoutElement::PageNumberPlaceholder { target_id } => {
+            LayoutElement::PageNumberPlaceholder { target_id, .. } => {
                 write!(f, "PageNumberPlaceholder(target=\"{}\")", target_id)
             }
-            LayoutElement::TableOfContentsPlaceholder => write!(f, "TableOfContentsPlaceholder"),
         }
     }
 }

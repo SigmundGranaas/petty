@@ -1,4 +1,3 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/style.rs
 use crate::core::style::border::Border;
 use crate::core::style::color::Color;
 use crate::core::style::dimension::{Dimension, Margins};
@@ -105,36 +104,101 @@ pub fn compute_style(
     style_override: Option<&ElementStyle>,
     parent_style: &Arc<ComputedStyle>,
 ) -> Arc<ComputedStyle> {
-    // 1. Create a mutable copy of the parent style to inherit properties like font, color, etc.
-    let mut computed = (**parent_style).clone();
+    // Optimization: if there are no styles to apply on this element, we can reuse the parent's
+    // Arc for inheritable properties. However, non-inheritable properties must be reset.
+    // The safest and clearest approach is to always compute a new style.
+    if style_sets.is_empty() && style_override.is_none() {
+        // If there are truly no styles, we can perform a quick copy and reset.
+        let mut computed = (**parent_style).clone();
+        computed.margin = Margins::default();
+        computed.padding = Margins::default();
+        computed.width = None;
+        computed.height = None;
+        computed.background_color = None;
+        computed.border_top = None;
+        computed.border_right = None;
+        computed.border_bottom = None;
+        computed.border_left = None;
+        computed.order = 0;
+        computed.flex_grow = 0.0;
+        computed.flex_shrink = 1.0;
+        computed.flex_basis = Dimension::Auto;
+        computed.align_self = AlignSelf::Auto;
+        computed.border_spacing = 0.0;
+        return Arc::new(computed);
+    }
 
-    // 2. Reset non-inherited CSS properties to their default values.
-    // This prevents inheriting things like padding, margin, width, etc.
-    computed.margin = Margins::default();
-    computed.padding = Margins::default();
-    computed.width = None;
-    computed.height = None;
-    computed.background_color = None;
-    computed.border_top = None;
-    computed.border_right = None;
-    computed.border_bottom = None;
-    computed.border_left = None;
-    computed.order = 0;
-    computed.flex_grow = 0.0;
-    computed.flex_shrink = 1.0;
-    computed.flex_basis = Dimension::Auto;
-    computed.align_self = AlignSelf::Auto;
-    computed.border_spacing = 0.0;
-
-    // 3. Apply all pre-resolved named styles in order.
+    // 1. Create a single, merged ElementStyle for this node.
+    let mut merged = ElementStyle::default();
     for style_def in style_sets {
-        apply_element_style(&mut computed, style_def.as_ref());
+        merge_element_styles(&mut merged, style_def);
+    }
+    if let Some(override_style_def) = style_override {
+        merge_element_styles(&mut merged, override_style_def);
     }
 
-    // 4. Apply the inline style override, which has the highest precedence.
-    if let Some(override_style_def) = style_override {
-        apply_element_style(&mut computed, override_style_def);
-    }
+    // 2. Create the final ComputedStyle, inheriting from the parent where the merged style
+    // doesn't specify a value.
+    let computed = ComputedStyle {
+        // Inherited properties
+        font_family: merged
+            .font_family
+            .map(Arc::new)
+            .unwrap_or_else(|| parent_style.font_family.clone()),
+        font_size: merged.font_size.unwrap_or(parent_style.font_size),
+        font_weight: merged
+            .font_weight
+            .unwrap_or_else(|| parent_style.font_weight.clone()),
+        font_style: merged
+            .font_style
+            .unwrap_or_else(|| parent_style.font_style.clone()),
+        line_height: merged.line_height.unwrap_or_else(|| {
+            merged
+                .font_size
+                .map(|fs| fs * 1.2)
+                .unwrap_or(parent_style.line_height)
+        }),
+        text_align: merged
+            .text_align
+            .unwrap_or_else(|| parent_style.text_align.clone()),
+        text_decoration: merged
+            .text_decoration
+            .unwrap_or_else(|| parent_style.text_decoration.clone()),
+        color: merged.color.unwrap_or_else(|| parent_style.color.clone()),
+        widows: merged.widows.unwrap_or(parent_style.widows),
+        orphans: merged.orphans.unwrap_or(parent_style.orphans),
+        list_style_type: merged
+            .list_style_type
+            .unwrap_or_else(|| parent_style.list_style_type.clone()),
+        list_style_position: merged
+            .list_style_position
+            .unwrap_or_else(|| parent_style.list_style_position.clone()),
+        border_spacing: merged.border_spacing.unwrap_or(parent_style.border_spacing),
+
+        // Non-inherited properties (use merged style value or default)
+        margin: merged.margin.unwrap_or_default(),
+        padding: merged.padding.unwrap_or_default(),
+        width: merged.width,
+        height: merged.height,
+        background_color: merged.background_color,
+
+        border_top: merged.border_top.or_else(|| merged.border.clone()),
+        border_right: merged.border_right.or_else(|| merged.border.clone()),
+        border_bottom: merged.border_bottom.or_else(|| merged.border.clone()),
+        border_left: merged.border_left.or_else(|| merged.border.clone()),
+
+        // Flex properties (use merged style value or default from ComputedStyle)
+        flex_direction: merged.flex_direction.unwrap_or_default(),
+        flex_wrap: merged.flex_wrap.unwrap_or_default(),
+        justify_content: merged.justify_content.unwrap_or_default(),
+        align_items: merged.align_items.unwrap_or_default(),
+        align_content: JustifyContent::FlexStart, // align-content is not in ElementStyle yet
+        order: merged.order.unwrap_or_default(),
+        flex_grow: merged.flex_grow.unwrap_or_default(),
+        flex_shrink: merged.flex_shrink.unwrap_or(1.0),
+        flex_basis: merged.flex_basis.unwrap_or_default(),
+        align_self: merged.align_self.unwrap_or_default(),
+    };
 
     Arc::new(computed)
 }
@@ -144,109 +208,106 @@ pub fn get_default_style() -> Arc<ComputedStyle> {
     Arc::new(ComputedStyle::default())
 }
 
-/// Applies style rules from an `ElementStyle` definition to a `ComputedStyle`.
-fn apply_element_style(computed: &mut ComputedStyle, style_def: &ElementStyle) {
-    if let Some(ff) = &style_def.font_family {
-        computed.font_family = Arc::new(ff.clone());
+/// Merges properties from `to_apply` into `base`. If a property is `Some` in `to_apply`,
+/// it overwrites the corresponding property in `base`.
+fn merge_element_styles(base: &mut ElementStyle, to_apply: &ElementStyle) {
+    if to_apply.font_family.is_some() {
+        base.font_family = to_apply.font_family.clone();
     }
-    if let Some(fs) = style_def.font_size {
-        computed.font_size = fs;
-        if style_def.line_height.is_none() {
-            computed.line_height = fs * 1.2;
-        }
+    if to_apply.font_size.is_some() {
+        base.font_size = to_apply.font_size;
     }
-    if let Some(fw) = &style_def.font_weight {
-        computed.font_weight = fw.clone();
+    if to_apply.font_weight.is_some() {
+        base.font_weight = to_apply.font_weight.clone();
     }
-    if let Some(fs) = &style_def.font_style {
-        computed.font_style = fs.clone();
+    if to_apply.font_style.is_some() {
+        base.font_style = to_apply.font_style.clone();
     }
-    if let Some(lh) = style_def.line_height {
-        computed.line_height = lh;
+    if to_apply.line_height.is_some() {
+        base.line_height = to_apply.line_height;
     }
-    if let Some(ta) = &style_def.text_align {
-        computed.text_align = ta.clone();
+    if to_apply.text_align.is_some() {
+        base.text_align = to_apply.text_align.clone();
     }
-    if let Some(td) = &style_def.text_decoration {
-        computed.text_decoration = td.clone();
+    if to_apply.color.is_some() {
+        base.color = to_apply.color.clone();
     }
-    if let Some(w) = style_def.widows {
-        computed.widows = w;
+    if to_apply.text_decoration.is_some() {
+        base.text_decoration = to_apply.text_decoration.clone();
     }
-    if let Some(o) = style_def.orphans {
-        computed.orphans = o;
+    if to_apply.widows.is_some() {
+        base.widows = to_apply.widows;
     }
-    if let Some(c) = &style_def.color {
-        computed.color = c.clone();
+    if to_apply.orphans.is_some() {
+        base.orphans = to_apply.orphans;
     }
-    if let Some(m) = &style_def.margin {
-        computed.margin = m.clone();
+    if to_apply.background_color.is_some() {
+        base.background_color = to_apply.background_color.clone();
     }
-    if let Some(p) = &style_def.padding {
-        computed.padding = p.clone();
+    if to_apply.border.is_some() {
+        base.border = to_apply.border.clone();
     }
-    if let Some(w) = &style_def.width {
-        computed.width = Some(w.clone())
+    if to_apply.border_top.is_some() {
+        base.border_top = to_apply.border_top.clone();
     }
-    if let Some(h) = &style_def.height {
-        computed.height = Some(h.clone());
+    if to_apply.border_right.is_some() {
+        base.border_right = to_apply.border_right.clone();
     }
-    if let Some(bg) = &style_def.background_color {
-        computed.background_color = Some(bg.clone());
+    if to_apply.border_bottom.is_some() {
+        base.border_bottom = to_apply.border_bottom.clone();
     }
-    // Border shorthand and overrides
-    if let Some(b) = &style_def.border {
-        computed.border_top = Some(b.clone());
-        computed.border_right = Some(b.clone());
-        computed.border_bottom = Some(b.clone());
-        computed.border_left = Some(b.clone());
+    if to_apply.border_left.is_some() {
+        base.border_left = to_apply.border_left.clone();
     }
-    if let Some(b) = &style_def.border_top {
-        computed.border_top = Some(b.clone());
+    if to_apply.margin.is_some() {
+        base.margin = to_apply.margin.clone();
     }
-    if let Some(b) = &style_def.border_right {
-        computed.border_right = Some(b.clone());
+    if to_apply.padding.is_some() {
+        base.padding = to_apply.padding.clone();
     }
-    if let Some(b) = &style_def.border_bottom {
-        computed.border_bottom = Some(b.clone());
+    if to_apply.width.is_some() {
+        base.width = to_apply.width.clone();
     }
-    if let Some(b) = &style_def.border_left {
-        computed.border_left = Some(b.clone());
+    if to_apply.height.is_some() {
+        base.height = to_apply.height.clone();
     }
-    if let Some(lst) = &style_def.list_style_type {
-        computed.list_style_type = lst.clone();
+    if to_apply.list_style_type.is_some() {
+        base.list_style_type = to_apply.list_style_type.clone();
     }
-    if let Some(lsp) = &style_def.list_style_position {
-        computed.list_style_position = lsp.clone();
+    if to_apply.list_style_position.is_some() {
+        base.list_style_position = to_apply.list_style_position.clone();
     }
-    if let Some(bs) = style_def.border_spacing {
-        computed.border_spacing = bs;
+    if to_apply.list_style_image.is_some() {
+        base.list_style_image = to_apply.list_style_image.clone();
     }
-    if let Some(d) = &style_def.flex_direction {
-        computed.flex_direction = d.clone();
+    if to_apply.border_spacing.is_some() {
+        base.border_spacing = to_apply.border_spacing;
     }
-    if let Some(w) = &style_def.flex_wrap {
-        computed.flex_wrap = w.clone();
+    if to_apply.flex_direction.is_some() {
+        base.flex_direction = to_apply.flex_direction.clone();
     }
-    if let Some(jc) = &style_def.justify_content {
-        computed.justify_content = jc.clone();
+    if to_apply.flex_wrap.is_some() {
+        base.flex_wrap = to_apply.flex_wrap.clone();
     }
-    if let Some(ai) = &style_def.align_items {
-        computed.align_items = ai.clone();
+    if to_apply.justify_content.is_some() {
+        base.justify_content = to_apply.justify_content.clone();
     }
-    if let Some(o) = style_def.order {
-        computed.order = o;
+    if to_apply.align_items.is_some() {
+        base.align_items = to_apply.align_items.clone();
     }
-    if let Some(g) = style_def.flex_grow {
-        computed.flex_grow = g;
+    if to_apply.order.is_some() {
+        base.order = to_apply.order;
     }
-    if let Some(s) = style_def.flex_shrink {
-        computed.flex_shrink = s;
+    if to_apply.flex_grow.is_some() {
+        base.flex_grow = to_apply.flex_grow;
     }
-    if let Some(b) = &style_def.flex_basis {
-        computed.flex_basis = b.clone();
+    if to_apply.flex_shrink.is_some() {
+        base.flex_shrink = to_apply.flex_shrink;
     }
-    if let Some(s) = &style_def.align_self {
-        computed.align_self = s.clone();
+    if to_apply.flex_basis.is_some() {
+        base.flex_basis = to_apply.flex_basis.clone();
+    }
+    if to_apply.align_self.is_some() {
+        base.align_self = to_apply.align_self.clone();
     }
 }

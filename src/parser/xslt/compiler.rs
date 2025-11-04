@@ -110,7 +110,7 @@ impl CompilerBuilder {
         }
 
         Ok(CompiledStylesheet {
-            stylesheet: self.stylesheet,
+            stylesheet: Arc::new(self.stylesheet),
             template_rules: self.template_rules,
             named_templates: self.named_templates,
             keys: self.keys,

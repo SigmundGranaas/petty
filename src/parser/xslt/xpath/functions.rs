@@ -5,7 +5,7 @@ use crate::parser::xslt::datasource::{DataSourceNode, NodeType};
 use crate::parser::xslt::executor::ExecutionError;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
-use std::hash::{Hash, Hasher};
+use std::hash::Hasher;
 
 // A simple registry that just holds the names of built-in functions.
 pub struct FunctionRegistry {

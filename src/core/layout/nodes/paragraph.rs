@@ -1,4 +1,3 @@
-// src/core/layout/nodes/paragraph.rs
 use crate::core::idf::IRNode;
 use crate::core::layout::node::{AnchorLocation, LayoutContext, LayoutNode, LayoutResult};
 use crate::core::layout::style::ComputedStyle;
@@ -256,14 +255,14 @@ fn commit_line_to_context(
                 let mut run_width = 0.0;
                 let (base_style, base_href) = match atom {
                     LayoutAtom::Word { style, href, .. } => (style, href),
-                    LayoutAtom::Space { style, .. } => (style, &None),
+                    LayoutAtom::Space { style, href, .. } => (style, href),
                     _ => unreachable!(),
                 };
                 let mut run_end_idx = atom_idx;
                 for i in atom_idx..line_atoms.len() {
                     let (current_style, current_href, text_part, part_width) = match &line_atoms[i] {
                         LayoutAtom::Word { text, width, style, href } => (style, href, text.as_str(), *width),
-                        LayoutAtom::Space { width, style, .. } => (style, &None, " ", *width),
+                        LayoutAtom::Space { width, style, href } => (style, href, " ", *width),
                         _ => break,
                     };
                     if Arc::ptr_eq(current_style, base_style) && current_href == base_href {
@@ -311,23 +310,9 @@ fn commit_line_to_context(
                 current_x += width;
                 atom_idx += 1;
             }
-            LayoutAtom::PageNumberPlaceholder { target_id, style } => {
-                let text = "XX";
+            LayoutAtom::PageNumberPlaceholder { target_id, style, href } => {
+                let text = "XX"; // For measurement only
                 let width = ctx.engine.measure_text_width(text, style);
-                let text_el = PositionedElement {
-                    x: current_x,
-                    y: 0.0,
-                    width,
-                    height: style.line_height,
-                    element: crate::core::layout::LayoutElement::Text(crate::core::layout::TextElement {
-                        content: text.to_string(),
-                        href: None,
-                        text_decoration: style.text_decoration.clone(),
-                    }),
-                    style: style.clone(),
-                };
-                ctx.push_element(text_el);
-
                 let placeholder = PositionedElement {
                     x: current_x,
                     y: 0.0,
@@ -335,6 +320,7 @@ fn commit_line_to_context(
                     height: style.line_height,
                     element: crate::core::layout::LayoutElement::PageNumberPlaceholder {
                         target_id: target_id.clone(),
+                        href: href.clone(),
                     },
                     style: style.clone(),
                 };

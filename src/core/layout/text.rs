@@ -1,3 +1,4 @@
+// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/text.rs
 use crate::core::idf::InlineNode;
 use crate::core::layout::engine::LayoutEngine;
 use crate::core::layout::style::ComputedStyle;
@@ -14,6 +15,7 @@ pub enum LayoutAtom {
     Space {
         width: f32,
         style: Arc<ComputedStyle>,
+        href: Option<String>,
     },
     Image {
         src: String,
@@ -25,6 +27,7 @@ pub enum LayoutAtom {
     PageNumberPlaceholder {
         target_id: String,
         style: Arc<ComputedStyle>,
+        href: Option<String>,
     },
     LineBreak,
 }
@@ -72,6 +75,7 @@ pub fn atomize_inlines(
                         atoms.push(LayoutAtom::Space {
                             width: engine.measure_text_width(" ", parent_style),
                             style: parent_style.clone(),
+                            href: parent_href.clone(),
                         });
                     } else if !word.is_empty() {
                         atoms.push(LayoutAtom::Word {
@@ -117,13 +121,20 @@ pub fn atomize_inlines(
             InlineNode::PageReference { target_id, meta, children } => {
                 let style = engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), parent_style);
 
-                // FIX: Process children first, then add the placeholder.
-                // This correctly handles text like `(see page <ref/>)`.
-                atoms.extend(atomize_inlines(engine, children, &style, parent_href.clone()));
-                atoms.push(LayoutAtom::PageNumberPlaceholder {
-                    target_id: target_id.clone(),
-                    style: style.clone(),
-                });
+                // A PageReference implies a link to its target page.
+                // It can be nested in another link, in which case the outer link wins.
+                let href = parent_href.clone().or_else(|| Some(format!("#{}", target_id)));
+
+                atoms.extend(atomize_inlines(engine, children, &style, href.clone()));
+
+                // If children is empty, this is a "render page number here" reference.
+                if children.is_empty() {
+                    atoms.push(LayoutAtom::PageNumberPlaceholder {
+                        target_id: target_id.clone(),
+                        style,
+                        href,
+                    });
+                }
             }
             InlineNode::LineBreak => {
                 atoms.push(LayoutAtom::LineBreak);

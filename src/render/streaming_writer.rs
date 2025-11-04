@@ -1,3 +1,4 @@
+// src/render/streaming_writer.rs
 use lopdf::content::Content;
 use lopdf::xref::{Xref, XrefEntry, XrefType};
 use lopdf::{dictionary, Dictionary, Object, ObjectId, Stream};
@@ -199,7 +200,7 @@ mod internal_writer {
         // This closure is now defined to not capture `writer`, but to accept it as an argument.
         // This avoids the borrow checker issue where the closure holds a mutable borrow on `writer`
         // while other code tries to use it.
-        let mut write_section = |w: &mut W, start_id: u32, entries: &Vec<XrefEntry>| -> io::Result<()> {
+        let write_section = |w: &mut W, start_id: u32, entries: &Vec<XrefEntry>| -> io::Result<()> {
             if entries.is_empty() { return Ok(()); }
             writeln!(w, "{} {}", start_id, entries.len())?;
             for entry in entries {

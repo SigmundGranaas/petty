@@ -1,4 +1,4 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/error.rs
+// src/error.rs
 use crate::parser::ParseError;
 use crate::render::RenderError;
 use thiserror::Error;
@@ -17,10 +17,12 @@ pub enum PipelineError {
     Render(#[from] RenderError),
     #[error("Layout error: {0}")]
     Layout(String),
-    #[error("Data parsing error: {0}")]
-    DataParse(#[from] serde_json::Error),
+    #[error("JSON serialization/deserialization error: {0}")]
+    Json(#[from] serde_json::Error),
     #[error("Template execution error: {0}")]
-    TemplateExecution(String)
+    TemplateExecution(String),
+    #[error("Other pipeline error: {0}")]
+    Other(String),
 }
 
 impl From<crate::core::layout::LayoutError> for PipelineError {
