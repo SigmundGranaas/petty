@@ -14,6 +14,9 @@ pub struct StreamingPdfWriter<W: Write + Seek> {
     pub resources_id: ObjectId,
     page_ids: Vec<ObjectId>,
     outline_root_id: Option<ObjectId>,
+    /// Objects to be written during the `finish` call.
+    /// This is for document-level objects that can only be constructed at the end,
+    /// like the Page Tree and Document Catalog, and for buffering in two-pass mode.
     buffered_objects: BTreeMap<ObjectId, Object>,
 }
 
@@ -49,22 +52,43 @@ impl<W: Write + Seek> StreamingPdfWriter<W> {
         (self.max_id, 0)
     }
 
+    /// Writes an object to the stream immediately and returns its new ID.
+    /// This is the primary method for streaming content.
+    pub fn write_object(&mut self, object: Object) -> io::Result<ObjectId> {
+        let id = self.new_object_id();
+        internal_writer::write_indirect_object(&mut self.writer, id, &object, &mut self.xref)?;
+        Ok(id)
+    }
+
+    /// Buffers an object to be written during the `finish` call, returning a new ID.
+    /// Used by `TwoPassStrategy`.
     pub fn buffer_object(&mut self, object: Object) -> ObjectId {
         let id = self.new_object_id();
         self.buffered_objects.insert(id, object);
         id
     }
 
+    /// Writes a content stream to the output immediately. Used by streaming strategies.
+    pub fn write_content_stream(&mut self, content: Content) -> io::Result<ObjectId> {
+        let stream = Stream::new(dictionary! {}, content.encode().unwrap_or_default());
+        self.write_object(Object::Stream(stream))
+    }
+
+    /// Buffers a content stream. Used by `TwoPassStrategy`.
+    pub fn buffer_content_stream(&mut self, content: Content) -> ObjectId {
+        let stream = Stream::new(dictionary! {}, content.encode().unwrap_or_default());
+        self.buffer_object(Object::Stream(stream))
+    }
+
+
+    /// Buffers an object to be written during the `finish` call.
+    /// Used by TwoPassStrategy for objects that need to be created with a pre-allocated ID
+    /// and written after other objects have been processed.
     pub fn buffer_object_at_id(&mut self, id: ObjectId, object: Object) {
         if id.0 > self.max_id {
             self.max_id = id.0;
         }
         self.buffered_objects.insert(id, object);
-    }
-
-    pub fn buffer_content_stream(&mut self, content: Content) -> ObjectId {
-        let stream = Stream::new(dictionary! {}, content.encode().unwrap_or_default());
-        self.buffer_object(Object::Stream(stream))
     }
 
     pub fn set_page_ids(&mut self, page_ids: Vec<ObjectId>) {
@@ -90,6 +114,7 @@ impl<W: Write + Seek> StreamingPdfWriter<W> {
         }
         self.buffer_object_at_id(self.catalog_id, catalog_dict.into());
 
+        // Write all the objects that were deferred until the end.
         for (id, object) in &self.buffered_objects {
             internal_writer::write_indirect_object(&mut self.writer, *id, object, &mut self.xref)?;
         }

@@ -27,6 +27,15 @@ pub struct ExecutionConfig {
     pub strict: bool,
 }
 
+/// A struct to report features found in a template that may require special handling.
+#[derive(Debug, Default, Clone, Copy)]
+pub struct TemplateFeatures {
+    /// True if the template contains a `<toc>` element or equivalent.
+    pub has_table_of_contents: bool,
+    /// True if the template contains a "page X of Y" placeholder.
+    pub has_page_number_placeholders: bool,
+}
+
 /// A reusable, data-agnostic, compiled template artifact.
 pub trait CompiledTemplate: Send + Sync {
     /// Executes the template against a data context to produce a self-contained IRNode tree.
@@ -37,6 +46,9 @@ pub trait CompiledTemplate: Send + Sync {
 
     /// Returns the base path for resolving relative resource paths.
     fn resource_base_path(&self) -> &Path;
+
+    /// Returns a summary of features detected in the template.
+    fn features(&self) -> TemplateFeatures;
 }
 
 /// A parser responsible for compiling a template string into a `CompiledTemplate`.

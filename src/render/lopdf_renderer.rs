@@ -4,28 +4,28 @@ use super::streaming_writer::StreamingPdfWriter;
 use crate::core::idf::SharedData;
 use crate::core::layout::{LayoutEngine, PositionedElement};
 use crate::core::style::stylesheet::Stylesheet;
-use crate::render::lopdf_helpers;
+use crate::render::{lopdf_helpers, renderer};
 use lopdf::{dictionary, Dictionary, Object, ObjectId};
 use std::any::Any;
 use std::collections::HashMap;
-use std::io::{Cursor, Write};
+use std::io::{Cursor, Seek, Write};
 use std::sync::Arc;
 
-/// A stateless PDF renderer using the `lopdf` library.
+/// A PDF renderer using the `lopdf` library, capable of both streaming and buffering.
 ///
-/// This renderer acts as a "toolkit" driven by a higher-level strategy. It is responsible
-/// for low-level PDF object creation but holds no state about the document's overall
-/// structure (like the number of pages or the location of anchors).
-pub struct LopdfRenderer<W: Write + Send> {
-    final_writer: Option<W>,
-    writer: Option<StreamingPdfWriter<Cursor<Vec<u8>>>>,
-    stylesheet: Arc<Stylesheet>,
-    layout_engine: LayoutEngine,
+/// This renderer acts as a "toolkit" driven by a higher-level strategy. It writes
+/// directly to the provided writer `W`. For streaming strategies, `W` is the final
+/// output stream. For buffering strategies (like Hybrid's first pass), `W` can
+/// be a `Cursor<Vec<u8>>`.
+pub struct LopdfRenderer<W: Write + Seek + Send> {
+    pub(crate) writer: Option<StreamingPdfWriter<W>>,
+    pub stylesheet: Arc<Stylesheet>,
+    pub layout_engine: LayoutEngine,
     font_map: HashMap<String, String>,
     outline_root_id: Option<ObjectId>,
 }
 
-impl<W: Write + Send> LopdfRenderer<W> {
+impl<W: Write + Seek + Send> LopdfRenderer<W> {
     pub fn new(layout_engine: LayoutEngine, stylesheet: Arc<Stylesheet>) -> Result<Self, RenderError> {
         let mut font_map = HashMap::new();
         for (i, face) in layout_engine.font_manager.db().faces().enumerate() {
@@ -33,7 +33,6 @@ impl<W: Write + Send> LopdfRenderer<W> {
         }
 
         Ok(Self {
-            final_writer: None,
             writer: None,
             stylesheet,
             layout_engine,
@@ -43,12 +42,13 @@ impl<W: Write + Send> LopdfRenderer<W> {
     }
 
     /// Provides mutable access to the underlying `StreamingPdfWriter`, allowing
-    /// helper functions to buffer objects directly.
-    pub fn writer_mut(&mut self) -> Option<&mut StreamingPdfWriter<Cursor<Vec<u8>>>> {
+    /// helper functions to buffer objects directly. This is typically used by
+    /// the TwoPassStrategy.
+    pub fn writer_mut(&mut self) -> Option<&mut StreamingPdfWriter<W>> {
         self.writer.as_mut()
     }
 
-    /// Writes a Page object dictionary with a specific ID.
+    /// Writes a Page object dictionary with a specific ID. Used by TwoPassStrategy.
     pub fn write_page_object_at_id(
         &mut self,
         page_id: ObjectId,
@@ -74,12 +74,25 @@ impl<W: Write + Send> LopdfRenderer<W> {
         Ok(())
     }
 }
+// This implementation is specialized for when the writer is a `Cursor`.
+impl LopdfRenderer<Cursor<Vec<u8>>> {
+    /// A specialized finish method for the hybrid strategy that bypasses the `final_writer`
+    /// and returns the generated PDF bytes directly from the internal buffer.
+    pub fn finish_into_buffer(mut self, page_ids: Vec<ObjectId>) -> Result<Vec<u8>, RenderError> {
+        if let Some(mut writer) = self.writer.take() {
+            writer.set_page_ids(page_ids);
+            writer.set_outline_root_id(self.outline_root_id);
+            let cursor = writer.finish()?;
+            Ok(cursor.into_inner())
+        } else {
+            Err(RenderError::Other("Document not started or already finished".into()))
+        }
+    }
+}
 
-impl<W: Write + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> {
+
+impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> {
     fn begin_document(&mut self, writer: W) -> Result<(), RenderError> {
-        self.final_writer = Some(writer);
-        let buffer = Cursor::new(Vec::new());
-
         let mut font_dict = Dictionary::new();
         for face in self.layout_engine.font_manager.db().faces() {
             if let Some(internal_name) = self.font_map.get(&face.post_script_name) {
@@ -89,8 +102,8 @@ impl<W: Write + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> {
                 font_dict.set(internal_name.as_bytes(), Object::Dictionary(single_font_dict));
             }
         }
-
-        self.writer = Some(StreamingPdfWriter::new(buffer, "1.7", font_dict)?);
+        // The writer is now the final destination passed in from the strategy.
+        self.writer = Some(StreamingPdfWriter::new(writer, "1.7", font_dict)?);
         Ok(())
     }
 
@@ -99,6 +112,8 @@ impl<W: Write + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> {
         Ok(())
     }
 
+    /// Renders page content and BUFFERS it. This implementation is for the TwoPassStrategy.
+    /// Streaming strategies will bypass this and use the writer directly.
     fn render_page_content(
         &mut self,
         elements: Vec<PositionedElement>,
@@ -117,6 +132,7 @@ impl<W: Write + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> {
         Ok(content_id)
     }
 
+    /// Creates a Page dictionary and BUFFERS it. This is for the TwoPassStrategy.
     fn write_page_object(
         &mut self,
         content_stream_ids: Vec<ObjectId>,
@@ -145,16 +161,17 @@ impl<W: Write + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> {
         self.outline_root_id = Some(outline_root_id);
     }
 
-    fn finish(mut self: Box<Self>, page_ids: Vec<ObjectId>) -> Result<(), RenderError> {
-        if let Some(mut writer) = self.writer.take() {
-            writer.set_page_ids(page_ids);
-            writer.set_outline_root_id(self.outline_root_id);
-            let buffer = writer.finish()?;
-            if let Some(final_writer) = self.final_writer.as_mut() {
-                final_writer.write_all(buffer.get_ref())?;
-            }
+    fn finish(self: Box<Self>, page_ids: Vec<ObjectId>) -> Result<W, renderer::RenderError> {
+        let mut renderer = *self; // Move out of the box
+        if let Some(mut internal_writer) = renderer.writer.take() {
+            internal_writer.set_page_ids(page_ids);
+            internal_writer.set_outline_root_id(renderer.outline_root_id);
+            // This now finishes writing to the final destination writer and returns it.
+            let writer = internal_writer.finish()?;
+            Ok(writer)
+        } else {
+            Err(renderer::RenderError::Other("Document was never started with begin_document".into()))
         }
-        Ok(())
     }
 
     fn as_any_mut(&mut self) -> &mut dyn Any {

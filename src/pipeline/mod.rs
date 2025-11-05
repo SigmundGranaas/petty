@@ -1,6 +1,6 @@
-// src/pipeline/mod.rs
-
 //! The main public API and orchestrator for document generation.
+
+pub mod strategy;
 
 mod builder;
 mod config;

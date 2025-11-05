@@ -1,4 +1,3 @@
-// src/pipeline/worker.rs
 use crate::core::idf::{IRNode, InlineMetadata, InlineNode, NodeMetadata, SharedData};
 use crate::core::layout::{AnchorLocation, LayoutEngine, PositionedElement};
 use crate::core::style::stylesheet::Stylesheet;
@@ -241,7 +240,7 @@ fn ensure_heading_ids(nodes: &mut [IRNode]) {
                 if meta.id.is_none() {
                     let text = extract_text_from_inlines(children);
                     let slug = slug::slugify(&text);
-                    let mut rng = rand::thread_rng();
+                    let mut rng = rand::rng();
                     let suffix: u32 = rng.random();
                     meta.id = Some(format!("{}-{}", slug, suffix));
                 }

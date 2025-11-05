@@ -12,6 +12,7 @@ use crate::parser::ParseError;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Default)]
@@ -38,8 +39,27 @@ impl From<StylesheetDef> for Stylesheet {
 impl Stylesheet {
     /// Creates a new `Stylesheet` by parsing a raw XSLT string.
     /// This is the primary entry point for XSLT-based styling.
-    pub fn from_xslt(xslt_content: &str) -> Result<Self, ParseError> {
-        crate::parser::stylesheet_parser::XsltParser::new(xslt_content).parse()
+    pub fn from_xslt(xslt_content: &str, resource_base_path: PathBuf) -> Result<Self, ParseError> {
+        let compiled = crate::parser::xslt::compiler::compile(xslt_content, resource_base_path)?;
+        Ok((*compiled.stylesheet).clone())
+    }
+
+    /// Returns the default page layout, or a default A4 layout if none is defined.
+    pub fn get_default_page_layout(&self) -> &PageLayout {
+        self.default_page_master_name
+            .as_ref()
+            .and_then(|name| self.page_masters.get(name))
+            .or_else(|| self.page_masters.values().next())
+            .unwrap_or_else(|| {
+                // This is a static fallback to ensure a page layout always exists.
+                static FALLBACK_LAYOUT: PageLayout = PageLayout {
+                    size: PageSize::A4,
+                    margins: None,
+                    header: None,
+                    footer: None,
+                };
+                &FALLBACK_LAYOUT
+            })
     }
 }
 
@@ -52,11 +72,9 @@ pub struct PageLayout {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub margins: Option<Margins>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub title: Option<String>,
+    pub header: Option<Vec<crate::parser::json::ast::TemplateNode>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub footer_text: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub footer_style: Option<String>,
+    pub footer: Option<Vec<crate::parser::json::ast::TemplateNode>>,
 }
 
 #[derive(Deserialize, Serialize, Default, Clone, PartialEq)]
@@ -144,39 +162,105 @@ pub struct ElementStyle {
 impl fmt::Debug for ElementStyle {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut dbg = f.debug_struct("ElementStyle");
-        if let Some(val) = &self.font_family { dbg.field("font_family", val); }
-        if let Some(val) = &self.font_size { dbg.field("font_size", val); }
-        if let Some(val) = &self.font_weight { dbg.field("font_weight", val); }
-        if let Some(val) = &self.font_style { dbg.field("font_style", val); }
-        if let Some(val) = &self.line_height { dbg.field("line_height", val); }
-        if let Some(val) = &self.text_align { dbg.field("text_align", val); }
-        if let Some(val) = &self.color { dbg.field("color", val); }
-        if let Some(val) = &self.text_decoration { dbg.field("text_decoration", val); }
-        if let Some(val) = &self.widows { dbg.field("widows", val); }
-        if let Some(val) = &self.orphans { dbg.field("orphans", val); }
-        if let Some(val) = &self.background_color { dbg.field("background_color", val); }
-        if let Some(val) = &self.border { dbg.field("border", val); }
-        if let Some(val) = &self.border_top { dbg.field("border_top", val); }
-        if let Some(val) = &self.border_right { dbg.field("border_right", val); }
-        if let Some(val) = &self.border_bottom { dbg.field("border_bottom", val); }
-        if let Some(val) = &self.border_left { dbg.field("border_left", val); }
-        if let Some(val) = &self.margin { dbg.field("margin", val); }
-        if let Some(val) = &self.padding { dbg.field("padding", val); }
-        if let Some(val) = &self.width { dbg.field("width", val); }
-        if let Some(val) = &self.height { dbg.field("height", val); }
-        if let Some(val) = &self.list_style_type { dbg.field("list_style_type", val); }
-        if let Some(val) = &self.list_style_position { dbg.field("list_style_position", val); }
-        if let Some(val) = &self.list_style_image { dbg.field("list_style_image", val); }
-        if let Some(val) = &self.border_spacing { dbg.field("border_spacing", val); }
-        if let Some(val) = &self.flex_direction { dbg.field("flex_direction", val); }
-        if let Some(val) = &self.flex_wrap { dbg.field("flex_wrap", val); }
-        if let Some(val) = &self.justify_content { dbg.field("justify_content", val); }
-        if let Some(val) = &self.align_items { dbg.field("align_items", val); }
-        if let Some(val) = &self.order { dbg.field("order", val); }
-        if let Some(val) = &self.flex_grow { dbg.field("flex_grow", val); }
-        if let Some(val) = &self.flex_shrink { dbg.field("flex_shrink", val); }
-        if let Some(val) = &self.flex_basis { dbg.field("flex_basis", val); }
-        if let Some(val) = &self.align_self { dbg.field("align_self", val); }
+        if let Some(val) = &self.font_family {
+            dbg.field("font_family", val);
+        }
+        if let Some(val) = &self.font_size {
+            dbg.field("font_size", val);
+        }
+        if let Some(val) = &self.font_weight {
+            dbg.field("font_weight", val);
+        }
+        if let Some(val) = &self.font_style {
+            dbg.field("font_style", val);
+        }
+        if let Some(val) = &self.line_height {
+            dbg.field("line_height", val);
+        }
+        if let Some(val) = &self.text_align {
+            dbg.field("text_align", val);
+        }
+        if let Some(val) = &self.color {
+            dbg.field("color", val);
+        }
+        if let Some(val) = &self.text_decoration {
+            dbg.field("text_decoration", val);
+        }
+        if let Some(val) = &self.widows {
+            dbg.field("widows", val);
+        }
+        if let Some(val) = &self.orphans {
+            dbg.field("orphans", val);
+        }
+        if let Some(val) = &self.background_color {
+            dbg.field("background_color", val);
+        }
+        if let Some(val) = &self.border {
+            dbg.field("border", val);
+        }
+        if let Some(val) = &self.border_top {
+            dbg.field("border_top", val);
+        }
+        if let Some(val) = &self.border_right {
+            dbg.field("border_right", val);
+        }
+        if let Some(val) = &self.border_bottom {
+            dbg.field("border_bottom", val);
+        }
+        if let Some(val) = &self.border_left {
+            dbg.field("border_left", val);
+        }
+        if let Some(val) = &self.margin {
+            dbg.field("margin", val);
+        }
+        if let Some(val) = &self.padding {
+            dbg.field("padding", val);
+        }
+        if let Some(val) = &self.width {
+            dbg.field("width", val);
+        }
+        if let Some(val) = &self.height {
+            dbg.field("height", val);
+        }
+        if let Some(val) = &self.list_style_type {
+            dbg.field("list_style_type", val);
+        }
+        if let Some(val) = &self.list_style_position {
+            dbg.field("list_style_position", val);
+        }
+        if let Some(val) = &self.list_style_image {
+            dbg.field("list_style_image", val);
+        }
+        if let Some(val) = &self.border_spacing {
+            dbg.field("border_spacing", val);
+        }
+        if let Some(val) = &self.flex_direction {
+            dbg.field("flex_direction", val);
+        }
+        if let Some(val) = &self.flex_wrap {
+            dbg.field("flex_wrap", val);
+        }
+        if let Some(val) = &self.justify_content {
+            dbg.field("justify_content", val);
+        }
+        if let Some(val) = &self.align_items {
+            dbg.field("align_items", val);
+        }
+        if let Some(val) = &self.order {
+            dbg.field("order", val);
+        }
+        if let Some(val) = &self.flex_grow {
+            dbg.field("flex_grow", val);
+        }
+        if let Some(val) = &self.flex_shrink {
+            dbg.field("flex_shrink", val);
+        }
+        if let Some(val) = &self.flex_basis {
+            dbg.field("flex_basis", val);
+        }
+        if let Some(val) = &self.align_self {
+            dbg.field("align_self", val);
+        }
         dbg.finish()
     }
 }

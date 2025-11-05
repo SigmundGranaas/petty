@@ -7,7 +7,7 @@ edition = "2024"
 # PDF generation
 lopdf = "0.36.0"
 printpdf = { version = "0.8.2", features = ["png"] }
-
+tempfile = "3.19.1"
 nom = "7.1"
 roxmltree = "0.20.0"
 # Data processing

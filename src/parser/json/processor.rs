@@ -1,12 +1,13 @@
+// src/parser/json/processor.rs
+use super::{ast, compiler};
+use super::executor;
 use crate::core::idf::IRNode;
 use crate::core::style::stylesheet::Stylesheet;
 use crate::error::PipelineError;
-use crate::parser::processor::{CompiledTemplate, ExecutionConfig, TemplateParser};
+use crate::parser::processor::{CompiledTemplate, ExecutionConfig, TemplateParser, TemplateFeatures};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-
-use super::{ast, compiler, executor};
 
 #[derive(Debug)]
 pub struct JsonTemplate {
@@ -14,7 +15,81 @@ pub struct JsonTemplate {
     definitions: HashMap<String, Vec<compiler::JsonInstruction>>,
     stylesheet: Arc<Stylesheet>,
     resource_base_path: PathBuf,
+    features: TemplateFeatures,
 }
+
+/// Scans the JSON template AST for features requiring special handling.
+fn detect_features_from_json_ast(node: &ast::TemplateNode, definitions: &HashMap<String, ast::TemplateNode>) -> TemplateFeatures {
+    let mut features = TemplateFeatures::default();
+    scan_json_node_for_features(node, &mut features, definitions);
+    features
+}
+
+fn scan_json_node_for_features(
+    node: &ast::TemplateNode,
+    features: &mut TemplateFeatures,
+    definitions: &HashMap<String, ast::TemplateNode>,
+) {
+    match node {
+        ast::TemplateNode::Static(static_node) => {
+            match static_node {
+                ast::JsonNode::TableOfContents(_) => features.has_table_of_contents = true,
+                ast::JsonNode::RenderTemplate { name } => {
+                    if let Some(def_node) = definitions.get(name) {
+                        scan_json_node_for_features(def_node, features, definitions);
+                    }
+                }
+                _ => {}
+            }
+
+            // Recurse into children. Each variant with children has a different struct type,
+            // so we must handle them in separate match arms.
+            let children: Option<&Vec<ast::TemplateNode>> = match static_node {
+                ast::JsonNode::Block(c) => Some(&c.children),
+                ast::JsonNode::FlexContainer(c) => Some(&c.children),
+                ast::JsonNode::List(c) => Some(&c.children),
+                ast::JsonNode::ListItem(c) => Some(&c.children),
+                ast::JsonNode::TableOfContents(c) => Some(&c.children),
+                ast::JsonNode::StyledSpan(c) => Some(&c.children),
+                ast::JsonNode::Paragraph(p) => Some(&p.children),
+                ast::JsonNode::Heading(h) => Some(&h.children),
+                ast::JsonNode::Hyperlink(h) => Some(&h.children),
+                ast::JsonNode::Table(t) => {
+                    if let Some(header) = &t.header {
+                        for row in &header.rows {
+                            scan_json_node_for_features(row, features, definitions);
+                        }
+                    }
+                    for row in &t.body.rows {
+                        scan_json_node_for_features(row, features, definitions);
+                    }
+                    None // Table has no single `children` vector, recursion is handled above.
+                }
+                _ => None,
+            };
+
+            if let Some(children_vec) = children {
+                for child in children_vec {
+                    scan_json_node_for_features(child, features, definitions);
+                }
+            }
+        }
+        ast::TemplateNode::Control(control_node) => {
+            match control_node {
+                ast::ControlNode::Each { template, .. } => {
+                    scan_json_node_for_features(template, features, definitions);
+                }
+                ast::ControlNode::If { then, else_branch, .. } => {
+                    scan_json_node_for_features(then, features, definitions);
+                    if let Some(else_node) = else_branch {
+                        scan_json_node_for_features(else_node, features, definitions);
+                    }
+                }
+            }
+        }
+    }
+}
+
 
 impl CompiledTemplate for JsonTemplate {
     fn execute(
@@ -37,6 +112,10 @@ impl CompiledTemplate for JsonTemplate {
 
     fn resource_base_path(&self) -> &Path {
         &self.resource_base_path
+    }
+
+    fn features(&self) -> TemplateFeatures {
+        self.features
     }
 }
 
@@ -62,6 +141,9 @@ impl TemplateParser for JsonParser {
         };
         let definitions_ast = file_ast._stylesheet.definitions;
 
+        // Perform feature detection on the AST *before* compiling it.
+        let features = detect_features_from_json_ast(&file_ast._template, &definitions_ast);
+
         // The compiler for definitions needs an empty set of definitions to avoid recursion issues.
         let empty_defs = HashMap::new();
         let def_compiler = compiler::Compiler::new(&stylesheet, &empty_defs);
@@ -78,6 +160,7 @@ impl TemplateParser for JsonParser {
             definitions: compiled_definitions,
             stylesheet: Arc::new(stylesheet),
             resource_base_path,
+            features,
         }))
     }
 }

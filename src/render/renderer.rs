@@ -4,7 +4,7 @@ use crate::core::layout::PositionedElement;
 use crate::pipeline::worker::TocEntry;
 use lopdf::ObjectId;
 use std::collections::HashMap;
-use std::io::Write;
+use std::io::{Seek, Write};
 use thiserror::Error;
 use std::any::Any;
 
@@ -50,7 +50,7 @@ pub struct Pass1Result {
 /// A trait for document renderers, abstracting the PDF-writing primitives.
 /// This trait is designed to be driven by a higher-level "strategy" which
 /// manages document-level state and orchestration.
-pub trait DocumentRenderer<W: Write + Send> {
+pub trait DocumentRenderer<W: Write + Seek + Send> {
     /// Initializes the document and sets up the underlying writer. This should
     /// also prepare any document-wide resources like fonts.
     fn begin_document(&mut self, writer: W) -> Result<(), RenderError>;
@@ -80,8 +80,9 @@ pub trait DocumentRenderer<W: Write + Send> {
     /// into the document catalog during `finish`.
     fn set_outline_root(&mut self, outline_root_id: ObjectId);
 
-    /// Writes the final document structures (like the page tree) and trailer.
-    fn finish(self: Box<Self>, page_ids: Vec<ObjectId>) -> Result<(), RenderError>;
+    /// Writes the final document structures (like the page tree) and trailer,
+    /// and returns the underlying writer.
+    fn finish(self: Box<Self>, page_ids: Vec<ObjectId>) -> Result<W, RenderError>;
 
     // Helper for downcasting, since the orchestrator needs to access the concrete type.
     fn as_any_mut(&mut self) -> &mut dyn Any;

@@ -4,7 +4,7 @@ use super::executor::{self, ExecutionError};
 use crate::core::idf::IRNode;
 use crate::core::style::stylesheet::Stylesheet;
 use crate::error::PipelineError;
-use crate::parser::processor::{CompiledTemplate, DataSourceFormat, ExecutionConfig, TemplateParser};
+use crate::parser::processor::{CompiledTemplate, DataSourceFormat, ExecutionConfig, TemplateParser, TemplateFeatures};
 use crate::parser::xslt::json_ds::JsonVDocument;
 use crate::parser::xslt::xml::XmlDocument;
 use crate::parser::ParseError;
@@ -20,7 +20,69 @@ impl From<ExecutionError> for PipelineError {
 // A wrapper struct to implement the `CompiledTemplate` trait.
 pub struct XsltTemplate {
     compiled: ast::CompiledStylesheet,
+    features: TemplateFeatures,
 }
+
+/// Scans the compiled XSLT AST for features requiring special handling.
+fn detect_features(compiled: &ast::CompiledStylesheet) -> TemplateFeatures {
+    let mut features = TemplateFeatures::default();
+
+    for rules in compiled.template_rules.values() {
+        for rule in rules {
+            scan_instructions_for_features(&rule.body.0, &mut features);
+        }
+    }
+    for template in compiled.named_templates.values() {
+        scan_instructions_for_features(&template.body.0, &mut features);
+    }
+
+    features
+}
+
+fn scan_instructions_for_features(instructions: &[ast::XsltInstruction], features: &mut TemplateFeatures) {
+    for instruction in instructions {
+        match instruction {
+            ast::XsltInstruction::TableOfContents { .. } => features.has_table_of_contents = true,
+            ast::XsltInstruction::ContentTag { tag_name, body, .. } => {
+                let tag_str = String::from_utf8_lossy(tag_name);
+                match tag_str.as_ref() {
+                    "toc" | "fo:table-of-contents" => features.has_table_of_contents = true,
+                    "page-number-placeholder" => features.has_page_number_placeholders = true,
+                    _ => {}
+                }
+                scan_instructions_for_features(&body.0, features);
+            }
+            ast::XsltInstruction::EmptyTag { tag_name, .. } => {
+                let tag_str = String::from_utf8_lossy(tag_name);
+                match tag_str.as_ref() {
+                    "toc" | "fo:table-of-contents" => features.has_table_of_contents = true,
+                    "page-number-placeholder" => features.has_page_number_placeholders = true,
+                    _ => {}
+                }
+            }
+            ast::XsltInstruction::If { body, .. } => scan_instructions_for_features(&body.0, features),
+            ast::XsltInstruction::ForEach { body, .. } => scan_instructions_for_features(&body.0, features),
+            ast::XsltInstruction::Choose { whens, otherwise, .. } => {
+                for when in whens {
+                    scan_instructions_for_features(&when.body.0, features);
+                }
+                if let Some(otherwise_body) = otherwise {
+                    scan_instructions_for_features(&otherwise_body.0, features);
+                }
+            }
+            ast::XsltInstruction::Copy { body, .. } => scan_instructions_for_features(&body.0, features),
+            ast::XsltInstruction::Table { header, body, .. } => {
+                if let Some(h) = header {
+                    scan_instructions_for_features(&h.0, features);
+                }
+                scan_instructions_for_features(&body.0, features);
+            }
+            ast::XsltInstruction::Element { body, .. } => scan_instructions_for_features(&body.0, features),
+            _ => {}
+        }
+    }
+}
+
 
 impl CompiledTemplate for XsltTemplate {
     fn execute(&self, data_source_str: &str, config: ExecutionConfig) -> Result<Vec<IRNode>, PipelineError> {
@@ -50,6 +112,10 @@ impl CompiledTemplate for XsltTemplate {
     fn resource_base_path(&self) -> &Path {
         &self.compiled.resource_base_path
     }
+
+    fn features(&self) -> TemplateFeatures {
+        self.features
+    }
 }
 
 /// An implementation of `TemplateParser` for XSLT 1.0 stylesheets.
@@ -62,11 +128,14 @@ impl TemplateParser for XsltParser {
         resource_base_path: PathBuf,
     ) -> Result<Arc<dyn CompiledTemplate>, PipelineError> {
         let compiled_stylesheet = compiler::compile(template_source, resource_base_path)?;
+        let features = detect_features(&compiled_stylesheet);
         Ok(Arc::new(XsltTemplate {
             compiled: compiled_stylesheet,
+            features,
         }))
     }
 }
+
 
 #[cfg(test)]
 mod tests {
