@@ -28,8 +28,8 @@ fn main() -> Result<(), PipelineError> {
 
     // A single JSON template produces a single document sequence from the root of the data.
     let output_path = "json_report.pdf";
-    // Pass an iterator that yields the single data object.
-    pipeline.generate_to_file(std::iter::once(data_json), output_path)?;
+    // Pass a Vec containing the single data object.
+    pipeline.generate_to_file(vec![data_json], output_path)?;
 
     println!("\nSuccess! Generated {}", output_path);
     Ok(())

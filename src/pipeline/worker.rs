@@ -46,14 +46,14 @@ pub(super) fn finish_layout_and_resource_loading(
     let mut ir_nodes_with_ids = ir_nodes;
     ensure_heading_ids(&mut ir_nodes_with_ids);
 
-    // This pre-processing step removes ToC placeholders. For hybrid/streaming strategies,
-    // the placeholder must not be sent to the layout engine, as it can interfere with
-    // page breaking. The final ToC is assembled later by the pipeline strategy itself
-    // based on the collected `toc_entries`.
-    let final_ir_nodes = remove_toc_nodes_recursive(ir_nodes_with_ids);
+    // The pre-processing step to remove ToC placeholders has been removed.
+    // It was a flawed workaround that prevented correct layout of pages containing a ToC.
+    // The layout engine is now responsible for handling the `IRNode::TableOfContents`
+    // placeholder, which is necessary for strategies like `TwoPass` (for content generation)
+    // and `Hybrid` (for correct layout and fixups).
+    let final_ir_nodes = ir_nodes_with_ids;
 
-    // ADDED FOR DEBUGGING: Print the exact IR tree being passed to the layout engine.
-    info!("[WORKER-{}] IR tree passed to layout engine:\n{:#?}", worker_id, &IRNode::Root(final_ir_nodes.clone()));
+    debug!("[WORKER-{}] IR tree passed to layout engine:\n{:#?}", worker_id, &IRNode::Root(final_ir_nodes.clone()));
 
     let tree = IRNode::Root(final_ir_nodes.clone()); // TODO: Avoid clone
 
@@ -86,70 +86,6 @@ pub(super) fn finish_layout_and_resource_loading(
 }
 
 // --- IR Tree Manipulation ---
-
-/// Recursively traverses the IR tree, removing `TableOfContents` placeholder nodes.
-fn remove_toc_nodes_recursive(nodes: Vec<IRNode>) -> Vec<IRNode> {
-    nodes.into_iter().flat_map(|node| {
-        if matches!(node, IRNode::TableOfContents { .. }) {
-            // This node is a ToC, so we return an empty Vec, effectively removing it.
-            vec![]
-        } else {
-            // This is not a ToC node, so we process its children and rebuild it.
-            let new_node = match node {
-                IRNode::Root(children) => IRNode::Root(remove_toc_nodes_recursive(children)),
-                IRNode::Block { children, meta } => {
-                    IRNode::Block {
-                        children: remove_toc_nodes_recursive(children),
-                        meta,
-                    }
-                }
-                IRNode::FlexContainer { children, meta } => {
-                    IRNode::FlexContainer {
-                        children: remove_toc_nodes_recursive(children),
-                        meta,
-                    }
-                }
-                IRNode::List { children, meta, start } => {
-                    IRNode::List {
-                        children: remove_toc_nodes_recursive(children),
-                        meta,
-                        start,
-                    }
-                }
-                IRNode::ListItem { children, meta } => {
-                    IRNode::ListItem {
-                        children: remove_toc_nodes_recursive(children),
-                        meta,
-                    }
-                }
-                IRNode::Table { header, body, meta, columns } => {
-                    let new_header = header.map(|mut h| {
-                        for row in &mut h.rows {
-                            for cell in &mut row.cells {
-                                let new_children = remove_toc_nodes_recursive(std::mem::take(&mut cell.children));
-                                cell.children = new_children;
-                            }
-                        }
-                        h
-                    });
-                    let mut new_body = body;
-                    for row in &mut new_body.rows {
-                        for cell in &mut row.cells {
-                            let new_children = remove_toc_nodes_recursive(std::mem::take(&mut cell.children));
-                            cell.children = new_children;
-                        }
-                    }
-                    IRNode::Table { header: new_header, body: new_body, meta, columns }
-                }
-                // It's a leaf node or a node whose children we don't recurse into for this purpose.
-                leaf_node => leaf_node,
-            };
-            // Return the processed node in a Vec.
-            vec![new_node]
-        }
-    }).collect()
-}
-
 
 /// Recursively ensures that all headings have a unique ID for anchor generation.
 fn ensure_heading_ids(nodes: &mut [IRNode]) {

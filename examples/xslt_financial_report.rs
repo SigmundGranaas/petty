@@ -26,7 +26,7 @@ fn main() -> Result<(), PipelineError> {
 
     // The <page-sequence> tag will generate a single document from the root of the data.
     let output_path = "financial_report.pdf";
-    pipeline.generate_to_file(std::iter::once(data_json), output_path)?;
+    pipeline.generate_to_file(vec![data_json], output_path)?;
 
     println!("\nSuccess! Generated {}", output_path);
     Ok(())

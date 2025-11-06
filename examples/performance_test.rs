@@ -93,7 +93,7 @@ fn main() -> Result<(), PipelineError> {
     println!("Starting PDF generation for {} records to {}...", num_records, output_path);
     let start_time = Instant::now();
 
-    pipeline.generate_to_file(data_iterator, output_path)?;
+    pipeline.generate_to_file(data_iterator.collect(), output_path)?;
 
     let duration = start_time.elapsed();
     println!("\nSuccess! Generated {}", output_path);

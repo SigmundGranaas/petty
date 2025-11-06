@@ -114,11 +114,10 @@ impl PipelineBuilder {
             GenerationMode::Auto => {
                 let features = context.compiled_template.features();
                 if features.has_table_of_contents || features.has_page_number_placeholders {
-                    // Note: In a real-world scenario, you might try to detect if the
-                    // iterator is cloneable here and choose Hybrid if it's not.
-                    // For now, Auto with forward refs defaults to TwoPass.
-                    log::info!("Template requires forward references. Automatically selecting Two-Pass strategy. If your data iterator is not cloneable, use ForceHybrid mode.");
-                    GenerationStrategy::TwoPass(TwoPassStrategy::new(self.pdf_backend))
+                    // NEW BEHAVIOR: Default to Hybrid, the safest choice.
+                    log::info!("Template requires forward references. Automatically selecting Hybrid strategy.");
+                    log::info!("For better performance with large, clonable datasets, use ForceTwoPass mode and the `generate_from_clonable` method.");
+                    GenerationStrategy::Hybrid(HybridBufferedStrategy::new(self.pdf_backend))
                 } else {
                     log::info!("Template is streamable. Automatically selecting Single-Pass strategy.");
                     GenerationStrategy::SinglePass(SinglePassStreamingStrategy::new(self.pdf_backend))

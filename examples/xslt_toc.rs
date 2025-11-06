@@ -26,7 +26,7 @@ fn main() -> Result<(), PipelineError> {
     println!("✓ Pipeline built with XSLT engine.");
 
     let output_path = "xslt_toc.pdf";
-    pipeline.generate_to_file(std::iter::once(data_json), output_path)?;
+    pipeline.generate_to_file(vec![data_json], output_path)?;
 
     println!("\nSuccess! Generated {}", output_path);
     Ok(())

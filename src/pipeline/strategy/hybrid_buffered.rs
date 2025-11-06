@@ -119,71 +119,25 @@ impl HybridBufferedStrategy {
         let root_dict = doc.get_object(root_id)?.as_dict()?;
         let pages_id = root_dict.get(b"Pages")?.as_reference()?;
 
-        // Assume all pages in the body share the same resources dictionary.
-        // This is a safe assumption as our renderer creates one shared one.
-        let resources_obj = doc.get_pages().values().next()
-            .and_then(|page_id| doc.get_object(*page_id).ok())
-            .and_then(|page_obj| page_obj.as_dict().ok())
-            .and_then(|page_dict| page_dict.get(b"Resources").cloned().ok())
-            .ok_or_else(|| PipelineError::Other("Could not find a Resources dictionary in the temporary PDF.".into()))?;
-
-
-        let toc_nodes = generate_toc_nodes(&pass1_result.toc_entries);
-        let (toc_pages, _) = layout_engine.paginate(&stylesheet, toc_nodes)?;
-        let num_toc_pages = toc_pages.len();
-        info!("[HYBRID] Generated {} ToC pages.", num_toc_pages);
-
-
-        let mut toc_page_ids = Vec::new();
-        let font_map: HashMap<String, String> = layout_engine.font_manager.db().faces()
-            .enumerate()
-            .map(|(i, face)| (face.post_script_name.clone(), format!("F{}", i + 1)))
-            .collect();
-        for page_elements in toc_pages {
-            let content = lopdf_helpers::render_elements_to_content(page_elements, &font_map, page_width, page_height)?;
-            let content_id = doc.add_object(Object::Stream(lopdf::Stream::new(dictionary!{}, content.encode()?)));
-            let page_id = doc.add_object(dictionary! {
-                 "Type" => "Page",
-                 "Parent" => pages_id,
-                 "Resources" => resources_obj.clone(),
-                 "MediaBox" => vec![0.0.into(), 0.0.into(), page_width.into(), page_height.into()],
-                 "Contents" => content_id,
-             });
-            toc_page_ids.push(page_id);
-        }
+        // The logic to generate and prepend a visible ToC page has been removed.
+        // This strategy was flawed as it broke documents where the ToC was not on a dedicated page.
+        // The Hybrid strategy will now only handle "invisible" forward references like
+        // PDF Outlines (bookmarks) and hyperlinks, which can be fixed up without re-layout.
+        // Visible ToC generation requires the TwoPass strategy.
+        info!("[HYBRID] Skipping visible ToC generation. Only applying outlines and links.");
 
         // --- Document Assembly ---
-        // Instead of modifying the existing /Pages dictionary, we create a new one.
-        // This avoids potential state issues with modifying a loaded document in place.
-        let mut new_pages_dict = doc.get_object(pages_id)?.as_dict()?.clone();
-
-        let mut final_page_ids = toc_page_ids;
         let body_page_ids: Vec<ObjectId> = doc.get_pages().into_values().collect(); // BTreeMap values are sorted by key.
-        info!("[HYBRID] Assembling final document. ToC pages: {}, Body pages: {}.", final_page_ids.len(), body_page_ids.len());
-        final_page_ids.extend(body_page_ids);
+        let final_page_ids = body_page_ids;
+        info!("[HYBRID] Assembling final document. Body pages: {}.", final_page_ids.len());
 
-        let final_page_refs: Vec<Object> = final_page_ids.iter().copied().map(Object::Reference).collect();
-        new_pages_dict.set("Kids", Object::Array(final_page_refs));
-        new_pages_dict.set("Count", lopdf::Object::Integer(final_page_ids.len() as i64));
-
-        let new_pages_id = doc.add_object(new_pages_dict);
-
-        if let Ok(Object::Dictionary(root_dict_mut)) = doc.get_object_mut(root_id) {
-            root_dict_mut.set("Pages", new_pages_id);
-        } else {
-            return Err(PipelineError::Other("Root object is not a dictionary.".into()));
-        }
-
+        // We don't need to modify the Pages dictionary if we aren't adding/removing pages.
         let final_page_count = final_page_ids.len();
 
         // --- PASS 2: Fixups ---
         info!("[HYBRID] Applying forward-reference fixups (links, outlines).");
-        for anchor in pass1_result.resolved_anchors.values_mut() {
-            anchor.global_page_index += num_toc_pages;
-        }
-        for link in pass1_result.hyperlink_locations.iter_mut() {
-            link.global_page_index += num_toc_pages;
-        }
+        // NOTE: In this simplified strategy, page indices do not need to be adjusted
+        // as we are no longer prepending pages.
 
         let annots_by_page = create_link_annotations_for_doc(&mut doc, &pass1_result, &final_page_ids, page_height)?;
         for (page_idx, annot_ids) in annots_by_page {

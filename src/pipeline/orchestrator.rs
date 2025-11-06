@@ -27,23 +27,20 @@ impl DocumentPipeline {
         Self { strategy, context }
     }
 
-    /// Asynchronously generates a document by delegating to the configured strategy.
+    /// Asynchronously generates a document from a REPLAYABLE data source.
     ///
-    /// The core generation logic is executed on a blocking thread pool via
-    /// `task::spawn_blocking` to avoid stalling the Tokio runtime, as the strategies
-    /// perform synchronous I/O and CPU-bound work.
-    ///
-    /// Note: The writer must implement `Seek` because the PDF format requires a
-    /// cross-reference table at the end of the file, which points to the byte offsets
-    /// of all objects written earlier.
-    pub async fn generate_to_writer_async<W, I>(
+    /// This method is required for the `TwoPassStrategy` and is the most performant
+    /// option when the template requires forward references (e.g., a Table of Contents).
+    /// The iterator must be cloneable so that the data can be processed twice without
+    /// being fully buffered in memory.
+    pub async fn generate_from_clonable<W, I>(
         &self,
         data_iterator: I,
         writer: W,
     ) -> Result<W, PipelineError>
     where
         W: io::Write + io::Seek + Send + 'static,
-        I: Iterator<Item = Value> + Send + 'static,
+        I: Iterator<Item = Value> + Send + 'static + Clone, // The key constraint
     {
         let strategy = self.strategy.clone();
         let context = Arc::clone(&self.context);
@@ -51,12 +48,51 @@ impl DocumentPipeline {
         task::spawn_blocking(move || -> Result<W, PipelineError> {
             match strategy {
                 GenerationStrategy::SinglePass(s) => {
-                    // Pass the writer directly for true streaming.
                     s.generate(context.as_ref(), data_iterator, writer)
                 }
                 GenerationStrategy::TwoPass(s) => {
-                    let data: Vec<Value> = data_iterator.collect();
-                    s.generate(context.as_ref(), data.into_iter(), writer)
+                    // NO MORE .collect()! We pass the clonable iterator directly.
+                    s.generate(context.as_ref(), data_iterator, writer)
+                }
+                GenerationStrategy::Hybrid(s) => {
+                    // Hybrid can also accept a clonable iterator, no problem.
+                    s.generate(context.as_ref(), data_iterator, writer)
+                }
+            }
+        })
+            .await
+            .unwrap()
+    }
+
+    /// Asynchronously generates a document from a FORWARD-ONLY streaming data source.
+    ///
+    /// This method is suitable for templates that can be rendered in a single pass or
+    /// for scenarios where the data source cannot be cloned (e.g., reading from a network stream).
+    /// If the selected strategy is `TwoPass`, this method will return an error, as
+    /// that strategy requires a replayable data source. Use `ForceHybrid` mode for
+    /// forward references with a streaming source.
+    pub async fn generate_from_stream<W, I>(
+        &self,
+        data_iterator: I,
+        writer: W,
+    ) -> Result<W, PipelineError>
+    where
+        W: io::Write + io::Seek + Send + 'static,
+        I: Iterator<Item = Value> + Send + 'static, // No Clone constraint
+    {
+        let strategy = self.strategy.clone();
+        let context = Arc::clone(&self.context);
+
+        task::spawn_blocking(move || -> Result<W, PipelineError> {
+            match strategy {
+                GenerationStrategy::SinglePass(s) => {
+                    s.generate(context.as_ref(), data_iterator, writer)
+                }
+                GenerationStrategy::TwoPass(_) => {
+                    // THIS IS THE CRITICAL SAFETY CHECK
+                    Err(PipelineError::Config(
+                        "TwoPassStrategy requires a cloneable iterator. Use `generate_from_clonable` or switch to `GenerationMode::ForceHybrid`.".into()
+                    ))
                 }
                 GenerationStrategy::Hybrid(s) => {
                     s.generate(context.as_ref(), data_iterator, writer)
@@ -64,13 +100,13 @@ impl DocumentPipeline {
             }
         })
             .await
-            .unwrap() // Propagate panics from the blocking task
+            .unwrap()
     }
 
-    /// A convenience method to generate a document to a file path.
+    /// A convenience method to generate a document to a file path from a dataset in memory.
     pub fn generate_to_file<P: AsRef<Path>>(
         &self,
-        data_iterator: impl Iterator<Item = Value> + Send + 'static,
+        data: Vec<Value>, // Now explicitly takes a Vec
         path: P,
     ) -> Result<(), PipelineError> {
         let output_path = path.as_ref();
@@ -85,8 +121,8 @@ impl DocumentPipeline {
             .build()
             .expect("Failed to create Tokio runtime");
 
-        // block_on runs the future to completion. The returned writer is dropped.
-        rt.block_on(self.generate_to_writer_async(data_iterator, writer))?;
+        // Use the clonable method, since Vec::into_iter is Clone.
+        rt.block_on(self.generate_from_clonable(data.into_iter(), writer))?;
         Ok(())
     }
 }
@@ -133,8 +169,9 @@ mod tests {
         let writer = Cursor::new(Vec::new());
 
         let rt = tokio::runtime::Runtime::new().unwrap();
+        // Use the stream method to test the non-clone path
         let mut final_writer = rt
-            .block_on(pipeline.generate_to_writer_async(data.into_iter(), writer))
+            .block_on(pipeline.generate_from_stream(data.into_iter(), writer))
             .unwrap();
 
         // After generation, check if the writer contains a valid PDF header and some content.
@@ -156,6 +193,8 @@ mod tests {
     fn hybrid_strategy_with_toc_and_links_works() {
         let _ = env_logger::builder().is_test(true).try_init();
         // 1. Create a template with a heading, a link to it, and a TOC.
+        // The Hybrid strategy should produce a correctly structured PDF with bookmarks (Outlines)
+        // and functional links, WITHOUT prepending an extra page for the ToC.
         let template_json = json!({
             "_stylesheet": {
                 "defaultPageMaster": "default",
@@ -169,6 +208,7 @@ mod tests {
             "_template": {
                 "type": "Block",
                 "children": [
+                    { "type": "Heading", "level": 1, "children": [{ "type": "Text", "content": "Title Page" }] },
                     { "type": "TableOfContents" },
                     { "type": "Paragraph", "children": [ { "type": "Hyperlink", "href": "#h1", "children": [ { "type": "Text", "content": "Link to Heading" } ] } ] },
                     { "type": "PageBreak" },
@@ -193,56 +233,94 @@ mod tests {
 
         let rt = tokio::runtime::Runtime::new().unwrap();
         let final_writer = rt
-            .block_on(pipeline.generate_to_writer_async(data.into_iter(), writer))
+            .block_on(pipeline.generate_from_stream(data.into_iter(), writer))
             .unwrap();
 
         // 4. Verify the output
         let pdf_bytes = final_writer.into_inner();
-
-        let doc_result = lopdf::Document::load_mem(&pdf_bytes);
-        if let Err(e) = &doc_result {
-            let debug_path = std::env::temp_dir().join("failed_hybrid_test.pdf");
-            if !pdf_bytes.is_empty() {
-                std::fs::write(&debug_path, &pdf_bytes).expect("Failed to write debug PDF");
-                panic!("Failed to parse generated PDF: {}. Debug file written to {}", e, debug_path.display());
-            } else {
-                panic!("Failed to parse generated PDF: {}. The generated file was empty.", e);
-            }
-        }
-        let doc = doc_result.unwrap();
-
+        let doc = lopdf::Document::load_mem(&pdf_bytes).expect("Failed to parse generated PDF");
 
         let catalog = doc.get_dictionary(doc.trailer.get(b"Root").unwrap().as_reference().unwrap()).unwrap();
-        assert!(catalog.has(b"Outlines"), "PDF should have an Outlines dictionary for the TOC.");
+        assert!(catalog.has(b"Outlines"), "PDF should have an Outlines dictionary for the TOC bookmarks.");
         assert_eq!(catalog.get(b"PageMode").unwrap(), &lopdf::Object::Name(b"UseOutlines".to_vec()));
 
-        // TOC page, Link page, Heading page.
+        // The document should be laid out onto 2 pages:
+        // Page 1: Title, ToC (placeholder), Link
+        // Page 2: "My Heading"
         let pages = doc.get_pages();
-        if pages.len() != 3 {
-            let debug_path = std::env::temp_dir().join("failed_hybrid_test.pdf");
-            std::fs::write(&debug_path, &pdf_bytes).expect("Failed to write debug PDF");
-            eprintln!("\n--- TEST FAILURE DEBUG INFO ---");
-            eprintln!("The generated PDF had an incorrect number of pages.");
-            eprintln!("Please check the logs for '[WORKER-X] Finished paginating sequence' and '[HYBRID] Assembling final document'.");
-            eprintln!("The expected layout is: 1 ToC page + 2 Body pages.");
-            eprintln!("The worker should paginate the body into 2 pages.");
-            eprintln!("--- END TEST FAILURE DEBUG INFO ---\n");
-            panic!(
-                "Expected 3 pages in the document, but found {}. Debug file written to {}",
-                pages.len(),
-                debug_path.display()
-            );
-        }
-        assert_eq!(pages.len(), 3, "Expected 3 pages in the document");
+        assert_eq!(pages.len(), 2, "Expected 2 pages in the document, not an extra prepended ToC page.");
 
-        // The link is on the second page (index 1)
-        let page2_id = pages.values().copied().collect::<Vec<_>>()[1];
-        let page2_dict = doc.get_object(page2_id).unwrap().as_dict().unwrap();
-        assert!(page2_dict.has(b"Annots"), "Page 2 should have an Annots array for the hyperlink.");
+        // The link is on the first page (index 0)
+        let page1_id = pages.values().copied().collect::<Vec<_>>()[0];
+        let page1_dict = doc.get_object(page1_id).unwrap().as_dict().unwrap();
+        assert!(page1_dict.has(b"Annots"), "Page 1 should have an Annots array for the hyperlink.");
 
-        let annots_arr = page2_dict.get(b"Annots").unwrap().as_array().unwrap();
+        let annots_arr = page1_dict.get(b"Annots").unwrap().as_array().unwrap();
         assert_eq!(annots_arr.len(), 1);
         let annot_dict = doc.get_object(annots_arr[0].as_reference().unwrap()).unwrap().as_dict().unwrap();
         assert_eq!(annot_dict.get(b"Subtype").unwrap(), &lopdf::Object::Name(b"Link".to_vec()));
+    }
+
+    #[test]
+    fn two_pass_strategy_with_clonable_iterator_succeeds() {
+        // Simple template that requires two passes (Table of Contents)
+        let template_json = json!({
+            "_stylesheet": { "defaultPageMaster": "default", "pageMasters": { "default": { "size": "A4", "margins": "1cm" } } },
+            "_template": {
+                "type": "Block",
+                "children": [
+                    { "type": "TableOfContents" },
+                    { "type": "PageBreak" },
+                    { "type": "Heading", "id": "h1", "level": 2, "children": [{ "type": "Text", "content": "My Heading" }] }
+                ]
+            }
+        });
+        let template_str = serde_json::to_string(&template_json).unwrap();
+        let pipeline = PipelineBuilder::new()
+            .with_template_source(&template_str, "json").unwrap()
+            .with_generation_mode(GenerationMode::ForceTwoPass)
+            .build().unwrap();
+
+        let data = vec![json!({})]; // Vec::into_iter is Clone
+        let writer = Cursor::new(Vec::new());
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(pipeline.generate_from_clonable(data.into_iter(), writer));
+
+        assert!(result.is_ok(), "TwoPass with clonable iterator should succeed");
+    }
+
+    #[test]
+    fn two_pass_strategy_with_stream_iterator_fails() {
+        // Template that requires two passes
+        let template_json = json!({
+            "_stylesheet": { "defaultPageMaster": "default", "pageMasters": { "default": { "size": "A4", "margins": "1cm" } } },
+            "_template": {
+                "type": "Block",
+                "children": [
+                    { "type": "TableOfContents" }
+                ]
+            }
+        });
+        let template_str = serde_json::to_string(&template_json).unwrap();
+        let pipeline = PipelineBuilder::new()
+            .with_template_source(&template_str, "json").unwrap()
+            .with_generation_mode(GenerationMode::ForceTwoPass)
+            .build().unwrap();
+
+        // Use a non-clone iterator
+        let data = vec![json!({})];
+        let non_clone_iter = data.into_iter().map(|v| v); // map creates a non-clone iterator
+        let writer = Cursor::new(Vec::new());
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(pipeline.generate_from_stream(non_clone_iter, writer));
+
+        assert!(result.is_err(), "TwoPass with stream iterator should fail");
+        if let Err(PipelineError::Config(msg)) = result {
+            assert!(msg.contains("TwoPassStrategy requires a cloneable iterator"));
+        } else {
+            panic!("Expected a config error, but got {:?}", result);
+        }
     }
 }
