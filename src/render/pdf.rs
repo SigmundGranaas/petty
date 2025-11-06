@@ -1,5 +1,4 @@
 // src/render/pdf.rs
-// src/render/pdf.rs
 use super::{drawing, renderer}; // Import renderer for its RenderError type
 use crate::render::DocumentRenderer;
 use handlebars::Handlebars;
@@ -124,6 +123,7 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for PdfDocumentRender
     fn render_page_content(
         &mut self,
         elements: Vec<PositionedElement>,
+        _font_map: &HashMap<String, String>,
         _page_width_pt: f32,
         page_height_pt: f32,
     ) -> Result<ObjectId, renderer::RenderError> {

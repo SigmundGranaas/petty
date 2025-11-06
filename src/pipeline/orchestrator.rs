@@ -1,8 +1,8 @@
-// src/pipeline/orchestrator.rs
+// FILE: src/pipeline/orchestrator.rs
 // src/pipeline/orchestrator.rs
 use crate::error::PipelineError;
 use serde_json::Value;
-use std::io::{self, Seek, Write};
+use std::io;
 use std::fs;
 use std::path::Path;
 use std::sync::Arc;
@@ -30,9 +30,8 @@ impl DocumentPipeline {
     /// Asynchronously generates a document by delegating to the configured strategy.
     ///
     /// The core generation logic is executed on a blocking thread pool via
-    /// `task::spawn_blocking` to avoid stalling the Tokio runtime, as the
-
-    /// strategies perform synchronous I/O and CPU-bound work.
+    /// `task::spawn_blocking` to avoid stalling the Tokio runtime, as the strategies
+    /// perform synchronous I/O and CPU-bound work.
     ///
     /// Note: The writer must implement `Seek` because the PDF format requires a
     /// cross-reference table at the end of the file, which points to the byte offsets
@@ -98,22 +97,32 @@ mod tests {
     use super::*;
     use crate::pipeline::builder::PipelineBuilder;
     use crate::pipeline::config::{GenerationMode, PdfBackend};
-    use crate::templating::Template;
     use serde_json::json;
-    use std::io::{Cursor, Read, SeekFrom};
+    use std::io::{Cursor, Read, Seek, SeekFrom};
 
     #[test]
     fn single_pass_strategy_writes_incrementally() {
         // This test verifies that the SinglePass strategy with the orchestrator
         // writes data to the provided writer without buffering the whole file in memory.
         let template_json = json!({
-            "stylesheet": { "default": {} },
-            "body": [ { "type": "paragraph", "children": [ { "type": "text", "content": "Hello {{name}}" } ] } ]
+            "_stylesheet": {
+                "defaultPageMaster": "default",
+                "pageMasters": {
+                    "default": { "size": "A4", "margins": "1cm" }
+                },
+                "styles": {
+                    "default": { "font-family": "Helvetica" }
+                }
+            },
+            "_template": {
+                "type": "Paragraph",
+                "children": [ { "type": "Text", "content": "Hello {{name}}" } ]
+            }
         });
-        let template = Template::from_json(template_json).unwrap();
+        let template_str = serde_json::to_string(&template_json).unwrap();
 
         let pipeline = PipelineBuilder::new()
-            .with_template_object(template)
+            .with_template_source(&template_str, "json")
             .unwrap()
             .with_generation_mode(GenerationMode::ForceSinglePass)
             .with_pdf_backend(PdfBackend::Lopdf)
@@ -141,5 +150,99 @@ mod tests {
         assert!(pdf_content.contains("/Type /Page"), "Output should contain PDF page objects.");
         assert!(pdf_content.contains("Hello World"), "Output should contain rendered text.");
         assert!(pdf_content.trim_end().ends_with("%%EOF"), "Output should be a complete PDF file.");
+    }
+
+    #[test]
+    fn hybrid_strategy_with_toc_and_links_works() {
+        let _ = env_logger::builder().is_test(true).try_init();
+        // 1. Create a template with a heading, a link to it, and a TOC.
+        let template_json = json!({
+            "_stylesheet": {
+                "defaultPageMaster": "default",
+                "pageMasters": {
+                    "default": { "size": "A4", "margins": "1cm" }
+                },
+                "styles": {
+                    "default": { "font-family": "Helvetica" }
+                }
+            },
+            "_template": {
+                "type": "Block",
+                "children": [
+                    { "type": "TableOfContents" },
+                    { "type": "Paragraph", "children": [ { "type": "Hyperlink", "href": "#h1", "children": [ { "type": "Text", "content": "Link to Heading" } ] } ] },
+                    { "type": "PageBreak" },
+                    { "type": "Heading", "level": 2, "id": "h1", "children": [ { "type": "Text", "content": "My Heading" } ] }
+                ]
+            }
+        });
+        let template_str = serde_json::to_string(&template_json).unwrap();
+
+        // 2. Build pipeline with Hybrid mode
+        let pipeline = PipelineBuilder::new()
+            .with_template_source(&template_str, "json")
+            .unwrap()
+            .with_generation_mode(GenerationMode::ForceHybrid)
+            .with_pdf_backend(PdfBackend::Lopdf)
+            .build()
+            .unwrap();
+
+        // 3. Generate with a non-cloneable iterator
+        let data = vec![json!({})]; // Single empty object for one sequence
+        let writer = Cursor::new(Vec::new());
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let final_writer = rt
+            .block_on(pipeline.generate_to_writer_async(data.into_iter(), writer))
+            .unwrap();
+
+        // 4. Verify the output
+        let pdf_bytes = final_writer.into_inner();
+
+        let doc_result = lopdf::Document::load_mem(&pdf_bytes);
+        if let Err(e) = &doc_result {
+            let debug_path = std::env::temp_dir().join("failed_hybrid_test.pdf");
+            if !pdf_bytes.is_empty() {
+                std::fs::write(&debug_path, &pdf_bytes).expect("Failed to write debug PDF");
+                panic!("Failed to parse generated PDF: {}. Debug file written to {}", e, debug_path.display());
+            } else {
+                panic!("Failed to parse generated PDF: {}. The generated file was empty.", e);
+            }
+        }
+        let doc = doc_result.unwrap();
+
+
+        let catalog = doc.get_dictionary(doc.trailer.get(b"Root").unwrap().as_reference().unwrap()).unwrap();
+        assert!(catalog.has(b"Outlines"), "PDF should have an Outlines dictionary for the TOC.");
+        assert_eq!(catalog.get(b"PageMode").unwrap(), &lopdf::Object::Name(b"UseOutlines".to_vec()));
+
+        // TOC page, Link page, Heading page.
+        let pages = doc.get_pages();
+        if pages.len() != 3 {
+            let debug_path = std::env::temp_dir().join("failed_hybrid_test.pdf");
+            std::fs::write(&debug_path, &pdf_bytes).expect("Failed to write debug PDF");
+            eprintln!("\n--- TEST FAILURE DEBUG INFO ---");
+            eprintln!("The generated PDF had an incorrect number of pages.");
+            eprintln!("Please check the logs for '[WORKER-X] Finished paginating sequence' and '[HYBRID] Assembling final document'.");
+            eprintln!("The expected layout is: 1 ToC page + 2 Body pages.");
+            eprintln!("The worker should paginate the body into 2 pages.");
+            eprintln!("--- END TEST FAILURE DEBUG INFO ---\n");
+            panic!(
+                "Expected 3 pages in the document, but found {}. Debug file written to {}",
+                pages.len(),
+                debug_path.display()
+            );
+        }
+        assert_eq!(pages.len(), 3, "Expected 3 pages in the document");
+
+        // The link is on the second page (index 1)
+        let page2_id = pages.values().copied().collect::<Vec<_>>()[1];
+        let page2_dict = doc.get_object(page2_id).unwrap().as_dict().unwrap();
+        assert!(page2_dict.has(b"Annots"), "Page 2 should have an Annots array for the hyperlink.");
+
+        let annots_arr = page2_dict.get(b"Annots").unwrap().as_array().unwrap();
+        assert_eq!(annots_arr.len(), 1);
+        let annot_dict = doc.get_object(annots_arr[0].as_reference().unwrap()).unwrap().as_dict().unwrap();
+        assert_eq!(annot_dict.get(b"Subtype").unwrap(), &lopdf::Object::Name(b"Link".to_vec()));
     }
 }

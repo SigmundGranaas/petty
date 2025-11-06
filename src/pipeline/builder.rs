@@ -46,8 +46,18 @@ impl PipelineBuilder {
         let extension = path_ref.extension().and_then(|s| s.to_str()).unwrap_or("");
         let resource_base_path = path_ref.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
         let template_source = fs::read_to_string(path_ref).map_err(|e| PipelineError::Io(io::Error::new(e.kind(), format!("Failed to read template from '{}': {}", path_ref.display(), e))))?;
-        let parser: Box<dyn TemplateParser> = match extension { "xslt" | "xsl" | "fo" => Box::new(XsltParser), "json" => Box::new(JsonParser), _ => return Err(PipelineError::Config(format!("Unsupported template file extension: .{}", extension))) };
+
+        let parser = self.get_parser_for_extension(extension)?;
         self.compiled_template = Some(parser.parse(&template_source, resource_base_path)?);
+        Ok(self)
+    }
+
+    /// Configures the pipeline with a template from a string.
+    /// The `extension` argument is used to select the correct parser ("json", "xslt", etc.).
+    pub fn with_template_source(mut self, source: &str, extension: &str) -> Result<Self, PipelineError> {
+        let resource_base_path = PathBuf::new(); // No base path for string-based templates
+        let parser = self.get_parser_for_extension(extension)?;
+        self.compiled_template = Some(parser.parse(source, resource_base_path)?);
         Ok(self)
     }
 
@@ -116,5 +126,13 @@ impl PipelineBuilder {
             }
         };
         Ok(DocumentPipeline::new(strategy, context))
+    }
+
+    fn get_parser_for_extension(&self, extension: &str) -> Result<Box<dyn TemplateParser>, PipelineError> {
+        match extension {
+            "xslt" | "xsl" | "fo" => Ok(Box::new(XsltParser)),
+            "json" => Ok(Box::new(JsonParser)),
+            _ => Err(PipelineError::Config(format!("Unsupported template file extension: .{}", extension)))
+        }
     }
 }

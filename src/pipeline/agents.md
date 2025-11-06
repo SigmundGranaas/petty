@@ -3,17 +3,21 @@
 This module is the main public API and orchestrator. It connects the `parser`, `layout`, and `render` stages into a high-performance, concurrent pipeline.
 
 ## 1. Purpose & Scope
-- **Mission:** To provide a simple public API (`PipelineBuilder`) for configuring a document generation job and to manage the concurrent execution of parsing, layout, and rendering.
-- **Role:** This module is the "conductor" of the orchestra. It does not contain any specific parsing, layout, or rendering logic itself.
+- **Mission:** To provide a simple public API (`PipelineBuilder`) for configuring a document generation job and to delegate the execution to a selected generation strategy.
+- **Role:** This module is the "conductor" of the orchestra. It sets up the shared `PipelineContext`, selects a `GenerationStrategy` based on user configuration and template features, and then hands off control.
 
 ## 2. Core Rules
-- **Rule 1: Uphold the Concurrent Pipeline Model:** The architecture is a multi-stage, channel-based system.
-    1.  **Producer Stage (`orchestrator.rs`):** Takes an iterator of data items and sends them into the first channel for the workers.
-    2.  **Worker Stage (`worker.rs`):** A pool of threads/tasks that consume from the first channel. Each worker performs the full parse-and-layout process for a single data item, producing a `LaidOutSequence` (pages of positioned elements + resources).
-    3.  **Consumer Stage (`orchestrator.rs`):** A single task that consumes `LaidOutSequence`s from the second channel. It is responsible for re-ordering out-of-order results and feeding them sequentially to the `render` engine.
-- **Rule 2: The Builder is the Entry Point:** The `PipelineBuilder` is the sole public-facing entry point for configuring a pipeline. It is responsible for all setup, including:
-    - Loading and compiling the template (XSLT or JSON).
-    - Discovering and loading fonts.
-    - Selecting the PDF rendering backend.
-- **Rule 3: Decoupling and Orchestration:** This module's responsibility is data flow and concurrency management. It connects the other modules together via traits (`TemplateProcessor`, `DocumentRenderer`) and channels but knows nothing of their internal implementation.
-- **Rule 4: Support for Streaming:** The entire design must support processing an unbounded stream of input data items without holding the entire document in memory. Each "sequence" is processed and rendered, and its memory can then be freed.
+- **Rule 1: Uphold the Strategy Pattern:** The core architecture is based on the Strategy Pattern.
+  1.  **`GenerationStrategy` Enum:** Defines the set of available high-level document assembly algorithms. An enum is used instead of a trait object to accommodate different generic bounds on the data iterator (e.g., `TwoPassStrategy` requires `I: Clone`).
+  2.  **Concrete Strategies (`TwoPassStrategy`, `SinglePassStreamingStrategy`, `HybridBufferedStrategy`):** Each implements a specific algorithm (e.g., full in-memory analysis vs. low-memory streaming vs. temporary file buffering). They are responsible for managing their own concurrency model (producer/worker/consumer).
+  3.  **`DocumentPipeline`:** A simple facade that holds the chosen strategy and delegates the `generate` call to it.
+- **Rule 2: The Builder is the Entry Point:** The `PipelineBuilder` is the sole public-facing entry point for configuration. It is responsible for:
+  - Loading and compiling the template.
+  - Discovering and loading fonts.
+  - Selecting the PDF rendering backend and `GenerationMode`.
+  - Instantiating the correct strategy and creating the `DocumentPipeline`.
+- **Rule 3: Decoupling via Context:** The `PipelineContext` struct holds shared, read-only resources (like the compiled template and font manager) that are passed to the chosen strategy, decoupling the strategy's logic from the initial setup.
+- **Rule 4: Explicit Trade-offs:** The architecture makes the performance and feature trade-offs explicit.
+  - `SinglePassStreamingStrategy` is fast and low-memory but fails on templates with forward references.
+  - `TwoPassStrategy` handles all features correctly but is slower and requires a `Clone`-able data iterator.
+  - `HybridBufferedStrategy` handles all features for non-cloneable iterators by rendering to a temporary file and performing a final merge/fixup pass.

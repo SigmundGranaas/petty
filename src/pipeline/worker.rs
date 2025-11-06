@@ -1,3 +1,5 @@
+// FILE: src/pipeline/worker.rs
+// src/pipeline/worker.rs
 use crate::core::idf::{IRNode, InlineMetadata, InlineNode, NodeMetadata, SharedData};
 use crate::core::layout::{AnchorLocation, LayoutEngine, PositionedElement};
 use crate::core::style::stylesheet::Stylesheet;
@@ -44,11 +46,14 @@ pub(super) fn finish_layout_and_resource_loading(
     let mut ir_nodes_with_ids = ir_nodes;
     ensure_heading_ids(&mut ir_nodes_with_ids);
 
-    // --- TOC Generation Pass ---
-    // Before layout, we must replace any TOC placeholders with actual generated content.
-    // This ensures the layout engine receives concrete nodes (paragraphs, hyperlinks)
-    // which it already knows how to process.
-    let final_ir_nodes = generate_toc_content(ir_nodes_with_ids);
+    // This pre-processing step removes ToC placeholders. For hybrid/streaming strategies,
+    // the placeholder must not be sent to the layout engine, as it can interfere with
+    // page breaking. The final ToC is assembled later by the pipeline strategy itself
+    // based on the collected `toc_entries`.
+    let final_ir_nodes = remove_toc_nodes_recursive(ir_nodes_with_ids);
+
+    // ADDED FOR DEBUGGING: Print the exact IR tree being passed to the layout engine.
+    info!("[WORKER-{}] IR tree passed to layout engine:\n{:#?}", worker_id, &IRNode::Root(final_ir_nodes.clone()));
 
     let tree = IRNode::Root(final_ir_nodes.clone()); // TODO: Avoid clone
 
@@ -67,7 +72,7 @@ pub(super) fn finish_layout_and_resource_loading(
     let layout_start = Instant::now();
     debug!("[WORKER-{}] Paginating sequence tree.", worker_id);
     let (pages, defined_anchors) = layout_engine.paginate(stylesheet, final_ir_nodes)?;
-    debug!("[WORKER-{}] Finished paginating sequence ({} pages) in {:.2?}.", worker_id, pages.len(), layout_start.elapsed());
+    info!("[WORKER-{}] Finished paginating sequence ({} pages) in {:.2?}.", worker_id, pages.len(), layout_start.elapsed());
 
     info!("[WORKER-{}] Finished processing sequence in {:.2?}.", worker_id, total_start.elapsed());
 
@@ -80,136 +85,48 @@ pub(super) fn finish_layout_and_resource_loading(
     })
 }
 
-// --- In-Document Table of Contents Generation ---
+// --- IR Tree Manipulation ---
 
-/// A temporary struct to hold information about headings found in the document.
-#[derive(Debug, Clone)]
-struct HeadingInfo {
-    id: String,
-    text: String,
-    level: u8,
-}
-
-/// Scans the IR tree and replaces any `TableOfContents` nodes with generated content.
-/// This acts as a pre-processing pass before layouting.
-fn generate_toc_content(nodes: Vec<IRNode>) -> Vec<IRNode> {
-    let mut headings = Vec::new();
-    collect_headings_recursive(&nodes, &mut headings);
-
-    // If there are no headings, there's nothing to list in the TOC.
-    // Return the original nodes to avoid replacing the TOC placeholder with nothing.
-    if headings.is_empty() {
-        return nodes;
-    }
-
-    replace_toc_nodes_recursive(nodes, &headings)
-}
-
-/// Recursively traverses the IR tree to find all headings with IDs.
-fn collect_headings_recursive(nodes: &[IRNode], headings: &mut Vec<HeadingInfo>) {
-    for node in nodes {
-        match node {
-            IRNode::Heading { meta, level, children, .. } => {
-                // Only include headings that are not the main title (level > 1) and have an ID.
-                if *level > 1 {
-                    if let Some(id) = &meta.id {
-                        headings.push(HeadingInfo {
-                            id: id.clone(),
-                            text: extract_text_from_inlines(children),
-                            level: *level,
-                        });
-                    }
-                }
-            }
-            // Recurse into any node that can contain other nodes.
-            IRNode::Root(children)
-            | IRNode::Block { children, .. }
-            | IRNode::FlexContainer { children, .. }
-            | IRNode::List { children, .. }
-            | IRNode::ListItem { children, .. } => {
-                collect_headings_recursive(children, headings);
-            }
-            IRNode::Table { header, body, .. } => {
-                if let Some(h) = header {
-                    for row in &h.rows {
-                        for cell in &row.cells {
-                            collect_headings_recursive(&cell.children, headings);
-                        }
-                    }
-                }
-                for row in &body.rows {
-                    for cell in &row.cells {
-                        collect_headings_recursive(&cell.children, headings);
-                    }
-                }
-            }
-            _ => {} // Leaf nodes
-        }
-    }
-}
-
-/// Recursively traverses the IR tree, replacing `TableOfContents` placeholder nodes
-/// with a block of generated paragraphs and hyperlinks.
-fn replace_toc_nodes_recursive(nodes: Vec<IRNode>, headings: &[HeadingInfo]) -> Vec<IRNode> {
-    nodes
-        .into_iter()
-        .flat_map(|node| -> Vec<IRNode> {
-            match node {
-                IRNode::TableOfContents { meta } => {
-                    let toc_lines: Vec<IRNode> = headings
-                        .iter()
-                        .map(|heading| {
-                            // This is the crucial part of the fix: create a Hyperlink node.
-                            let link = InlineNode::Hyperlink {
-                                children: vec![InlineNode::Text(heading.text.clone())],
-                                href: format!("#{}", heading.id),
-                                meta: InlineMetadata::default(),
-                            };
-                            // Each TOC entry is a paragraph containing one link.
-                            IRNode::Paragraph {
-                                children: vec![link],
-                                meta: NodeMetadata::default(), // Further styling can be added here.
-                            }
-                        })
-                        .collect();
-                    // Wrap the generated lines in a single Block node so styles from the
-                    // original <toc> element can be applied to the whole group.
-                    vec![IRNode::Block { children: toc_lines, meta }]
-                }
-                // --- Recurse into nodes that have children, rebuilding them ---
-                IRNode::Root(children) => {
-                    vec![IRNode::Root(replace_toc_nodes_recursive(children, headings))]
-                }
+/// Recursively traverses the IR tree, removing `TableOfContents` placeholder nodes.
+fn remove_toc_nodes_recursive(nodes: Vec<IRNode>) -> Vec<IRNode> {
+    nodes.into_iter().flat_map(|node| {
+        if matches!(node, IRNode::TableOfContents { .. }) {
+            // This node is a ToC, so we return an empty Vec, effectively removing it.
+            vec![]
+        } else {
+            // This is not a ToC node, so we process its children and rebuild it.
+            let new_node = match node {
+                IRNode::Root(children) => IRNode::Root(remove_toc_nodes_recursive(children)),
                 IRNode::Block { children, meta } => {
-                    vec![IRNode::Block {
-                        children: replace_toc_nodes_recursive(children, headings),
+                    IRNode::Block {
+                        children: remove_toc_nodes_recursive(children),
                         meta,
-                    }]
+                    }
                 }
                 IRNode::FlexContainer { children, meta } => {
-                    vec![IRNode::FlexContainer {
-                        children: replace_toc_nodes_recursive(children, headings),
+                    IRNode::FlexContainer {
+                        children: remove_toc_nodes_recursive(children),
                         meta,
-                    }]
+                    }
                 }
                 IRNode::List { children, meta, start } => {
-                    vec![IRNode::List {
-                        children: replace_toc_nodes_recursive(children, headings),
+                    IRNode::List {
+                        children: remove_toc_nodes_recursive(children),
                         meta,
                         start,
-                    }]
+                    }
                 }
                 IRNode::ListItem { children, meta } => {
-                    vec![IRNode::ListItem {
-                        children: replace_toc_nodes_recursive(children, headings),
+                    IRNode::ListItem {
+                        children: remove_toc_nodes_recursive(children),
                         meta,
-                    }]
+                    }
                 }
                 IRNode::Table { header, body, meta, columns } => {
                     let new_header = header.map(|mut h| {
                         for row in &mut h.rows {
                             for cell in &mut row.cells {
-                                let new_children = replace_toc_nodes_recursive(std::mem::take(&mut cell.children), headings);
+                                let new_children = remove_toc_nodes_recursive(std::mem::take(&mut cell.children));
                                 cell.children = new_children;
                             }
                         }
@@ -218,17 +135,19 @@ fn replace_toc_nodes_recursive(nodes: Vec<IRNode>, headings: &[HeadingInfo]) -> 
                     let mut new_body = body;
                     for row in &mut new_body.rows {
                         for cell in &mut row.cells {
-                            let new_children = replace_toc_nodes_recursive(std::mem::take(&mut cell.children), headings);
+                            let new_children = remove_toc_nodes_recursive(std::mem::take(&mut cell.children));
                             cell.children = new_children;
                         }
                     }
-                    vec![IRNode::Table { header: new_header, body: new_body, meta, columns }]
+                    IRNode::Table { header: new_header, body: new_body, meta, columns }
                 }
-                // --- Return leaf nodes (or nodes not recursed into) as is ---
-                leaf_node => vec![leaf_node],
-            }
-        })
-        .collect()
+                // It's a leaf node or a node whose children we don't recurse into for this purpose.
+                leaf_node => leaf_node,
+            };
+            // Return the processed node in a Vec.
+            vec![new_node]
+        }
+    }).collect()
 }
 
 
@@ -240,7 +159,7 @@ fn ensure_heading_ids(nodes: &mut [IRNode]) {
                 if meta.id.is_none() {
                     let text = extract_text_from_inlines(children);
                     let slug = slug::slugify(&text);
-                    let mut rng = rand::rng();
+                    let mut rng = rand::thread_rng();
                     let suffix: u32 = rng.random();
                     meta.id = Some(format!("{}-{}", slug, suffix));
                 }
@@ -276,7 +195,7 @@ fn ensure_heading_ids(nodes: &mut [IRNode]) {
 /// This is used for generating PDF Outlines (Bookmarks), not the in-document TOC.
 fn collect_toc_entries(node: &IRNode, entries: &mut Vec<TocEntry>) {
     match node {
-        IRNode::Heading { meta, level, children, } => {
+        IRNode::Heading { meta, level, children, .. } => {
             if *level > 1 { // Only include sub-headings in the TOC
                 if let Some(id) = &meta.id {
                     entries.push(TocEntry {

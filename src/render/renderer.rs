@@ -39,12 +39,24 @@ pub struct ResolvedAnchor {
     pub y_pos: f32,
 }
 
+/// The location and target of a hyperlink, collected during the first pass.
+#[derive(Debug, Clone)]
+pub struct HyperlinkLocation {
+    /// The 1-based global page index where the link appears.
+    pub global_page_index: usize,
+    /// The rectangular area of the link on the page, in points. [x1, y1, x2, y2]
+    pub rect: [f32; 4],
+    /// The anchor ID this link points to (e.g., "section-1").
+    pub target_id: String,
+}
+
 /// Result of the analysis pass, containing all forward-reference data.
 #[derive(Debug, Clone, Default)]
 pub struct Pass1Result {
     pub resolved_anchors: HashMap<String, ResolvedAnchor>,
     pub toc_entries: Vec<TocEntry>,
     pub total_pages: usize,
+    pub hyperlink_locations: Vec<HyperlinkLocation>,
 }
 
 /// A trait for document renderers, abstracting the PDF-writing primitives.
@@ -63,6 +75,7 @@ pub trait DocumentRenderer<W: Write + Seek + Send> {
     fn render_page_content(
         &mut self,
         elements: Vec<PositionedElement>,
+        font_map: &HashMap<String, String>,
         page_width: f32,
         page_height: f32,
     ) -> Result<ObjectId, RenderError>;

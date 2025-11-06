@@ -3,8 +3,7 @@
 //! annotations and outlines using the `lopdf` library. These are decoupled
 // from the main renderer to be reusable by different generation strategies.
 
-use crate::core::layout::{LayoutElement, LayoutEngine, PositionedElement};
-use crate::core::style::stylesheet::Stylesheet;
+use crate::core::layout::{LayoutElement, PositionedElement};
 use crate::pipeline::worker::LaidOutSequence;
 use crate::render::renderer::{Pass1Result, RenderError};
 use crate::render::streaming_writer::StreamingPdfWriter;
@@ -190,20 +189,11 @@ pub fn build_outlines<W: Write + Seek>(
 /// A simplified version of the page content rendering logic, extracted for reuse.
 pub fn render_elements_to_content(
     elements: Vec<PositionedElement>,
-    _layout_engine: &LayoutEngine,
-    _stylesheet: &Arc<Stylesheet>,
+    font_map: &HashMap<String, String>,
     _page_width: f32,
     page_height: f32,
 ) -> Result<Content, RenderError> {
-    // This function needs font_map, which isn't easily accessible here without
-    // re-creating it. For now, we'll create a temporary one.
-    // This highlights that the rendering context should probably be an object passed around.
-    let mut font_map = HashMap::new();
-    // A bit of a hack: can't access layout_engine's font manager directly.
-    // Let's assume a default font for now.
-    font_map.insert("Helvetica".to_string(), "F1".to_string());
-
-    let mut page_ctx = PageContext::new(page_height, &font_map);
+    let mut page_ctx = PageContext::new(page_height, font_map);
     for el in &elements {
         page_ctx.draw_element(el)?;
     }

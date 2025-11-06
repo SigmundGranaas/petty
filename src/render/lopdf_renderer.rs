@@ -117,14 +117,14 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> 
     fn render_page_content(
         &mut self,
         elements: Vec<PositionedElement>,
+        font_map: &HashMap<String, String>,
         page_width: f32,
         page_height: f32,
     ) -> Result<ObjectId, RenderError> {
         let writer = self.writer.as_mut().ok_or_else(|| RenderError::Other("Document not started".into()))?;
         let content = lopdf_helpers::render_elements_to_content(
             elements,
-            &self.layout_engine,
-            &self.stylesheet,
+            font_map,
             page_width,
             page_height,
         )?;

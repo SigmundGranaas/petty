@@ -1,4 +1,5 @@
 // src/parser/json/processor.rs
+// src/parser/json/processor.rs
 use super::{ast, compiler};
 use super::executor;
 use crate::core::idf::IRNode;
@@ -129,7 +130,7 @@ impl TemplateParser for JsonParser {
     ) -> Result<Arc<dyn CompiledTemplate>, PipelineError> {
         let file_ast: ast::JsonTemplateFile = serde_json::from_str(source)?;
 
-        let stylesheet = Stylesheet {
+        let mut stylesheet = Stylesheet {
             page_masters: file_ast._stylesheet.page_masters,
             styles: file_ast
                 ._stylesheet
@@ -137,8 +138,22 @@ impl TemplateParser for JsonParser {
                 .into_iter()
                 .map(|(k, v)| (k, Arc::new(v)))
                 .collect(),
+            default_page_master_name: file_ast._stylesheet.default_page_master,
             ..Default::default()
         };
+
+        // If no default is specified, first look for one named "default",
+        // then fall back to the first one available. This mirrors the XSLT compiler's behavior
+        // where a master without a name is implicitly named "default", and ensures a default
+        // is always present if any masters are defined.
+        if stylesheet.default_page_master_name.is_none() {
+            if stylesheet.page_masters.contains_key("default") {
+                stylesheet.default_page_master_name = Some("default".to_string());
+            } else {
+                stylesheet.default_page_master_name = stylesheet.page_masters.keys().next().cloned();
+            }
+        }
+
         let definitions_ast = file_ast._stylesheet.definitions;
 
         // Perform feature detection on the AST *before* compiling it.

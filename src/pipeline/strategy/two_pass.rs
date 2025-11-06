@@ -1,12 +1,11 @@
 // src/pipeline/strategy/two_pass.rs
-// src/pipeline/strategy/two_pass.rs
 use super::{PipelineContext};
 use crate::error::PipelineError;
 use crate::pipeline::config::PdfBackend;
 use crate::pipeline::worker::{finish_layout_and_resource_loading, LaidOutSequence, TocEntry};
 use crate::render::lopdf_helpers;
 use crate::render::lopdf_renderer::LopdfRenderer;
-use crate::render::renderer::{Pass1Result, RenderError, ResolvedAnchor};
+use crate::render::renderer::{Pass1Result, RenderError, ResolvedAnchor, HyperlinkLocation};
 use crate::render::DocumentRenderer;
 use async_channel;
 use log::{debug, info, warn};
@@ -89,6 +88,10 @@ impl TwoPassStrategy {
         let mut page_content_ids = Vec::new();
         let mut fixup_elements_by_page: HashMap<usize, Vec<PositionedElement>> = HashMap::new();
         let mut global_page_idx = 0;
+        let font_map: HashMap<String, String> = final_layout_engine.font_manager.db().faces()
+            .enumerate()
+            .map(|(i, face)| (face.post_script_name.clone(), format!("F{}", i + 1)))
+            .collect();
 
         for seq in &sequences {
             renderer.add_resources(&seq.resources)?;
@@ -107,7 +110,7 @@ impl TwoPassStrategy {
                         fixup_elements_by_page.entry(global_page_idx).or_default().push(text_el);
                     }
                 }
-                let content_id = renderer.render_page_content(page_elements.clone(), page_width, page_height)?;
+                let content_id = renderer.render_page_content(page_elements.clone(), &font_map, page_width, page_height)?;
                 page_content_ids.push(content_id);
                 global_page_idx += 1;
             }
@@ -128,7 +131,7 @@ impl TwoPassStrategy {
         {
             let writer = lopdf_renderer.writer_mut().ok_or_else(|| RenderError::Other("Renderer not initialized".to_string()))?;
             for (page_idx, elements) in fixup_elements_by_page {
-                let content = lopdf_helpers::render_elements_to_content(elements, &final_layout_engine, &final_stylesheet, page_width, page_height)?;
+                let content = lopdf_helpers::render_elements_to_content(elements, &font_map, page_width, page_height)?;
                 let content_id = writer.buffer_content_stream(content);
                 fixup_content_streams.insert(page_idx, content_id);
             }
@@ -247,6 +250,11 @@ pub(super) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
     let mut all_page_ids = Vec::new();
     let mut pass1_result = Pass1Result::default();
     let mut global_page_offset = 0;
+    let font_map: HashMap<String, String> = renderer.layout_engine.font_manager.db().faces()
+        .enumerate()
+        .map(|(i, face)| (face.post_script_name.clone(), format!("F{}", i + 1)))
+        .collect();
+
 
     while let Ok((index, result)) = rx2.recv_blocking() {
         buffer.insert(index, result);
@@ -264,6 +272,21 @@ pub(super) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
                         y_pos: anchor.y_pos,
                     });
                 }
+                for (local_page_idx, page_elements) in seq.pages.iter().enumerate() {
+                    let current_global_page_idx = global_page_offset + local_page_idx + 1;
+                    for el in page_elements {
+                        let href = match &el.element { LayoutElement::Text(t) => t.href.as_ref(), _ => None };
+                        if let Some(href_str) = href {
+                            if let Some(target_id) = href_str.strip_prefix('#') {
+                                pass1_result.hyperlink_locations.push(HyperlinkLocation {
+                                    global_page_index: current_global_page_idx,
+                                    rect: [el.x, el.y, el.x + el.width, el.y + el.height],
+                                    target_id: target_id.to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
                 pass1_result.total_pages += seq.pages.len();
                 global_page_offset += seq.pages.len();
             } else {
@@ -277,8 +300,7 @@ pub(super) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
             for page_elements in seq.pages {
                 let content = lopdf_helpers::render_elements_to_content(
                     page_elements,
-                    &renderer.layout_engine,
-                    &renderer.stylesheet,
+                    &font_map,
                     page_width,
                     page_height,
                 )?;

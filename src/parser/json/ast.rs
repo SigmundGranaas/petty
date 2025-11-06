@@ -1,3 +1,4 @@
+// src/parser/json/ast.rs
 //! Defines the Abstract Syntax Tree (AST) for the JSON template format as it is
 //! parsed from the source file by Serde. This is the **input** representation.
 
@@ -227,6 +228,8 @@ pub struct JsonTemplateFile {
 #[derive(Deserialize, Serialize, Debug, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct StylesheetDef {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_page_master: Option<String>,
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub page_masters: HashMap<String, PageLayout>,
