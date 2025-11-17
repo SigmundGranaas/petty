@@ -1,5 +1,5 @@
 // src/core/idf/mod.rs
-// FILE: src/core/idf/mod.rs
+// src/core/idf/mod.rs
 
 //! Defines the Intermediate Representation (IR) for the Petty PDF engine.
 //!
@@ -109,8 +109,8 @@ pub enum IRNode {
     /// A semantic heading element.
     Heading { meta: NodeMetadata, level: u8, children: Vec<InlineNode> },
 
-    /// A placeholder for a generated table of contents.
-    TableOfContents { meta: NodeMetadata },
+    /// A marker for an index term, to be collected by the layout engine.
+    IndexMarker { meta: NodeMetadata, term: String },
 
     /// Inserts a hard page break, optionally switching to a new page master.
     /// If `master_name` is None, the current page master is used for the next page.
@@ -191,9 +191,11 @@ impl fmt::Debug for IRNode {
                 }
                 dbg.finish()
             }
-            IRNode::TableOfContents { meta } => {
-                f.debug_struct("TableOfContents").field("meta", meta).finish()
-            }
+            IRNode::IndexMarker { meta, term } => f
+                .debug_struct("IndexMarker")
+                .field("term", term)
+                .field("meta", meta)
+                .finish(),
             IRNode::PageBreak { master_name } => {
                 let mut dbg = f.debug_struct("PageBreak");
                 if let Some(val) = master_name {
@@ -231,7 +233,7 @@ impl_style_accessors!(
     IRNode::ListItem,
     IRNode::Table,
     IRNode::Heading,
-    IRNode::TableOfContents
+    IRNode::IndexMarker
 );
 
 // --- Table Component Structs ---
@@ -424,7 +426,7 @@ impl IRNode {
             | IRNode::ListItem { meta, .. }
             | IRNode::Table { meta, .. }
             | IRNode::Heading { meta, .. }
-            | IRNode::TableOfContents { meta, .. } => Some(meta),
+            | IRNode::IndexMarker { meta, .. } => Some(meta),
             _ => None,
         }
     }

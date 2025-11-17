@@ -20,7 +20,11 @@ pub struct ListNode {
 }
 
 impl ListNode {
-    pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Self {
+    pub fn new(
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+    ) -> Self {
         Self::new_with_depth(node, engine, parent_style, 0)
     }
 

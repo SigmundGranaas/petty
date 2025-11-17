@@ -137,6 +137,7 @@ impl LayoutNode for TableNode {
             last_v_margin: 0.0,
             local_page_index: ctx.local_page_index,
             defined_anchors: ctx.defined_anchors,
+            index_entries: ctx.index_entries,
         };
 
         let num_cols = self.columns.len();
@@ -270,6 +271,7 @@ impl TableRowNode {
                 last_v_margin: 0.0,
                 local_page_index: ctx.local_page_index,
                 defined_anchors: ctx.defined_anchors,
+                index_entries: ctx.index_entries,
             };
             cell.layout(&mut cell_ctx)?;
 

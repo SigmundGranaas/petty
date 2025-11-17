@@ -1,20 +1,27 @@
+// src/pipeline/builder.rs
 use super::config::{GenerationMode, PdfBackend};
 use super::orchestrator::DocumentPipeline;
 use crate::core::layout::FontManager;
 use crate::error::PipelineError;
-use crate::parser::processor::{CompiledTemplate, TemplateParser};
+use crate::parser::json::processor::JsonParser;
+use crate::parser::processor::{TemplateFeatures, TemplateParser};
 use crate::parser::xslt::processor::XsltParser;
+use crate::pipeline::provider::metadata::MetadataGeneratingProvider;
+use crate::pipeline::provider::passthrough::PassThroughProvider;
+use crate::pipeline::provider::Provider;
+use crate::pipeline::renderer::composing::ComposingRenderer;
+use crate::pipeline::renderer::streaming::SinglePassStreamingRenderer;
+use crate::pipeline::renderer::Renderer;
 use crate::templating::Template;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use crate::parser::json::processor::JsonParser;
-use crate::pipeline::strategy::{PipelineContext, GenerationStrategy, TwoPassStrategy, SinglePassStreamingStrategy, HybridBufferedStrategy};
+use crate::pipeline::context::PipelineContext;
 
 /// A builder for creating a `DocumentPipeline`.
 pub struct PipelineBuilder {
-    compiled_template: Option<Arc<dyn CompiledTemplate>>,
+    template_features: Option<TemplateFeatures>,
     pdf_backend: PdfBackend,
     font_manager: FontManager,
     generation_mode: GenerationMode,
@@ -26,7 +33,7 @@ impl Default for PipelineBuilder {
         let mut font_manager = FontManager::new();
         font_manager.load_fallback_font();
         Self {
-            compiled_template: None,
+            template_features: None,
             pdf_backend: Default::default(),
             font_manager,
             generation_mode: Default::default(),
@@ -48,7 +55,7 @@ impl PipelineBuilder {
         let template_source = fs::read_to_string(path_ref).map_err(|e| PipelineError::Io(io::Error::new(e.kind(), format!("Failed to read template from '{}': {}", path_ref.display(), e))))?;
 
         let parser = self.get_parser_for_extension(extension)?;
-        self.compiled_template = Some(parser.parse(&template_source, resource_base_path)?);
+        self.template_features = Some(parser.parse(&template_source, resource_base_path)?);
         Ok(self)
     }
 
@@ -57,7 +64,7 @@ impl PipelineBuilder {
     pub fn with_template_source(mut self, source: &str, extension: &str) -> Result<Self, PipelineError> {
         let resource_base_path = PathBuf::new(); // No base path for string-based templates
         let parser = self.get_parser_for_extension(extension)?;
-        self.compiled_template = Some(parser.parse(source, resource_base_path)?);
+        self.template_features = Some(parser.parse(source, resource_base_path)?);
         Ok(self)
     }
 
@@ -66,7 +73,7 @@ impl PipelineBuilder {
         let template_source = template.to_json()?;
         let parser = JsonParser;
         let resource_base_path = PathBuf::new();
-        self.compiled_template = Some(parser.parse(&template_source, resource_base_path)?);
+        self.template_features = Some(parser.parse(&template_source, resource_base_path)?);
         Ok(self)
     }
 
@@ -91,40 +98,56 @@ impl PipelineBuilder {
     /// Consumes the builder and creates the `DocumentPipeline`.
     /// This is where the generation strategy is selected and instantiated.
     pub fn build(mut self) -> Result<DocumentPipeline, PipelineError> {
-        let compiled_template = self.compiled_template.take().ok_or_else(|| PipelineError::Config("No template has been configured. Use `with_template_file` or `with_template_object`.".to_string()))?;
+        let template_features = self.template_features.take().ok_or_else(|| {
+            PipelineError::Config(
+                "No template has been configured. Use `with_template_file` or `with_template_object`."
+                    .to_string(),
+            )
+        })?;
+
+        let (provider, renderer) = self.select_components(&template_features)?;
 
         let context = Arc::new(PipelineContext {
-            compiled_template,
+            compiled_template: template_features.main_template,
+            role_templates: Arc::new(template_features.role_templates),
             font_manager: Arc::new(self.font_manager),
         });
 
-        let strategy: GenerationStrategy = match self.generation_mode {
-            GenerationMode::ForceSinglePass => {
-                log::info!("Forcing Single-Pass strategy.");
-                GenerationStrategy::SinglePass(SinglePassStreamingStrategy::new(self.pdf_backend))
-            }
-            GenerationMode::ForceTwoPass => {
-                log::info!("Forcing Two-Pass strategy.");
-                GenerationStrategy::TwoPass(TwoPassStrategy::new(self.pdf_backend))
-            }
-            GenerationMode::ForceHybrid => {
-                log::info!("Forcing Hybrid Buffered strategy.");
-                GenerationStrategy::Hybrid(HybridBufferedStrategy::new(self.pdf_backend))
+        Ok(DocumentPipeline::new(provider, renderer, context))
+    }
+
+    fn select_components(
+        &self,
+        features: &TemplateFeatures,
+    ) -> Result<(Provider, Renderer), PipelineError> {
+        let provider: Provider;
+        let renderer: Renderer;
+
+        match self.generation_mode {
+            GenerationMode::ForceStreaming => {
+                log::info!("Forcing Streaming pipeline.");
+                provider = Provider::PassThrough(PassThroughProvider);
+                renderer = Renderer::Streaming(SinglePassStreamingRenderer::new(self.pdf_backend));
             }
             GenerationMode::Auto => {
-                let features = context.compiled_template.features();
-                if features.has_table_of_contents || features.has_page_number_placeholders {
-                    // NEW BEHAVIOR: Default to Hybrid, the safest choice.
-                    log::info!("Template requires forward references. Automatically selecting Hybrid strategy.");
-                    log::info!("For better performance with large, clonable datasets, use ForceTwoPass mode and the `generate_from_clonable` method.");
-                    GenerationStrategy::Hybrid(HybridBufferedStrategy::new(self.pdf_backend))
+                let flags = features.main_template.features();
+                if !features.role_templates.is_empty()
+                    || flags.uses_index_function
+                    || flags.has_table_of_contents
+                    || flags.has_page_number_placeholders
+                {
+                    log::info!("Template uses advanced features. Selecting Metadata Generating pipeline.");
+                    provider = Provider::Metadata(MetadataGeneratingProvider);
+                    renderer = Renderer::Composing(ComposingRenderer);
                 } else {
-                    log::info!("Template is streamable. Automatically selecting Single-Pass strategy.");
-                    GenerationStrategy::SinglePass(SinglePassStreamingStrategy::new(self.pdf_backend))
+                    log::info!("Template is streamable. Selecting simple Streaming pipeline.");
+                    provider = Provider::PassThrough(PassThroughProvider);
+                    renderer = Renderer::Streaming(SinglePassStreamingRenderer::new(self.pdf_backend));
                 }
             }
-        };
-        Ok(DocumentPipeline::new(strategy, context))
+        }
+
+        Ok((provider, renderer))
     }
 
     fn get_parser_for_extension(&self, extension: &str) -> Result<Box<dyn TemplateParser>, PipelineError> {

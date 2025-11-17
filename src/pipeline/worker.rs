@@ -1,7 +1,7 @@
-// FILE: src/pipeline/worker.rs
 // src/pipeline/worker.rs
-use crate::core::idf::{IRNode, InlineMetadata, InlineNode, NodeMetadata, SharedData};
-use crate::core::layout::{AnchorLocation, LayoutEngine, PositionedElement};
+// src/pipeline/worker.rs
+use crate::core::idf::{IRNode, InlineNode, SharedData};
+use crate::core::layout::{AnchorLocation, IndexEntry, LayoutEngine, PositionedElement};
 use crate::core::style::stylesheet::Stylesheet;
 use crate::error::PipelineError;
 use log::{debug, info};
@@ -22,6 +22,7 @@ pub struct LaidOutSequence {
     pub resources: HashMap<String, SharedData>,
     pub defined_anchors: HashMap<String, AnchorLocation>,
     pub toc_entries: Vec<TocEntry>,
+    pub index_entries: HashMap<String, Vec<IndexEntry>>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -71,7 +72,8 @@ pub(super) fn finish_layout_and_resource_loading(
 
     let layout_start = Instant::now();
     debug!("[WORKER-{}] Paginating sequence tree.", worker_id);
-    let (pages, defined_anchors) = layout_engine.paginate(stylesheet, final_ir_nodes)?;
+    let (pages, defined_anchors, index_entries) =
+        layout_engine.paginate(stylesheet, final_ir_nodes)?;
     info!("[WORKER-{}] Finished paginating sequence ({} pages) in {:.2?}.", worker_id, pages.len(), layout_start.elapsed());
 
     info!("[WORKER-{}] Finished processing sequence in {:.2?}.", worker_id, total_start.elapsed());
@@ -82,6 +84,7 @@ pub(super) fn finish_layout_and_resource_loading(
         resources,
         defined_anchors,
         toc_entries,
+        index_entries,
     })
 }
 
@@ -121,6 +124,7 @@ fn ensure_heading_ids(nodes: &mut [IRNode]) {
                     }
                 }
             }
+            IRNode::IndexMarker { .. } => {}
             _ => {}
         }
     }
@@ -132,7 +136,8 @@ fn ensure_heading_ids(nodes: &mut [IRNode]) {
 fn collect_toc_entries(node: &IRNode, entries: &mut Vec<TocEntry>) {
     match node {
         IRNode::Heading { meta, level, children, .. } => {
-            if *level > 1 { // Only include sub-headings in the TOC
+            if *level > 0 {
+                // Only include sub-headings in the TOC
                 if let Some(id) = &meta.id {
                     entries.push(TocEntry {
                         level: *level,
@@ -225,7 +230,8 @@ fn collect_image_uris(node: &IRNode, uris: &mut HashSet<String>) {
                 }
             }
         }
-        IRNode::PageBreak { .. } | IRNode::TableOfContents { .. } => {}
+        IRNode::IndexMarker { .. } => {}
+        IRNode::PageBreak { .. } => {}
     }
 }
 
@@ -274,6 +280,7 @@ fn collect_and_load_resources(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::idf::NodeMetadata;
     use tempfile::tempdir;
 
     #[test]

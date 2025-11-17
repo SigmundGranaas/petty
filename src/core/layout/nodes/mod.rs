@@ -4,6 +4,7 @@ pub mod block;
 pub mod flex;
 pub mod heading;
 pub mod image;
+pub mod index_marker;
 pub mod list;
 pub mod list_item;
 pub mod page_break;
@@ -16,5 +17,7 @@ mod block_test;
 mod flex_test;
 #[cfg(test)]
 mod image_test;
+#[cfg(test)]
+mod index_marker_test;
 #[cfg(test)]
 mod table_test;

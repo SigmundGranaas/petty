@@ -10,7 +10,7 @@ pub enum LayoutError {
 
 // Re-export the main entry point and key types for external use.
 pub use self::engine::LayoutEngine;
-pub use self::node::AnchorLocation;
+pub use self::node::{AnchorLocation, IndexEntry};
 
 // Declare the modules that make up the layout engine.
 mod elements;

@@ -62,7 +62,14 @@ pub(super) fn draw_text<W: io::Write + Send>(
         page.state.current_font_size = Some(style.font_size);
     }
 
-    let baseline_y = positioned.y + style.font_size * 0.8;
+    let line_height = positioned.height;
+    let font_size = style.font_size;
+    // Heuristic to vertically center the font's em-box within the line-box and find the baseline.
+    // This better respects the `line-height` property from the stylesheet.
+    let leading = line_height - font_size;
+    let ascent_approx = font_size * 0.8; // A common heuristic for font ascent.
+    let baseline_y = positioned.y + (leading / 2.0) + ascent_approx;
+
     let pdf_y = page.page_height_pt - baseline_y;
     let matrix = TextMatrix::Translate(Pt(positioned.x), Pt(pdf_y));
     page.ops.push(Op::SetTextMatrix { matrix });
@@ -128,7 +135,12 @@ pub(super) fn draw_text_stateless(
         state.current_font_size = Some(style.font_size);
     }
 
-    let baseline_y = positioned.y + style.font_size * 0.8;
+    let line_height = positioned.height;
+    let font_size = style.font_size;
+    let leading = line_height - font_size;
+    let ascent_approx = font_size * 0.8;
+    let baseline_y = positioned.y + (leading / 2.0) + ascent_approx;
+
     let pdf_y = ctx.page_height_pt - baseline_y;
     let matrix = TextMatrix::Translate(Pt(positioned.x), Pt(pdf_y));
     ops.push(Op::SetTextMatrix { matrix });

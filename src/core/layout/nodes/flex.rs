@@ -1,4 +1,3 @@
-use crate::core::idf::IRNode;
 use crate::core::layout::node::{AnchorLocation, LayoutContext, LayoutNode, LayoutResult};
 use crate::core::layout::nodes::block::draw_background_and_borders;
 use crate::core::layout::style::ComputedStyle;
@@ -17,17 +16,13 @@ pub struct FlexNode {
 }
 
 impl FlexNode {
-    pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Self {
-        let style = engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
-        let (id, ir_children) = match node {
-            IRNode::FlexContainer { meta, children } => (meta.id.clone(), children),
-            _ => panic!("FlexNode must be created from an IRNode::FlexContainer"),
-        };
-        let children = ir_children
-            .iter()
-            .map(|c| engine.build_layout_node_tree(c, style.clone()))
-            .collect();
-
+    /// Creates a new `FlexNode` from pre-built child `LayoutNode`s.
+    /// This is used by the central `LayoutEngine` tree-building logic.
+    pub fn new_from_children(
+        id: Option<String>,
+        children: Vec<Box<dyn LayoutNode>>,
+        style: Arc<ComputedStyle>,
+    ) -> Self {
         Self {
             id,
             children,
@@ -108,14 +103,25 @@ impl LayoutNode for FlexNode {
 
         // --- Box Model Setup ---
         let margin_to_add = self.style.margin.top.max(ctx.last_v_margin);
-        if !ctx.is_empty() && margin_to_add > ctx.available_height() {
+        let border_top_width = self.style.border_top.as_ref().map_or(0.0, |b| b.width);
+        let border_bottom_width = self.style.border_bottom.as_ref().map_or(0.0, |b| b.width);
+        let padding_y = self.style.padding.top + self.style.padding.bottom;
+        let total_content_height: f32 = self.lines.iter().map(|line| line.cross_size).sum();
+
+        let required_height = margin_to_add
+            + border_top_width
+            + padding_y
+            + total_content_height
+            + border_bottom_width
+            + self.style.margin.bottom;
+
+        if required_height > ctx.available_height() && (!ctx.is_empty() || ctx.cursor.1 > 0.0) {
             return Ok(LayoutResult::Partial(Box::new(self.clone())));
         }
+
         ctx.advance_cursor(margin_to_add);
         ctx.last_v_margin = 0.0;
 
-        let border_top_width = self.style.border_top.as_ref().map_or(0.0, |b| b.width);
-        let border_bottom_width = self.style.border_bottom.as_ref().map_or(0.0, |b| b.width);
         let border_left_width = self.style.border_left.as_ref().map_or(0.0, |b| b.width);
         let border_right_width = self.style.border_right.as_ref().map_or(0.0, |b| b.width);
 
@@ -214,6 +220,7 @@ impl LayoutNode for FlexNode {
                     last_v_margin: 0.0,
                     local_page_index: ctx.local_page_index,
                     defined_anchors: ctx.defined_anchors,
+                    index_entries: ctx.index_entries,
                 };
 
                 match self.children[item.original_index].layout(&mut item_ctx) {

@@ -1,12 +1,13 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/test_utils.rs
 #![cfg(test)]
 
 use crate::core::idf::{IRNode, InlineNode, NodeMetadata};
 use crate::core::layout::engine::LayoutEngine;
 use crate::core::layout::fonts::FontManager;
+use crate::core::layout::node::{AnchorLocation, IndexEntry};
 use crate::core::layout::{LayoutElement, PositionedElement, TextElement};
 use crate::core::style::stylesheet::Stylesheet;
 use crate::error::PipelineError;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Creates a default layout engine for testing purposes.
@@ -20,9 +21,16 @@ pub fn create_test_engine() -> LayoutEngine {
 pub fn paginate_test_nodes(
     stylesheet: Stylesheet,
     nodes: Vec<IRNode>,
-) -> Result<Vec<Vec<PositionedElement>>, PipelineError> {
+) -> Result<
+    (
+        Vec<Vec<PositionedElement>>,
+        HashMap<String, AnchorLocation>,
+        HashMap<String, Vec<IndexEntry>>,
+    ),
+    PipelineError,
+> {
     let engine = create_test_engine();
-    engine.paginate(&stylesheet, nodes).map(|(pages, _anchors)| pages)
+    engine.paginate(&stylesheet, nodes)
 }
 
 /// Creates a simple paragraph node for testing, converting `\n` to line breaks.

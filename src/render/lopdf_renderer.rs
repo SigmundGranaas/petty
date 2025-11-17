@@ -1,4 +1,5 @@
 // src/render/lopdf_renderer.rs
+// src/render/lopdf_renderer.rs
 use super::renderer::{DocumentRenderer, RenderError};
 use super::streaming_writer::StreamingPdfWriter;
 use crate::core::idf::SharedData;
@@ -76,8 +77,9 @@ impl<W: Write + Seek + Send> LopdfRenderer<W> {
 }
 // This implementation is specialized for when the writer is a `Cursor`.
 impl LopdfRenderer<Cursor<Vec<u8>>> {
-    /// A specialized finish method for the hybrid strategy that bypasses the `final_writer`
-    /// and returns the generated PDF bytes directly from the internal buffer.
+    /// A specialized finish method for in-memory rendering that returns the
+    /// generated PDF bytes directly from the internal buffer. This is used by
+    /// the ComposingRenderer to generate role templates in memory.
     pub fn finish_into_buffer(mut self, page_ids: Vec<ObjectId>) -> Result<Vec<u8>, RenderError> {
         if let Some(mut writer) = self.writer.take() {
             writer.set_page_ids(page_ids);

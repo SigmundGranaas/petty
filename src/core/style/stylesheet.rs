@@ -61,6 +61,11 @@ impl Stylesheet {
                 &FALLBACK_LAYOUT
             })
     }
+
+    /// Looks up a style by its class name.
+    pub fn get_style_by_class_name(&self, class_name: &str) -> Option<&Arc<ElementStyle>> {
+        self.styles.get(class_name)
+    }
 }
 
 #[derive(Deserialize, Serialize, Debug, Clone, Default)]

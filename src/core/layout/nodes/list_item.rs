@@ -224,6 +224,7 @@ impl LayoutNode for ListItemNode {
             last_v_margin: 0.0, // List items create a new block formatting context
             local_page_index: ctx.local_page_index,
             defined_anchors: ctx.defined_anchors,
+            index_entries: ctx.index_entries,
         };
 
         for (i, child) in self.children.iter_mut().enumerate() {

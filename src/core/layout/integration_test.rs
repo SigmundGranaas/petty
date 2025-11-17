@@ -1,10 +1,8 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/integration_test.rs
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/integration_test.rs
+// src/core/layout/integration_test.rs
 use crate::core::idf::{IRNode, InlineNode, NodeMetadata};
 use crate::core::layout::test_utils::{
     create_paragraph, create_test_engine, find_first_text_box_with_content,
 };
-use crate::core::layout::LayoutElement;
 use crate::core::style::dimension::{Dimension, Margins, PageSize};
 use crate::core::style::stylesheet::{ElementStyle, PageLayout, Stylesheet};
 use std::collections::HashMap;
@@ -44,7 +42,7 @@ fn test_nested_blocks_with_padding_and_margin() {
         }],
     }];
 
-    let (pages, _) = create_test_engine().paginate(&stylesheet, nodes).unwrap();
+    let (pages, _, _) = create_test_engine().paginate(&stylesheet, nodes).unwrap();
     let page1 = &pages[0];
 
     assert_eq!(page1.len(), 1);
@@ -110,7 +108,7 @@ fn test_flex_container_with_percentages() {
         ],
     }];
 
-    let (pages, _) = create_test_engine().paginate(&stylesheet, nodes).unwrap();
+    let (pages, _, _) = create_test_engine().paginate(&stylesheet, nodes).unwrap();
     let page1 = &pages[0];
 
     let left_text = find_first_text_box_with_content(page1, "Left").unwrap();

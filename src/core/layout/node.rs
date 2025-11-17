@@ -14,6 +14,15 @@ pub struct AnchorLocation {
     pub y_pos: f32,
 }
 
+/// Stores the resolved location of an index term.
+#[derive(Debug, Clone)]
+pub struct IndexEntry {
+    /// The 0-based index of the page within the current sequence.
+    pub local_page_index: usize,
+    /// The Y position of the term on that page, in points.
+    pub y_pos: f32,
+}
+
 /// The canvas given by a parent to a child for a single layout operation.
 ///
 /// This struct holds all the contextual information a `LayoutNode` needs to
@@ -34,6 +43,8 @@ pub struct LayoutContext<'a> {
     pub local_page_index: usize,
     /// A mutable collection of all anchors defined in the document.
     pub defined_anchors: &'a RefCell<HashMap<String, AnchorLocation>>,
+    /// A mutable collection of all index terms found in the document.
+    pub index_entries: &'a RefCell<HashMap<String, Vec<IndexEntry>>>,
 }
 
 impl<'a> LayoutContext<'a> {
@@ -43,6 +54,7 @@ impl<'a> LayoutContext<'a> {
         bounds: geom::Rect,
         elements: &'a RefCell<Vec<PositionedElement>>,
         defined_anchors: &'a RefCell<HashMap<String, AnchorLocation>>,
+        index_entries: &'a RefCell<HashMap<String, Vec<IndexEntry>>>,
     ) -> Self {
         Self {
             engine,
@@ -52,6 +64,7 @@ impl<'a> LayoutContext<'a> {
             last_v_margin: 0.0,
             local_page_index: 0,
             defined_anchors,
+            index_entries,
         }
     }
 

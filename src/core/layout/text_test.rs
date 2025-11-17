@@ -1,4 +1,4 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/text_test.rs
+// src/core/layout/text_test.rs
 #![cfg(test)]
 
 use crate::core::idf::{IRNode, InlineNode, NodeMetadata};
@@ -27,7 +27,7 @@ fn test_text_wrapping() {
     let text = "This is a very very long line of text that is absolutely guaranteed to wrap at least once.";
     let nodes = vec![create_paragraph(text)];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
 
     // The text will be broken into multiple PositionedElements (runs).
@@ -72,7 +72,7 @@ fn test_text_alignment_center() {
     };
 
     let nodes = vec![para];
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
 
     let text_el = find_first_text_box_with_content(page1, text).unwrap();
@@ -89,6 +89,61 @@ fn test_text_alignment_center() {
         expected_x,
         text_el.x
     );
+}
+
+#[test]
+fn test_text_justification() {
+    let stylesheet = Stylesheet {
+        page_masters: HashMap::from([(
+            "master".to_string(),
+            PageLayout {
+                // Use a smaller width to force a line wrap where the test expects it.
+                // With width=150, content_width=130.
+                // width("First word on this ") is ~85pt. "+ justified" is ~50pt. Total ~135pt > 130.
+                // So the line wrap will be before "justified", making "this" the last word on the line.
+                size: PageSize::Custom { width: 150.0, height: 500.0 },
+                margins: Some(Margins::all(10.0)),
+                ..Default::default()
+            },
+        )]),
+        default_page_master_name: Some("master".to_string()),
+        ..Default::default()
+    };
+    let content_width = 130.0;
+    let text = "First word on this justified line.";
+    let style_override = ElementStyle { text_align: Some(TextAlign::Justify), ..Default::default() };
+    let para = IRNode::Paragraph {
+        meta: NodeMetadata { style_override: Some(style_override), ..Default::default() },
+        children: vec![InlineNode::Text(text.to_string())],
+    };
+    let nodes = vec![para];
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let page1 = &pages[0];
+
+    let word1 = find_first_text_box_with_content(page1, "First").unwrap();
+    let word2 = find_first_text_box_with_content(page1, "word").unwrap();
+    let word4 = find_first_text_box_with_content(page1, "this").unwrap();
+
+    // Check that all words are on the first line
+    assert!((word1.y - word4.y).abs() < 0.1);
+
+    // First word at left margin
+    assert!((word1.x - 10.0).abs() < 0.1);
+
+    // End of last word at right margin
+    let end_x = word4.x + word4.width;
+    assert!((end_x - (10.0 + content_width)).abs() < 1.0, "Last word should end at right margin. Got {}", end_x);
+
+    // Spaces are stretched
+    let engine = crate::core::layout::test_utils::create_test_engine();
+    let style = engine.get_default_style();
+    let normal_space_width = engine.measure_text_width(" ", &style);
+    let space1_width = word2.x - (word1.x + word1.width);
+    assert!(space1_width > normal_space_width, "Space should be stretched.");
+
+    // Last line is not justified
+    let last_line_word = find_first_text_box_with_content(page1, "justified").unwrap();
+    assert!((last_line_word.x - 10.0).abs() < 0.1, "Last line should be left-aligned.");
 }
 
 #[test]
@@ -117,20 +172,19 @@ fn test_widow_control() {
         panic!("Expected a paragraph node");
     }
 
-    let pages = paginate_test_nodes(stylesheet, vec![para]).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, vec![para]).unwrap();
 
     assert_eq!(pages.len(), 2, "Expected paragraph to split into two pages");
 
     // Page 1 should only have 2 lines due to widow control.
     let page1 = &pages[0];
-    assert_eq!(page1.len(), 2, "Page 1 should have 2 lines");
     assert!(find_first_text_box_with_content(page1, "Line 1").is_some());
     assert!(find_first_text_box_with_content(page1, "Line 2").is_some());
     assert!(find_first_text_box_with_content(page1, "Line 3").is_none());
+    // Checking element count is tricky due to runs. Content check is better.
 
     // Page 2 should have the remaining 2 lines.
     let page2 = &pages[1];
-    assert_eq!(page2.len(), 2, "Page 2 should have 2 lines");
     assert!(find_first_text_box_with_content(page2, "Line 3").is_some());
     assert!(find_first_text_box_with_content(page2, "Line 4").is_some());
 }
@@ -168,7 +222,7 @@ fn test_orphan_control() {
         para2,
     ];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
 
     assert_eq!(pages.len(), 2, "Expected content to split into two pages");
 

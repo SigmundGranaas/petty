@@ -76,7 +76,7 @@ fn test_table_basic_layout() {
     let table = create_test_table(2);
     let nodes = vec![table];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
 
     let h1 = find_first_text_box_with_content(page1, "Header 1").unwrap();
@@ -100,7 +100,7 @@ fn test_table_splits_across_pages_and_repeats_header() {
     let table = create_test_table(5);
     let nodes = vec![table];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     assert_eq!(pages.len(), 3, "Expected table to split into 3 pages");
 
     let page1 = &pages[0];
@@ -146,7 +146,7 @@ fn test_table_colspan_and_rowspan() {
             ]}
         ]}),
     };
-    let pages = paginate_test_nodes(stylesheet, vec![table]).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, vec![table]).unwrap();
     let page1 = &pages[0];
 
     let cell_a = find_first_text_box_with_content(page1, "A").unwrap();

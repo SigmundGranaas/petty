@@ -1,4 +1,5 @@
 // src/parser/json/ast.rs
+// src/parser/json/ast.rs
 //! Defines the Abstract Syntax Tree (AST) for the JSON template format as it is
 //! parsed from the source file by Serde. This is the **input** representation.
 
@@ -55,12 +56,19 @@ pub enum JsonNode {
     Table(JsonTable),
     Heading(JsonHeading),
     TableOfContents(JsonContainer),
+    IndexMarker {
+        term: String,
+    },
     // Inline-level variants
     Text {
         content: String,
     },
     StyledSpan(JsonInlineContainer),
     Hyperlink(JsonHyperlink),
+    PageReference {
+        #[serde(rename = "targetId")]
+        target_id: String,
+    },
     InlineImage(JsonImage),
     LineBreak,
     // New control-flow nodes
@@ -222,6 +230,8 @@ fn default_heading_level() -> u8 {
 #[derive(Deserialize, Serialize, Debug)]
 pub struct JsonTemplateFile {
     pub _stylesheet: StylesheetDef,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub _roles: HashMap<String, TemplateNode>,
     pub _template: TemplateNode,
 }
 

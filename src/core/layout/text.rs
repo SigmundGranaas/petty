@@ -1,3 +1,4 @@
+// src/core/layout/text.rs
 // FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/text.rs
 use crate::core::idf::InlineNode;
 use crate::core::layout::engine::LayoutEngine;
@@ -121,9 +122,14 @@ pub fn atomize_inlines(
             InlineNode::PageReference { target_id, meta, children } => {
                 let style = engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), parent_style);
 
-                // A PageReference implies a link to its target page.
-                // It can be nested in another link, in which case the outer link wins.
-                let href = parent_href.clone().or_else(|| Some(format!("#{}", target_id)));
+                let href = if children.is_empty() {
+                    // A page number placeholder is not a link unless it is explicitly wrapped
+                    // in a Hyperlink node.
+                    parent_href.clone()
+                } else {
+                    // A cross-reference with text content should be a link.
+                    parent_href.clone().or_else(|| Some(format!("#{}", target_id)))
+                };
 
                 atoms.extend(atomize_inlines(engine, children, &style, href.clone()));
 

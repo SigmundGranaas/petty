@@ -27,32 +27,10 @@ impl BlockNode {
             IRNode::ListItem { meta, children } => (meta.id.clone(), children),
             _ => panic!("BlockNode must be created from a compatible IRNode"),
         };
-        let children = ir_children
-            .iter()
-            .map(|child_ir| engine.build_layout_node_tree(child_ir, style.clone()))
-            .collect();
+        // In the refactored engine, children are built by the engine and passed in.
+        // This constructor is now primarily for nodes that manage their own children, like ListItem.
+        let children = engine.build_layout_node_children(ir_children, style.clone());
         Self { id, children, style }
-    }
-
-    pub fn new_root(
-        node: &IRNode,
-        engine: &LayoutEngine,
-        _parent_style: Arc<ComputedStyle>,
-    ) -> Self {
-        let style = engine.get_default_style(); // Root has no specific style
-        let ir_children = match node {
-            IRNode::Root(children) => children,
-            _ => panic!("BlockNode (root) must be created from an IRNode::Root"),
-        };
-        let children = ir_children
-            .iter()
-            .map(|child_ir| engine.build_layout_node_tree(child_ir, style.clone()))
-            .collect();
-        Self {
-            id: None,
-            children,
-            style,
-        }
     }
 }
 
@@ -167,6 +145,7 @@ impl LayoutNode for BlockNode {
             last_v_margin: 0.0,
             local_page_index: ctx.local_page_index,
             defined_anchors: ctx.defined_anchors,
+            index_entries: ctx.index_entries,
         };
 
         for (i, child) in self.children.iter_mut().enumerate() {

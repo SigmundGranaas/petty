@@ -1,13 +1,15 @@
 // src/parser/xslt/processor.rs
+// src/parser/xslt/processor.rs
 use super::{ast, compiler};
 use super::executor::{self, ExecutionError};
 use crate::core::idf::IRNode;
 use crate::core::style::stylesheet::Stylesheet;
 use crate::error::PipelineError;
-use crate::parser::processor::{CompiledTemplate, DataSourceFormat, ExecutionConfig, TemplateParser, TemplateFeatures};
+use crate::parser::processor::{CompiledTemplate, DataSourceFormat, ExecutionConfig, TemplateParser, TemplateFeatures, TemplateFlags};
 use crate::parser::xslt::json_ds::JsonVDocument;
 use crate::parser::xslt::xml::XmlDocument;
 use crate::parser::ParseError;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -18,81 +20,22 @@ impl From<ExecutionError> for PipelineError {
 }
 
 // A wrapper struct to implement the `CompiledTemplate` trait.
+#[derive(Debug)]
 pub struct XsltTemplate {
-    compiled: ast::CompiledStylesheet,
-    features: TemplateFeatures,
+    compiled: Arc<ast::CompiledStylesheet>,
+    entry_mode: Option<String>,
 }
-
-/// Scans the compiled XSLT AST for features requiring special handling.
-fn detect_features(compiled: &ast::CompiledStylesheet) -> TemplateFeatures {
-    let mut features = TemplateFeatures::default();
-
-    for rules in compiled.template_rules.values() {
-        for rule in rules {
-            scan_instructions_for_features(&rule.body.0, &mut features);
-        }
-    }
-    for template in compiled.named_templates.values() {
-        scan_instructions_for_features(&template.body.0, &mut features);
-    }
-
-    features
-}
-
-fn scan_instructions_for_features(instructions: &[ast::XsltInstruction], features: &mut TemplateFeatures) {
-    for instruction in instructions {
-        match instruction {
-            ast::XsltInstruction::TableOfContents { .. } => features.has_table_of_contents = true,
-            ast::XsltInstruction::ContentTag { tag_name, body, .. } => {
-                let tag_str = String::from_utf8_lossy(tag_name);
-                match tag_str.as_ref() {
-                    "toc" | "fo:table-of-contents" => features.has_table_of_contents = true,
-                    "page-number-placeholder" => features.has_page_number_placeholders = true,
-                    _ => {}
-                }
-                scan_instructions_for_features(&body.0, features);
-            }
-            ast::XsltInstruction::EmptyTag { tag_name, .. } => {
-                let tag_str = String::from_utf8_lossy(tag_name);
-                match tag_str.as_ref() {
-                    "toc" | "fo:table-of-contents" => features.has_table_of_contents = true,
-                    "page-number-placeholder" => features.has_page_number_placeholders = true,
-                    _ => {}
-                }
-            }
-            ast::XsltInstruction::If { body, .. } => scan_instructions_for_features(&body.0, features),
-            ast::XsltInstruction::ForEach { body, .. } => scan_instructions_for_features(&body.0, features),
-            ast::XsltInstruction::Choose { whens, otherwise, .. } => {
-                for when in whens {
-                    scan_instructions_for_features(&when.body.0, features);
-                }
-                if let Some(otherwise_body) = otherwise {
-                    scan_instructions_for_features(&otherwise_body.0, features);
-                }
-            }
-            ast::XsltInstruction::Copy { body, .. } => scan_instructions_for_features(&body.0, features),
-            ast::XsltInstruction::Table { header, body, .. } => {
-                if let Some(h) = header {
-                    scan_instructions_for_features(&h.0, features);
-                }
-                scan_instructions_for_features(&body.0, features);
-            }
-            ast::XsltInstruction::Element { body, .. } => scan_instructions_for_features(&body.0, features),
-            _ => {}
-        }
-    }
-}
-
 
 impl CompiledTemplate for XsltTemplate {
     fn execute(&self, data_source_str: &str, config: ExecutionConfig) -> Result<Vec<IRNode>, PipelineError> {
+        let mut builder = super::idf_builder::IdfBuilder::new();
         match config.format {
             DataSourceFormat::Xml => {
                 let doc = XmlDocument::parse(data_source_str)
                     .map_err(|e| PipelineError::Parse(ParseError::TemplateParse(e.to_string())))?;
                 let root_node = doc.root_node();
                 let mut executor = executor::TemplateExecutor::new(&self.compiled, root_node, config.strict)?;
-                Ok(executor.build_tree()?)
+                executor.execute_with_mode(self.entry_mode.as_deref(), &mut builder)?;
             }
             DataSourceFormat::Json => {
                 let json_data: serde_json::Value = serde_json::from_str(data_source_str)
@@ -100,9 +43,10 @@ impl CompiledTemplate for XsltTemplate {
                 let doc = JsonVDocument::new(&json_data);
                 let root_node = doc.root_node();
                 let mut executor = executor::TemplateExecutor::new(&self.compiled, root_node, config.strict)?;
-                Ok(executor.build_tree()?)
+                executor.execute_with_mode(self.entry_mode.as_deref(), &mut builder)?;
             }
         }
+        Ok(builder.get_result())
     }
 
     fn stylesheet(&self) -> Arc<Stylesheet> {
@@ -113,8 +57,8 @@ impl CompiledTemplate for XsltTemplate {
         &self.compiled.resource_base_path
     }
 
-    fn features(&self) -> TemplateFeatures {
-        self.features
+    fn features(&self) -> TemplateFlags {
+        self.compiled.features
     }
 }
 
@@ -126,13 +70,30 @@ impl TemplateParser for XsltParser {
         &self,
         template_source: &str,
         resource_base_path: PathBuf,
-    ) -> Result<Arc<dyn CompiledTemplate>, PipelineError> {
+    ) -> Result<TemplateFeatures, PipelineError> {
         let compiled_stylesheet = compiler::compile(template_source, resource_base_path)?;
-        let features = detect_features(&compiled_stylesheet);
-        Ok(Arc::new(XsltTemplate {
-            compiled: compiled_stylesheet,
-            features,
-        }))
+        let compiled_arc = Arc::new(compiled_stylesheet);
+
+        // --- Create Main Template ---
+        let main_template: Arc<dyn CompiledTemplate> = Arc::new(XsltTemplate {
+            compiled: Arc::clone(&compiled_arc),
+            entry_mode: None, // `None` mode means start with the default template rules.
+        });
+
+        // --- Create Role Templates ---
+        let mut role_templates = HashMap::new();
+        for (role_name, mode_name) in &compiled_arc.role_template_modes {
+            let role_template: Arc<dyn CompiledTemplate> = Arc::new(XsltTemplate {
+                compiled: Arc::clone(&compiled_arc),
+                entry_mode: Some(mode_name.clone()),
+            });
+            role_templates.insert(role_name.clone(), role_template);
+        }
+
+        Ok(TemplateFeatures {
+            main_template,
+            role_templates,
+        })
     }
 }
 
@@ -189,7 +150,8 @@ mod tests {
         </xsl:stylesheet>"#;
 
         let parser = XsltParser;
-        let compiled = parser.parse(xslt, PathBuf::new()).unwrap();
+        let compiled_bundle = parser.parse(xslt, PathBuf::new()).unwrap();
+        let compiled = compiled_bundle.main_template;
 
         // Correctly process JSON with JSON format
         let json_config = ExecutionConfig { format: DataSourceFormat::Json, ..Default::default() };
@@ -213,7 +175,7 @@ mod tests {
         let data = "<data/>";
 
         let parser = XsltParser;
-        let compiled = parser.parse(xslt, PathBuf::new()).unwrap();
+        let compiled = parser.parse(xslt, PathBuf::new()).unwrap().main_template;
 
         // Non-strict mode: succeeds, outputs empty string
         let non_strict_config = ExecutionConfig { format: DataSourceFormat::Xml, strict: false };
@@ -240,7 +202,7 @@ mod tests {
         let data = "<data/>";
 
         let parser = XsltParser;
-        let compiled = parser.parse(xslt, PathBuf::new()).unwrap();
+        let compiled = parser.parse(xslt, PathBuf::new()).unwrap().main_template;
 
         // Non-strict mode: succeeds
         let non_strict_config = ExecutionConfig { format: DataSourceFormat::Xml, strict: false };
@@ -256,7 +218,7 @@ mod tests {
     #[test]
     fn test_xslt_processor_with_control_flow() {
         let parser = XsltParser;
-        let compiled = parser.parse(COMPLEX_XSLT, PathBuf::new()).unwrap();
+        let compiled = parser.parse(COMPLEX_XSLT, PathBuf::new()).unwrap().main_template;
         let result_tree = compiled.execute(TEST_XML_DATA_FOR_COMPLEX, ExecutionConfig::default()).unwrap();
 
         assert_eq!(result_tree.len(), 1, "Expected a single root block node");
@@ -298,7 +260,7 @@ mod tests {
         "#;
 
         let parser = XsltParser;
-        let compiled = parser.parse(xslt, PathBuf::new()).unwrap();
+        let compiled = parser.parse(xslt, PathBuf::new()).unwrap().main_template;
         let result_tree = compiled.execute(data, ExecutionConfig::default()).unwrap();
         let root_children = match &result_tree[0] {
             IRNode::Block { children, .. } => children,
@@ -345,7 +307,7 @@ mod tests {
         "#;
 
         let parser = XsltParser;
-        let compiled = parser.parse(xslt, PathBuf::new()).unwrap();
+        let compiled = parser.parse(xslt, PathBuf::new()).unwrap().main_template;
         let result_tree = compiled.execute(data, ExecutionConfig::default()).unwrap();
 
         assert_eq!(result_tree.len(), 1);
@@ -385,7 +347,7 @@ mod tests {
         "#;
 
         let parser = XsltParser;
-        let compiled = parser.parse(xslt, PathBuf::new()).unwrap();
+        let compiled = parser.parse(xslt, PathBuf::new()).unwrap().main_template;
         let result_tree = compiled.execute(data, ExecutionConfig::default()).unwrap();
 
         let root_children = match &result_tree[0] {
@@ -426,7 +388,7 @@ mod tests {
             </data>
         "#;
         let parser = XsltParser;
-        let compiled = parser.parse(xslt, PathBuf::new()).unwrap();
+        let compiled = parser.parse(xslt, PathBuf::new()).unwrap().main_template;
         let result_tree = compiled.execute(data, ExecutionConfig::default()).unwrap();
 
         let root_children = match &result_tree[0] {
@@ -483,7 +445,7 @@ mod tests {
             </data>
         "#;
         let parser = XsltParser;
-        let compiled = parser.parse(xslt, PathBuf::new()).unwrap();
+        let compiled = parser.parse(xslt, PathBuf::new()).unwrap().main_template;
         let result_tree = compiled.execute(data, ExecutionConfig::default()).unwrap();
 
         let root_children = match &result_tree[0] {
@@ -529,7 +491,7 @@ mod tests {
             </data>
         "#;
         let parser = XsltParser;
-        let compiled = parser.parse(xslt, PathBuf::new()).unwrap();
+        let compiled = parser.parse(xslt, PathBuf::new()).unwrap().main_template;
         let result_tree = compiled.execute(data, ExecutionConfig::default()).unwrap();
 
         let root_children = match &result_tree[0] {
@@ -569,7 +531,7 @@ mod tests {
         "#;
 
         let parser = XsltParser;
-        let compiled = parser.parse(xslt, PathBuf::new()).unwrap();
+        let compiled = parser.parse(xslt, PathBuf::new()).unwrap().main_template;
         let result_tree = compiled.execute(data, ExecutionConfig::default()).unwrap();
 
         // The top-level <data> gets copied, so we have one root node.
@@ -624,7 +586,7 @@ mod tests {
             </data>
         "#;
         let parser = XsltParser;
-        let compiled = parser.parse(xslt, PathBuf::new()).unwrap();
+        let compiled = parser.parse(xslt, PathBuf::new()).unwrap().main_template;
         let result_tree = compiled.execute(data, ExecutionConfig::default()).unwrap();
         let root_children = match &result_tree[0] {
             IRNode::Block { children, .. } => children,
@@ -666,7 +628,7 @@ mod tests {
             </data>
         "#;
         let parser = XsltParser;
-        let compiled = parser.parse(xslt, PathBuf::new()).unwrap();
+        let compiled = parser.parse(xslt, PathBuf::new()).unwrap().main_template;
         let result_tree = compiled.execute(data, ExecutionConfig::default()).unwrap();
         let root_children = match &result_tree[0] {
             IRNode::Block { children, .. } => children,
@@ -710,7 +672,7 @@ mod tests {
         "#;
 
         let parser = XsltParser;
-        let compiled = parser.parse(xslt, PathBuf::new()).unwrap();
+        let compiled = parser.parse(xslt, PathBuf::new()).unwrap().main_template;
         let result_tree = compiled.execute(data, ExecutionConfig::default()).unwrap();
 
         let root_children = match &result_tree[0] {

@@ -1,4 +1,3 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/block_test.rs
 #![cfg(test)]
 
 use crate::core::idf::{IRNode, NodeMetadata};
@@ -43,7 +42,7 @@ fn test_block_with_padding_indents_child() {
         children: vec![create_paragraph("Indented text.")],
     }];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
     let text_el = find_first_text_box_with_content(page1, "Indented").unwrap();
 
@@ -82,7 +81,7 @@ fn test_block_with_border_and_padding_indents_content() {
         children: vec![create_paragraph("Content")],
     }];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
     let text_el = find_first_text_box_with_content(page1, "Content").unwrap();
 
@@ -129,7 +128,7 @@ fn test_multipage_block_with_background_is_drawn_on_all_pages() {
         ],
     }];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     assert_eq!(pages.len(), 2, "Expected two pages");
 
     let page1_bg = pages[0]
@@ -187,7 +186,7 @@ fn test_block_splits_across_pages() {
         ],
     }];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
 
     assert_eq!(pages.len(), 2, "Expected two pages");
 
@@ -246,7 +245,7 @@ fn test_vertical_margin_collapse() {
         },
     ];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
 
     let text1 = find_first_text_box_with_content(page1, "Block 1").unwrap();

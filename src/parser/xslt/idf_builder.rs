@@ -379,15 +379,8 @@ impl OutputBuilder for IdfBuilder {
         self.end_block();
     }
 
-    fn add_table_of_contents(&mut self, styles: &PreparsedStyles) {
-        let node = IRNode::TableOfContents {
-            meta: NodeMetadata {
-                id: styles.id.clone(),
-                style_sets: styles.style_sets.clone(),
-                style_override: styles.style_override.clone(),
-            },
-        };
-        self.push_block_to_parent(node);
+    fn add_table_of_contents(&mut self, _styles: &PreparsedStyles) {
+
     }
 
     fn add_page_break(&mut self, master_name: Option<String>) {

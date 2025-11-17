@@ -1,6 +1,7 @@
 use crate::core::style::stylesheet::{ElementStyle, PageLayout};
 use crate::parser::json::ast::{JsonTemplateFile, StylesheetDef};
 use crate::templating::node::TemplateBuilder;
+use std::collections::HashMap;
 
 /// The top-level container for a programmatically-defined template.
 ///
@@ -11,6 +12,7 @@ use crate::templating::node::TemplateBuilder;
 pub struct Template {
     stylesheet: StylesheetDef,
     root: Box<dyn TemplateBuilder>,
+    roles: HashMap<String, Box<dyn TemplateBuilder>>,
 }
 
 impl Template {
@@ -19,6 +21,7 @@ impl Template {
         Self {
             stylesheet: StylesheetDef::default(),
             root: Box::new(root),
+            roles: HashMap::new(),
         }
     }
 
@@ -42,11 +45,22 @@ impl Template {
         self
     }
 
+    /// Adds a role-specific template (e.g., for a page header).
+    pub fn add_role(mut self, name: &str, template: impl TemplateBuilder + 'static) -> Self {
+        self.roles.insert(name.to_string(), Box::new(template));
+        self
+    }
+
     /// Consumes the template builder and produces the final JSON AST structure.
     pub fn build(self) -> JsonTemplateFile {
         JsonTemplateFile {
             _stylesheet: self.stylesheet,
             _template: self.root.build(),
+            _roles: self
+                .roles
+                .into_iter()
+                .map(|(k, v)| (k, v.build()))
+                .collect(),
         }
     }
 
@@ -58,6 +72,11 @@ impl Template {
         let serializable_template = JsonTemplateFile {
             _stylesheet: self.stylesheet.clone(),
             _template: self.root.clone_box().build(),
+            _roles: self
+                .roles
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone_box().build()))
+                .collect(),
         };
         serde_json::to_string_pretty(&serializable_template)
     }

@@ -1,3 +1,4 @@
+// src/pipeline/config.rs
 // FILE: src/pipeline/config.rs
 
 /// An enum to select the desired PDF rendering backend.
@@ -17,17 +18,13 @@ pub enum PdfBackend {
 /// An enum to select the high-level document generation algorithm.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum GenerationMode {
-    /// Automatically select the best strategy. (Default)
-    /// Uses Single-Pass if possible, otherwise falls back to Two-Pass.
+    /// Automatically select the best pipeline based on detected template features. (Default)
+    /// - If the template has forward references (ToC, Page X of Y, role templates),
+    ///   it uses the `MetadataGeneratingProvider` and `ComposingRenderer`.
+    /// - Otherwise, it uses the fast `PassThroughProvider` and `SinglePassStreamingRenderer`.
     #[default]
     Auto,
-    /// Force the use of the single-pass streaming strategy.
-    /// Will fail if the template contains forward references (ToC, etc.).
-    ForceSinglePass,
-    /// Force the use of the two-pass strategy.
-    /// Slower, but guarantees correctness for all features. Requires a cloneable iterator.
-    ForceTwoPass,
-    /// Force the use of the hybrid strategy.
-    /// Handles all features for non-cloneable iterators by buffering to a temporary file.
-    ForceHybrid,
+    /// Force the use of the simple, single-pass streaming pipeline.
+    /// This will fail if the template contains features that require an analysis pass.
+    ForceStreaming,
 }

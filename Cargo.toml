@@ -36,6 +36,7 @@ async-channel = "2.2.0"
 itoa = "1.0.15"
 itertools = "0.14.0"
 once_cell = "1.21.3"
+chrono = "0.4.42"
 
 [dev-dependencies]
 dhat = { version = "0.3"}
@@ -72,3 +73,7 @@ path = "examples/compiled_performance_test.rs"
 [[example]]
 name = "toc"
 path = "examples/xslt_toc.rs"
+
+[[example]]
+name = "perf_toc"
+path = "examples/perf_toc.rs"

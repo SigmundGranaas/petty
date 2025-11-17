@@ -1,3 +1,4 @@
+// src/core/layout/nodes/paragraph.rs
 use crate::core::idf::IRNode;
 use crate::core::layout::node::{AnchorLocation, LayoutContext, LayoutNode, LayoutResult};
 use crate::core::layout::style::ComputedStyle;
@@ -235,101 +236,156 @@ fn commit_line_to_context(
     }
     let total_content_width: f32 = line_atoms.iter().map(|a| a.width()).sum();
     let justify = !is_last_line && parent_style.text_align == TextAlign::Justify;
-    let space_count = if justify { line_atoms.iter().filter(|a| a.is_space()).count() } else { 0 };
-    let justification_space = if justify && space_count > 0 && total_content_width < box_width {
-        (box_width - total_content_width) / space_count as f32
-    } else {
-        0.0
-    };
+
     let mut current_x = match parent_style.text_align {
         TextAlign::Left | TextAlign::Justify => 0.0,
         TextAlign::Center => (box_width - total_content_width).max(0.0) / 2.0,
         TextAlign::Right => (box_width - total_content_width).max(0.0),
     };
-    let mut atom_idx = 0;
-    while atom_idx < line_atoms.len() {
-        let atom = &line_atoms[atom_idx];
-        match atom {
-            LayoutAtom::Word { .. } | LayoutAtom::Space { .. } => {
-                let mut run_text = String::new();
-                let mut run_width = 0.0;
-                let (base_style, base_href) = match atom {
-                    LayoutAtom::Word { style, href, .. } => (style, href),
-                    LayoutAtom::Space { style, href, .. } => (style, href),
-                    _ => unreachable!(),
-                };
-                let mut run_end_idx = atom_idx;
-                for i in atom_idx..line_atoms.len() {
-                    let (current_style, current_href, text_part, part_width) = match &line_atoms[i] {
-                        LayoutAtom::Word { text, width, style, href } => (style, href, text.as_str(), *width),
-                        LayoutAtom::Space { width, style, href } => (style, href, " ", *width),
-                        _ => break,
-                    };
-                    if Arc::ptr_eq(current_style, base_style) && current_href == base_href {
-                        run_text.push_str(text_part);
-                        run_width += part_width;
-                        if line_atoms[i].is_space() {
-                            run_width += justification_space;
-                        }
-                        run_end_idx = i;
-                    } else {
-                        break;
-                    }
+
+    if justify {
+        let space_count = line_atoms.iter().filter(|a| a.is_space()).count();
+        let justification_space = if space_count > 0 {
+            (box_width - total_content_width).max(0.0) / space_count as f32
+        } else {
+            0.0
+        };
+
+        for atom in line_atoms {
+            match atom {
+                LayoutAtom::Word { text, width, style, href } => {
+                    ctx.push_element(PositionedElement {
+                        x: current_x,
+                        y: 0.0,
+                        width,
+                        height: style.line_height,
+                        element: crate::core::layout::LayoutElement::Text(crate::core::layout::TextElement {
+                            content: text,
+                            href,
+                            text_decoration: style.text_decoration.clone(),
+                        }),
+                        style,
+                    });
+                    current_x += width;
                 }
-                ctx.push_element(PositionedElement {
-                    x: current_x,
-                    y: 0.0,
-                    width: run_width,
-                    height: base_style.line_height,
-                    element: crate::core::layout::LayoutElement::Text(crate::core::layout::TextElement {
-                        content: run_text,
-                        href: base_href.clone(),
-                        text_decoration: base_style.text_decoration.clone(),
-                    }),
-                    style: base_style.clone(),
-                });
-                current_x += run_width;
-                atom_idx = run_end_idx + 1;
+                LayoutAtom::Space { width, .. } => {
+                    current_x += width + justification_space;
+                }
+                LayoutAtom::Image { src, width, height, style, href: _ } => {
+                    let y_offset = parent_style.line_height - height;
+                    ctx.push_element(PositionedElement {
+                        x: current_x,
+                        y: y_offset,
+                        width,
+                        height,
+                        element: crate::core::layout::LayoutElement::Image(crate::core::layout::ImageElement { src }),
+                        style,
+                    });
+                    current_x += width;
+                }
+                LayoutAtom::PageNumberPlaceholder { target_id, style, href } => {
+                    let text = "XX"; // For measurement only
+                    let width = ctx.engine.measure_text_width(text, &style);
+                    let placeholder = PositionedElement {
+                        x: current_x,
+                        y: 0.0,
+                        width,
+                        height: style.line_height,
+                        element: crate::core::layout::LayoutElement::PageNumberPlaceholder {
+                            target_id,
+                            href,
+                        },
+                        style,
+                    };
+                    ctx.push_element(placeholder);
+                    current_x += width;
+                }
+                LayoutAtom::LineBreak => {}
             }
-            LayoutAtom::Image {
-                src,
-                width,
-                height,
-                style,
-                ..
-            } => {
-                let y_offset = parent_style.line_height - height;
-                ctx.push_element(PositionedElement {
-                    x: current_x,
-                    y: y_offset,
-                    width: *width,
-                    height: *height,
-                    element: crate::core::layout::LayoutElement::Image(crate::core::layout::ImageElement { src: src.clone() }),
-                    style: style.clone(),
-                });
-                current_x += width;
-                atom_idx += 1;
-            }
-            LayoutAtom::PageNumberPlaceholder { target_id, style, href } => {
-                let text = "XX"; // For measurement only
-                let width = ctx.engine.measure_text_width(text, style);
-                let placeholder = PositionedElement {
-                    x: current_x,
-                    y: 0.0,
+        }
+    } else {
+        let mut atom_idx = 0;
+        while atom_idx < line_atoms.len() {
+            let atom = &line_atoms[atom_idx];
+            match atom {
+                LayoutAtom::Word { .. } | LayoutAtom::Space { .. } => {
+                    let mut run_text = String::new();
+                    let mut run_width = 0.0;
+                    let (base_style, base_href) = match atom {
+                        LayoutAtom::Word { style, href, .. } => (style, href),
+                        LayoutAtom::Space { style, href, .. } => (style, href),
+                        _ => unreachable!(),
+                    };
+                    let mut run_end_idx = atom_idx;
+                    for i in atom_idx..line_atoms.len() {
+                        let (current_style, current_href, text_part, part_width) = match &line_atoms[i] {
+                            LayoutAtom::Word { text, width, style, href } => (style, href, text.as_str(), *width),
+                            LayoutAtom::Space { width, style, href } => (style, href, " ", *width),
+                            _ => break,
+                        };
+                        if Arc::ptr_eq(current_style, base_style) && current_href == base_href {
+                            run_text.push_str(text_part);
+                            run_width += part_width;
+                            run_end_idx = i;
+                        } else {
+                            break;
+                        }
+                    }
+                    ctx.push_element(PositionedElement {
+                        x: current_x,
+                        y: 0.0,
+                        width: run_width,
+                        height: base_style.line_height,
+                        element: crate::core::layout::LayoutElement::Text(crate::core::layout::TextElement {
+                            content: run_text,
+                            href: base_href.clone(),
+                            text_decoration: base_style.text_decoration.clone(),
+                        }),
+                        style: base_style.clone(),
+                    });
+                    current_x += run_width;
+                    atom_idx = run_end_idx + 1;
+                }
+                LayoutAtom::Image {
+                    src,
                     width,
-                    height: style.line_height,
-                    element: crate::core::layout::LayoutElement::PageNumberPlaceholder {
-                        target_id: target_id.clone(),
-                        href: href.clone(),
-                    },
-                    style: style.clone(),
-                };
-                ctx.push_element(placeholder);
-                current_x += width;
-                atom_idx += 1;
-            }
-            LayoutAtom::LineBreak => {
-                atom_idx += 1;
+                    height,
+                    style,
+                    ..
+                } => {
+                    let y_offset = parent_style.line_height - height;
+                    ctx.push_element(PositionedElement {
+                        x: current_x,
+                        y: y_offset,
+                        width: *width,
+                        height: *height,
+                        element: crate::core::layout::LayoutElement::Image(crate::core::layout::ImageElement { src: src.clone() }),
+                        style: style.clone(),
+                    });
+                    current_x += width;
+                    atom_idx += 1;
+                }
+                LayoutAtom::PageNumberPlaceholder { target_id, style, href } => {
+                    let text = "XX"; // For measurement only
+                    let width = ctx.engine.measure_text_width(text, style);
+                    let placeholder = PositionedElement {
+                        x: current_x,
+                        y: 0.0,
+                        width,
+                        height: style.line_height,
+                        element: crate::core::layout::LayoutElement::PageNumberPlaceholder {
+                            target_id: target_id.clone(),
+                            href: href.clone(),
+                        },
+                        style: style.clone(),
+                    };
+                    ctx.push_element(placeholder);
+                    current_x += width;
+                    atom_idx += 1;
+                }
+                LayoutAtom::LineBreak => {
+                    atom_idx += 1;
+                }
             }
         }
     }

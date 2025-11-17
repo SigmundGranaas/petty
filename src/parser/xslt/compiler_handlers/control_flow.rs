@@ -4,7 +4,6 @@ use crate::parser::xslt::ast::{PreparsedTemplate, When, XsltInstruction};
 use crate::parser::xslt::compiler::{BuilderState, CompilerBuilder};
 use crate::parser::ParseError;
 use crate::parser::xslt::util::{get_attr_owned_required, get_line_col_from_pos, OwnedAttributes};
-use crate::parser::xslt::xpath;
 
 impl CompilerBuilder {
     pub(crate) fn handle_choose_start(&mut self) {
@@ -43,13 +42,14 @@ impl CompilerBuilder {
     ) -> Result<(), ParseError> {
         let location = get_line_col_from_pos(source, pos).into();
         if let BuilderState::When(attrs) = current_state {
-            let test = xpath::parse_expression(&get_attr_owned_required(
+            let test_str = get_attr_owned_required(
                 &attrs,
                 b"test",
                 b"xsl:when",
                 pos,
                 source,
-            )?)?;
+            )?;
+            let test = self.parse_xpath_and_detect_features(&test_str)?;
             let when_block = When {
                 test,
                 body: PreparsedTemplate(body),
@@ -111,14 +111,15 @@ impl CompilerBuilder {
         source: &str,
     ) -> Result<(), ParseError> {
         if let BuilderState::InstructionBody(attrs) = current_state {
+            let test_str = get_attr_owned_required(
+                &attrs,
+                b"test",
+                b"xsl:if",
+                pos,
+                source,
+            )?;
             let instr = XsltInstruction::If {
-                test: xpath::parse_expression(&get_attr_owned_required(
-                    &attrs,
-                    b"test",
-                    b"xsl:if",
-                    pos,
-                    source,
-                )?)?,
+                test: self.parse_xpath_and_detect_features(&test_str)?,
                 body: PreparsedTemplate(body),
             };
             if let Some(parent) = self.instruction_stack.last_mut() {

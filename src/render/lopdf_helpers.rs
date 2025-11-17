@@ -289,7 +289,14 @@ impl<'a> PageContext<'a> {
         self.content.operations.push(Operation::new("BT", vec![]));
         self.set_font(&el.style);
         self.set_fill_color(&el.style.color);
-        let baseline_y = el.y + el.style.font_size * 0.8;
+
+        let style = &el.style;
+        let line_height = el.height;
+        let font_size = style.font_size;
+        let leading = line_height - font_size;
+        let ascent_approx = font_size * 0.8;
+        let baseline_y = el.y + (leading / 2.0) + ascent_approx;
+
         let pdf_y = self.page_height - baseline_y;
         self.content.operations.push(Operation::new("Td", vec![el.x.into(), pdf_y.into()]));
         self.content.operations.push(Operation::new("Tj", vec![Object::String(to_win_ansi(&text.content), StringFormat::Literal)]));

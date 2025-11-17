@@ -7,6 +7,7 @@ use super::pattern;
 use super::util::{get_attr_owned_optional, get_attr_owned_required, get_line_col_from_pos, OwnedAttributes};
 use super::xpath;
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
+use crate::parser::processor::TemplateFlags;
 use crate::parser::style;
 use crate::parser::xslt::ast::{NamedTemplate, TemplateRule};
 use crate::parser::ParseError;
@@ -41,6 +42,10 @@ pub(crate) enum BuilderState {
     NamedTemplate {
         name: String,
         params: Vec<super::ast::Param>,
+    },
+    RoleTemplate {
+        role_name: String,
+        attrs: OwnedAttributes,
     },
     AttributeSet {
         name: String,
@@ -82,9 +87,11 @@ pub struct CompilerBuilder {
     pub(crate) stylesheet: Stylesheet,
     pub(crate) template_rules: HashMap<Option<String>, Vec<TemplateRule>>,
     pub(crate) named_templates: HashMap<String, Arc<NamedTemplate>>,
+    pub(crate) role_template_modes: HashMap<String, String>,
     pub(crate) keys: Vec<KeyDefinition>,
     pub(crate) instruction_stack: Vec<Vec<XsltInstruction>>,
     pub(crate) state_stack: Vec<BuilderState>,
+    pub(crate) features: TemplateFlags,
 }
 
 impl CompilerBuilder {
@@ -93,9 +100,11 @@ impl CompilerBuilder {
             stylesheet: Stylesheet::default(),
             template_rules: HashMap::new(),
             named_templates: HashMap::new(),
+            role_template_modes: HashMap::new(),
             keys: Vec::new(),
             instruction_stack: vec![],
             state_stack: vec![BuilderState::Stylesheet],
+            features: TemplateFlags::default(),
         }
     }
 
@@ -115,7 +124,41 @@ impl CompilerBuilder {
             named_templates: self.named_templates,
             keys: self.keys,
             resource_base_path,
+            role_template_modes: self.role_template_modes,
+            features: self.features,
         })
+    }
+
+    pub(crate) fn parse_xpath_and_detect_features(&mut self, expr_str: &str) -> Result<xpath::Expression, ParseError> {
+        let expr = xpath::parse_expression(expr_str)?;
+        if self.ast_contains_function(&expr, "petty:index") {
+            self.features.uses_index_function = true;
+        }
+        Ok(expr)
+    }
+
+    fn ast_contains_function(&self, expr: &xpath::Expression, name: &str) -> bool {
+        match expr {
+            xpath::Expression::FunctionCall { name: func_name, args, .. } => {
+                if func_name == name {
+                    return true;
+                }
+                args.iter().any(|arg| self.ast_contains_function(arg, name))
+            }
+            xpath::Expression::BinaryOp { left, right, .. } => {
+                self.ast_contains_function(left, name) || self.ast_contains_function(right, name)
+            }
+            xpath::Expression::UnaryOp { expr, .. } => {
+                self.ast_contains_function(expr, name)
+            }
+            xpath::Expression::LocationPath(lp) => {
+                let check_start = if let Some(sp) = &lp.start_point {
+                    self.ast_contains_function(sp, name)
+                } else { false };
+                check_start || lp.steps.iter().any(|s| s.predicates.iter().any(|p| self.ast_contains_function(p, name)))
+            }
+            _ => false
+        }
     }
 
     pub(crate) fn resolve_styles(&self, attrs: &OwnedAttributes, location: crate::parser::Location) -> Result<PreparsedStyles, ParseError> {
@@ -174,7 +217,7 @@ impl CompilerBuilder {
         let key_def = KeyDefinition {
             name,
             pattern: pattern::parse(&match_str)?,
-            use_expr: xpath::parse_expression(&use_str)?,
+            use_expr: self.parse_xpath_and_detect_features(&use_str)?,
         };
         self.keys.push(key_def);
         Ok(())
@@ -237,6 +280,7 @@ impl StylesheetBuilder for CompilerBuilder {
             b"xsl:apply-templates" => self.handle_apply_templates_empty(attrs)?,
             b"page-break" => self.handle_page_break(attrs)?,
             b"toc" | b"fo:table-of-contents" => {
+                self.features.has_table_of_contents = true;
                 let instr = XsltInstruction::TableOfContents {
                     styles: self.resolve_styles(&attrs, location)?,
                 };
@@ -245,6 +289,10 @@ impl StylesheetBuilder for CompilerBuilder {
                 }
             }
             b"column" | b"fo:table-column" => self.handle_table_column(attrs)?,
+            b"page-number-placeholder" => {
+                self.features.has_page_number_placeholders = true;
+                // This tag doesn't produce an instruction itself, it's just a marker.
+            }
             _ => {
                 // Handle literal result elements which are not XSLT instructions
                 let instr = self.handle_empty_literal_result_element(e, attrs, location)?;
@@ -282,6 +330,9 @@ impl StylesheetBuilder for CompilerBuilder {
             b"xsl:for-each" => self.handle_for_each_end(current_state, body, pos, source)?,
             // An empty xsl:apply-templates is handled in empty_element. This handles a non-empty one.
             b"xsl:apply-templates" => { /* This is now handled by the generic sortable logic */ }
+            b"page-number-placeholder" => {
+                self.features.has_page_number_placeholders = true;
+            }
             _ => self.handle_literal_result_element_end(e, current_state, body, pos, source)?,
         }
         Ok(())

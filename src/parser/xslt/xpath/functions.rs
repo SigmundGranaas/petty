@@ -20,7 +20,7 @@ impl FunctionRegistry {
         self.functions.insert(name, ());
     }
     pub fn get(&self, name: &str) -> Option<()> {
-        self.functions.get(name.to_lowercase().as_str()).copied()
+        self.functions.get(name).copied()
     }
 }
 
@@ -30,7 +30,7 @@ pub fn evaluate_function<'a, 'd, N: DataSourceNode<'a>>(
     args: Vec<XPathValue<N>>,
     e_ctx: &EvaluationContext<'a, 'd, N>,
 ) -> Result<XPathValue<N>, ExecutionError> {
-    match name.to_lowercase().as_str() {
+    match name {
         // Core & Node-Set
         "string" => func_string(args, e_ctx),
         "count" => func_count(args),
@@ -65,12 +65,28 @@ pub fn evaluate_function<'a, 'd, N: DataSourceNode<'a>>(
         "ceiling" => func_ceiling(args),
         "round" => func_round(args),
 
+        // Petty extension functions
+        "petty:index" => func_petty_index(args, e_ctx),
+
         // "node" is not a real function, but registering it prevents "unknown function" errors
         // when the parser mistakes the node() test for a function call.
         "node" | "comment" | "processing-instruction" => Err(ExecutionError::FunctionError { function: name.to_string(), message: "This is a node-test, not a function.".to_string() }),
         _ => Err(ExecutionError::FunctionError { function: name.to_string(), message: "Unknown XPath function".to_string() }),
     }
 }
+
+// --- Petty Extension Functions ---
+
+fn func_petty_index<'a, 'd, N: DataSourceNode<'a>>(
+    _args: Vec<XPathValue<N>>,
+    _e_ctx: &EvaluationContext<'a, 'd, N>,
+) -> Result<XPathValue<N>, ExecutionError> {
+    // This is a stub function. It is detected at compile-time to flag the template
+    // as having an index dependency. The actual indexing happens in the layout engine,
+    // and this function's result is not used during the initial template execution pass.
+    Ok(XPathValue::NodeSet(vec![]))
+}
+
 
 // --- Core & Node-Set Functions ---
 
@@ -546,6 +562,8 @@ impl Default for FunctionRegistry {
         registry.register("node");
         registry.register("comment");
         registry.register("processing-instruction");
+        // Petty extensions
+        registry.register("petty:index");
         registry
     }
 }

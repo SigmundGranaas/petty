@@ -1,3 +1,4 @@
+// src/core/layout/nodes/flex_test.rs
 #![cfg(test)]
 use crate::core::idf::{IRNode, NodeMetadata};
 use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
@@ -40,7 +41,7 @@ fn test_flex_direction_row() {
             create_flex_item_with_style("2", ElementStyle { width: Some(Dimension::Pt(100.0)), ..Default::default() }),
         ],
     }];
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let item1 = find_first_text_box_with_content(&pages[0], "1").unwrap();
     let item2 = find_first_text_box_with_content(&pages[0], "2").unwrap();
     assert_eq!(item1.x, 0.0);
@@ -60,7 +61,7 @@ fn test_flex_direction_column() {
             create_flex_item_with_style("2", ElementStyle { height: Some(Dimension::Pt(100.0)), ..Default::default() }),
         ],
     }];
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let item1 = find_first_text_box_with_content(&pages[0], "1").unwrap();
     let item2 = find_first_text_box_with_content(&pages[0], "2").unwrap();
     assert_eq!(item1.y, 0.0);
@@ -80,7 +81,7 @@ fn test_flex_direction_row_reverse() {
             create_flex_item_with_style("2", ElementStyle { width: Some(Dimension::Pt(100.0)), ..Default::default() }),
         ],
     }];
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let item1 = find_first_text_box_with_content(&pages[0], "1").unwrap();
     let item2 = find_first_text_box_with_content(&pages[0], "2").unwrap();
     // Free space is 300. With row-reverse and justify-start, the block is pushed to the right.
@@ -100,7 +101,7 @@ fn test_flex_grow() {
             create_flex_item_with_style("2", ElementStyle { width: Some(Dimension::Pt(100.0)), flex_grow: Some(3.0), ..Default::default() }),
         ],
     }];
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let item1 = find_first_text_box_with_content(&pages[0], "1").unwrap();
     let item2 = find_first_text_box_with_content(&pages[0], "2").unwrap();
     // Free space = 500 - 200 = 300. Total grow = 4.
@@ -120,7 +121,7 @@ fn test_flex_shrink() {
             create_flex_item_with_style("2", ElementStyle { flex_basis: Some(Dimension::Pt(300.0)), flex_shrink: Some(1.0), ..Default::default() }),
         ],
     }];
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let item1 = find_first_text_box_with_content(&pages[0], "1").unwrap();
     let item2 = find_first_text_box_with_content(&pages[0], "2").unwrap();
     // Overflow = 600 - 400 = 200. Total shrink*basis = 300+300=600.
@@ -140,7 +141,7 @@ fn test_order_property() {
             create_flex_item_with_style("B", ElementStyle { width: Some(Dimension::Pt(100.0)), order: Some(1), ..Default::default() }),
         ],
     }];
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let item_a = find_first_text_box_with_content(&pages[0], "A").unwrap();
     let item_b = find_first_text_box_with_content(&pages[0], "B").unwrap();
     // B has lower order, so it comes first.
@@ -158,7 +159,7 @@ fn test_margins_on_flex_items() {
             create_flex_item_with_style("2", ElementStyle { width: Some(Dimension::Pt(100.0)), margin: Some(Margins { left: 30.0, ..Default::default() }), ..Default::default() }),
         ],
     }];
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let item1 = find_first_text_box_with_content(&pages[0], "1").unwrap();
     let item2 = find_first_text_box_with_content(&pages[0], "2").unwrap();
     // Item 1 starts after its 20pt left margin.
@@ -180,7 +181,7 @@ fn test_align_items_center() {
             create_flex_item_with_style("2", ElementStyle { width: Some(Dimension::Pt(100.0)), height: Some(Dimension::Pt(60.0)), ..Default::default() }),
         ],
     }];
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let item1 = find_first_text_box_with_content(&pages[0], "1").unwrap();
     // Line cross size is max height = 60.
     // Item 1 is 40 high. Centered y = (60 - 40) / 2 = 10.
@@ -200,7 +201,7 @@ fn test_align_self_override() {
             create_flex_item_with_style("short", ElementStyle { width: Some(Dimension::Pt(100.0)), height: Some(Dimension::Pt(20.0)), align_self: Some(AlignSelf::FlexEnd), ..Default::default() }),
         ],
     }];
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let tall = find_first_text_box_with_content(&pages[0], "tall").unwrap();
     let short = find_first_text_box_with_content(&pages[0], "short").unwrap();
     // Line cross size is the height of the tallest item, which is 80.
@@ -237,7 +238,7 @@ fn test_flex_wrap_with_page_break() {
         ],
     }];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     assert_eq!(pages.len(), 2);
     let page1 = &pages[0];
     let page2 = &pages[1];

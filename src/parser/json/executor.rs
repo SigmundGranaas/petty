@@ -1,3 +1,4 @@
+// src/parser/json/executor.rs
 //! Implements the "Execution" phase for the JSON parser.
 //! It walks the compiled instruction set and generates the `IRNode` tree.
 
@@ -143,14 +144,17 @@ impl<'s, 'd> TemplateExecutor<'s, 'd> {
                     self.push_block_to_parent(completed_heading);
                 }
             }
-            JsonInstruction::TableOfContents { styles } => self
-                .push_block_to_parent(IRNode::TableOfContents {
-                    meta: self.build_node_meta(
-                        styles,
-                        context,
-                        loop_pos,
-                    )?,
-                }),
+            JsonInstruction::TableOfContents { styles: _ } => {
+                // This node is a placeholder for feature detection and is deprecated for direct output.
+                // The actual ToC is rendered by the ComposingRenderer in a two-pass pipeline.
+                // In this pass, it should produce nothing in the IR tree.
+            }
+            JsonInstruction::IndexMarker { term } => {
+                self.push_block_to_parent(IRNode::IndexMarker {
+                    meta: NodeMetadata::default(),
+                    term: self.render_string(term, context, loop_pos)?,
+                });
+            }
             JsonInstruction::Image { styles, src } => self.push_block_to_parent(IRNode::Image { src: self.render_string(src, context, loop_pos)?, meta: self.build_node_meta(styles, context, loop_pos)? }),
             JsonInstruction::Table(table) => self.execute_table(table, context, loop_pos)?,
             JsonInstruction::Text { content } => self.push_inline_to_parent(InlineNode::Text(self.render_string(content, context, loop_pos)?)),
@@ -169,6 +173,13 @@ impl<'s, 'd> TemplateExecutor<'s, 'd> {
                 if let Some(h) = self.inline_stack.pop() {
                     self.push_inline_to_parent(h);
                 }
+            }
+            JsonInstruction::PageReference { target_id } => {
+                self.push_inline_to_parent(InlineNode::PageReference {
+                    target_id: target_id.clone(),
+                    meta: InlineMetadata::default(), // PageReference from JSON doesn't have styles.
+                    children: vec![],
+                });
             }
         }
         Ok(())

@@ -1,12 +1,12 @@
-// src/render/renderer.rs
 use crate::core::idf::SharedData;
 use crate::core::layout::PositionedElement;
+use crate::pipeline::api::IndexEntry;
 use crate::pipeline::worker::TocEntry;
 use lopdf::ObjectId;
+use std::any::Any;
 use std::collections::HashMap;
 use std::io::{Seek, Write};
 use thiserror::Error;
-use std::any::Any;
 
 #[derive(Error, Debug)]
 pub enum RenderError {
@@ -57,6 +57,7 @@ pub struct Pass1Result {
     pub toc_entries: Vec<TocEntry>,
     pub total_pages: usize,
     pub hyperlink_locations: Vec<HyperlinkLocation>,
+    pub index_entries: Vec<IndexEntry>,
 }
 
 /// A trait for document renderers, abstracting the PDF-writing primitives.

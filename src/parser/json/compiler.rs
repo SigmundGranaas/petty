@@ -1,3 +1,4 @@
+// src/parser/json/compiler.rs
 //! Implements the "Compilation" phase for the JSON parser.
 //! It transforms the Serde-parsed AST into a validated, executable instruction set.
 
@@ -74,6 +75,7 @@ pub enum JsonInstruction {
     Text { content: CompiledString },
     StyledSpan { styles: CompiledStyles, children: Vec<JsonInstruction> },
     Hyperlink { styles: CompiledStyles, href: CompiledString, children: Vec<JsonInstruction> },
+    PageReference { target_id: String },
     InlineImage { styles: CompiledStyles, src: CompiledString },
     LineBreak,
     PageBreak { master_name: Option<String> },
@@ -82,6 +84,7 @@ pub enum JsonInstruction {
     If { test: Expression, then_branch: Vec<JsonInstruction>, else_branch: Vec<JsonInstruction> },
     Heading { level: u8, styles: CompiledStyles, children: Vec<JsonInstruction> },
     TableOfContents { styles: CompiledStyles },
+    IndexMarker { term: CompiledString },
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -156,9 +159,11 @@ impl<'a> Compiler<'a> {
             JsonNode::Table(t) => self.compile_table_node(t),
             JsonNode::Heading(h) => Ok(JsonInstruction::Heading { level: h.level, styles: self.compile_styles(&h.style_names, &h.style_override, h.id.clone())?, children: self.compile_children(&h.children)? }),
             JsonNode::TableOfContents(c) => Ok(JsonInstruction::TableOfContents { styles: self.compile_styles(&c.style_names, &c.style_override, c.id.clone())? }),
+            JsonNode::IndexMarker { term } => Ok(JsonInstruction::IndexMarker { term: parse_expression_string(term)? }),
             JsonNode::Text { content } => Ok(JsonInstruction::Text { content: parse_expression_string(content)? }),
             JsonNode::StyledSpan(c) => Ok(JsonInstruction::StyledSpan { styles: self.compile_styles(&c.style_names, &c.style_override, c.id.clone())?, children: self.compile_children(&c.children)? }),
             JsonNode::Hyperlink(h) => Ok(JsonInstruction::Hyperlink { styles: self.compile_styles(&h.style_names, &h.style_override, h.id.clone())?, href: parse_expression_string(&h.href)?, children: self.compile_children(&h.children)? }),
+            JsonNode::PageReference { target_id } => Ok(JsonInstruction::PageReference { target_id: target_id.clone() }),
             JsonNode::InlineImage(i) => Ok(JsonInstruction::InlineImage { styles: self.compile_styles(&i.style_names, &i.style_override, i.id.clone())?, src: parse_expression_string(&i.src)? }),
             JsonNode::LineBreak => Ok(JsonInstruction::LineBreak),
             JsonNode::PageBreak { master_name } => Ok(JsonInstruction::PageBreak { master_name: master_name.clone() }),

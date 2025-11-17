@@ -1,3 +1,4 @@
+// src/core/layout/nodes/image_test.rs
 #![cfg(test)]
 use crate::core::idf::{IRNode, NodeMetadata};
 use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
@@ -38,7 +39,7 @@ fn test_image_splits_to_next_page() {
         create_image(50.0), // Does not fit (40 + 50 > 80)
     ];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
 
     assert_eq!(pages.len(), 2, "Expected two pages");
 
@@ -83,7 +84,7 @@ fn test_image_with_margins() {
         create_image(20.0), // Starts at y=10+50. Fits (10+50+20 <= 80)
     ];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     assert_eq!(pages.len(), 1);
 
     let page1 = &pages[0];
@@ -118,7 +119,7 @@ fn test_image_taller_than_page_is_skipped() {
         create_paragraph("After"),
     ];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
 
     assert_eq!(pages.len(), 1, "Should only produce one page");
     let page1 = &pages[0];

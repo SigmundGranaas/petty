@@ -1,5 +1,3 @@
-// FILE: src/parser/xslt/executor.rs
-
 //! The stateful executor for an XSLT program. It orchestrates the execution flow,
 //! manages state (like variables), and delegates output generation to an `OutputBuilder`.
 
@@ -172,13 +170,13 @@ impl<'s, 'a, N: DataSourceNode<'a> + 'a> TemplateExecutor<'s, 'a, N> {
     /// and executes the template to produce a final `IRNode` tree.
     pub fn build_tree(&mut self) -> Result<Vec<crate::core::idf::IRNode>, ExecutionError> {
         let mut builder = IdfBuilder::new();
-        self.execute(&mut builder)?;
+        self.execute_with_mode(None, &mut builder)?;
         Ok(builder.get_result())
     }
 
     /// Executes the entire XSLT transformation, delegating all output actions to the provided builder.
-    pub fn execute(&mut self, builder: &mut dyn OutputBuilder) -> Result<(), ExecutionError> {
-        self.apply_templates_to_nodes(&[self.root_node], None, builder)?;
+    pub fn execute_with_mode(&mut self, mode: Option<&str>, builder: &mut dyn OutputBuilder) -> Result<(), ExecutionError> {
+        self.apply_templates_to_nodes(&[self.root_node], mode, builder)?;
         Ok(())
     }
 
