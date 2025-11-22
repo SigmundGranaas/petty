@@ -1,6 +1,5 @@
-use super::fonts::FontManager;
-use super::geom;
-use super::node::{AnchorLocation, IndexEntry, LayoutContext, LayoutNode, LayoutResult};
+use super::geom::{self, BoxConstraints};
+use super::node::{AnchorLocation, IndexEntry, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult};
 use super::nodes::block::BlockNode;
 use super::nodes::flex::FlexNode;
 use super::nodes::heading::HeadingNode;
@@ -11,9 +10,8 @@ use super::nodes::page_break::PageBreakNode;
 use super::nodes::paragraph::ParagraphNode;
 use super::nodes::table::TableNode;
 use super::style::{self, ComputedStyle};
-use super::{IRNode, PipelineError, PositionedElement};
+use super::{FontManager, IRNode, PipelineError, PositionedElement};
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
-use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -58,9 +56,8 @@ impl LayoutEngine {
             .clone()
             .ok_or_else(|| PipelineError::Layout("No default page master defined".to_string()))?;
 
-        // This map will be populated during the layout pass.
-        let defined_anchors = RefCell::new(HashMap::<String, AnchorLocation>::new());
-        let index_entries = RefCell::new(HashMap::<String, Vec<IndexEntry>>::new());
+        let mut defined_anchors = HashMap::<String, AnchorLocation>::new();
+        let mut index_entries = HashMap::<String, Vec<IndexEntry>>::new();
 
         while let Some(mut work_item) = current_work.take() {
             let page_layout = stylesheet.page_masters.get(&current_master_name).ok_or_else(|| {
@@ -72,7 +69,7 @@ impl LayoutEngine {
             let content_width = page_width - margins.left - margins.right;
             let content_height = page_height - margins.top - margins.bottom;
 
-            let page_elements_cell = RefCell::new(Vec::new());
+            let mut page_elements = Vec::new();
             let bounds = geom::Rect {
                 x: margins.left,
                 y: margins.top,
@@ -80,17 +77,26 @@ impl LayoutEngine {
                 height: content_height,
             };
 
-            // Before layout, perform the measurement pass on the current work item.
-            work_item.measure(self, content_width);
+            // Setup LayoutEnvironment
+            let env = LayoutEnvironment {
+                engine: self,
+                local_page_index: pages.len(),
+            };
 
-            let mut ctx =
-                LayoutContext::new(self, bounds, &page_elements_cell, &defined_anchors, &index_entries);
-            ctx.local_page_index = pages.len();
+            // Before layout, perform the measurement pass on the current work item.
+            // For pagination, we constrain the width strictly, but leave height loose.
+            let constraints = BoxConstraints::tight_width(content_width);
+            work_item.measure(&env, constraints);
+
+            let mut buf = LayoutBuffer::new(
+                bounds,
+                &mut page_elements,
+                &mut defined_anchors,
+                &mut index_entries,
+            );
 
             // Layout this page
-            let result = work_item.layout(&mut ctx)?;
-
-            let page_elements = page_elements_cell.into_inner();
+            let result = work_item.layout(&env, &mut buf)?;
 
             // A page should be added if it's the first one, or if it contains any content.
             // This prevents creating empty pages in the middle of a document when an element
@@ -111,11 +117,7 @@ impl LayoutEngine {
                 }
             }
         }
-        Ok((
-            pages,
-            defined_anchors.into_inner(),
-            index_entries.into_inner(),
-        ))
+        Ok((pages, defined_anchors, index_entries))
     }
 
     /// Helper function to build a vector of `LayoutNode`s from `IRNode` children.

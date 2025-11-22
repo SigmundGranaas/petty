@@ -1,9 +1,9 @@
-
-use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult};
+use crate::core::layout::node::{LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult};
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::LayoutError;
 use std::any::Any;
 use std::sync::Arc;
+use crate::core::layout::geom::{BoxConstraints, Size};
 
 /// A special `LayoutNode` that represents an explicit page break.
 /// Its primary purpose is to act as a marker during the layout process.
@@ -31,9 +31,13 @@ impl LayoutNode for PageBreakNode {
         self
     }
 
-    fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
+    fn measure(&mut self, _env: &LayoutEnvironment, _constraints: BoxConstraints) -> Size {
+        Size::zero()
+    }
+
+    fn layout(&mut self, _env: &LayoutEnvironment, buf: &mut LayoutBuffer) -> Result<LayoutResult, LayoutError> {
         // A page break should force a new page if it's not at the very top.
-        if !ctx.is_empty() || ctx.cursor.1 > 0.0 {
+        if !buf.is_empty() || buf.cursor.1 > 0.0 {
             // By returning Partial with ourselves as the remainder, we signal to the
             // layout engine that a break is needed.
             Ok(LayoutResult::Partial(Box::new(self.clone())))

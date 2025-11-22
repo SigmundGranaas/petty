@@ -1,6 +1,5 @@
 // FILE: src/parser/xslt/util.rs
 use crate::parser::{Location, ParseError};
-use crate::parser::xslt::xpath;
 use crate::parser::xslt::ast::{AttributeValueTemplate, AvtPart};
 use crate::parser::xslt::compiler::CompilerBuilder;
 use quick_xml::events::BytesStart;

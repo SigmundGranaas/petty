@@ -1,10 +1,11 @@
-use crate::core::idf::IRNode;
-use crate::core::layout::node::{AnchorLocation, LayoutContext, LayoutNode, LayoutResult};
+use crate::core::layout::geom::{BoxConstraints, Size};
+use crate::core::layout::node::{AnchorLocation, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult};
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{ImageElement, LayoutElement, LayoutEngine, LayoutError, PositionedElement};
 use crate::core::style::dimension::Dimension;
 use std::any::Any;
 use std::sync::Arc;
+use crate::core::idf::IRNode;
 
 #[derive(Debug, Clone)]
 pub struct ImageNode {
@@ -32,11 +33,17 @@ impl ImageNode {
         }
     }
 
-    fn resolve_sizes(&mut self, available_width: f32) {
+    fn resolve_sizes(&mut self, constraints: BoxConstraints) -> Size {
+        let available_width = if constraints.has_bounded_width() {
+            constraints.max_width
+        } else {
+            f32::INFINITY
+        };
+
         self.width = match &self.style.width {
             Some(Dimension::Pt(w)) => *w,
-            Some(Dimension::Percent(p)) => available_width * (p / 100.0),
-            _ => available_width,
+            Some(Dimension::Percent(p)) => if available_width.is_finite() { available_width * (p / 100.0) } else { 0.0 },
+            _ => if available_width.is_finite() { available_width } else { 100.0 }, // Fallback size for infinite
         };
         self.height = match &self.style.height {
             Some(Dimension::Pt(h)) => *h,
@@ -44,6 +51,8 @@ impl ImageNode {
             // which we don't know here. We'll treat it as auto.
             Some(Dimension::Percent(_)) | _ => self.width, // Assume square aspect ratio for auto
         };
+
+        Size::new(self.width, self.height)
     }
 }
 
@@ -56,35 +65,32 @@ impl LayoutNode for ImageNode {
         self
     }
 
-    fn measure(&mut self, _engine: &LayoutEngine, available_width: f32) {
-        self.resolve_sizes(available_width);
+    fn measure(&mut self, _env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
+        let content_size = self.resolve_sizes(constraints);
+        let total_height = self.style.margin.top + content_size.height + self.style.margin.bottom;
+        Size::new(content_size.width, total_height)
     }
 
-    fn measure_content_height(&mut self, _engine: &LayoutEngine, available_width: f32) -> f32 {
-        self.resolve_sizes(available_width);
-        self.style.margin.top + self.height + self.style.margin.bottom
-    }
-
-    fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
+    fn layout(&mut self, env: &LayoutEnvironment, buf: &mut LayoutBuffer) -> Result<LayoutResult, LayoutError> {
         if let Some(id) = &self.id {
             let location = AnchorLocation {
-                local_page_index: ctx.local_page_index,
-                y_pos: ctx.cursor.1 + ctx.bounds.y,
+                local_page_index: env.local_page_index,
+                y_pos: buf.cursor.1 + buf.bounds.y,
             };
-            ctx.defined_anchors.borrow_mut().insert(id.clone(), location);
+            buf.defined_anchors.insert(id.clone(), location);
         }
 
         let total_height = self.style.margin.top + self.height + self.style.margin.bottom;
 
-        if total_height > ctx.bounds.height {
-            return Err(LayoutError::ElementTooLarge(total_height, ctx.bounds.height));
+        if total_height > buf.bounds.height {
+            return Err(LayoutError::ElementTooLarge(total_height, buf.bounds.height));
         }
 
-        if total_height > ctx.available_height() && (!ctx.is_empty() || ctx.cursor.1 > 0.0) {
+        if total_height > buf.available_height() && (!buf.is_empty() || buf.cursor.1 > 0.0) {
             return Ok(LayoutResult::Partial(Box::new(self.clone())));
         }
 
-        ctx.advance_cursor(self.style.margin.top);
+        buf.advance_cursor(self.style.margin.top);
 
         let element = PositionedElement {
             x: self.style.margin.left,
@@ -96,10 +102,10 @@ impl LayoutNode for ImageNode {
             }),
             style: self.style.clone(),
         };
-        ctx.push_element(element);
+        buf.push_element(element);
 
-        ctx.advance_cursor(self.height);
-        ctx.advance_cursor(self.style.margin.bottom);
+        buf.advance_cursor(self.height);
+        buf.advance_cursor(self.style.margin.bottom);
 
         Ok(LayoutResult::Full)
     }

@@ -1,12 +1,12 @@
-use crate::core::idf::{IRNode, TableColumnDefinition, TableRow};
-use crate::core::layout::node::{AnchorLocation, LayoutContext, LayoutNode, LayoutResult};
+use crate::core::layout::geom::{BoxConstraints, Size};
+use crate::core::layout::node::{AnchorLocation, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult};
 use crate::core::layout::nodes::block::{draw_background_and_borders, BlockNode};
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{geom, LayoutEngine, LayoutError};
 use crate::core::style::dimension::Dimension;
 use std::any::Any;
 use std::sync::Arc;
-
+use crate::core::idf::{IRNode, TableColumnDefinition, TableRow};
 // --- Main Table Node ---
 
 #[derive(Debug, Clone)]
@@ -55,89 +55,93 @@ impl LayoutNode for TableNode {
         self
     }
 
-    fn measure(&mut self, engine: &LayoutEngine, available_width: f32) {
+    fn measure(&mut self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
         let border_left_width = self.style.border_left.as_ref().map_or(0.0, |b| b.width);
         let border_right_width = self.style.border_right.as_ref().map_or(0.0, |b| b.width);
-        let child_available_width = available_width
-            - self.style.padding.left
-            - self.style.padding.right
-            - border_left_width
-            - border_right_width;
+        let padding_x = self.style.padding.left + self.style.padding.right;
+
+        let available_width = if constraints.has_bounded_width() {
+            (constraints.max_width - padding_x - border_left_width - border_right_width).max(0.0)
+        } else {
+            f32::INFINITY
+        };
 
         self.calculated_widths = calculate_column_widths(
-            engine,
+            env,
             &self.columns,
-            &self.header_rows,
-            &self.body_rows,
-            child_available_width,
+            &mut self.header_rows,
+            &mut self.body_rows,
+            available_width,
         );
-        for row in self.header_rows.iter_mut().chain(self.body_rows.iter_mut()) {
-            row.measure(engine, &self.calculated_widths);
-        }
-    }
 
-    fn measure_content_height(&mut self, _engine: &LayoutEngine, _available_width: f32) -> f32 {
-        let content_height = self.header_rows.iter().map(|r| r.height).sum::<f32>()
-            + self.body_rows.iter().map(|r| r.height).sum::<f32>();
+        let mut total_height = 0.0;
+        for row in self.header_rows.iter_mut().chain(self.body_rows.iter_mut()) {
+            row.measure(env, &self.calculated_widths);
+            total_height += row.height;
+        }
 
         let border_top_width = self.style.border_top.as_ref().map_or(0.0, |b| b.width);
         let border_bottom_width = self.style.border_bottom.as_ref().map_or(0.0, |b| b.width);
-
-        self.style.margin.top
+        let padding_y = self.style.padding.top + self.style.padding.bottom;
+        let total_height = self.style.margin.top
             + border_top_width
-            + self.style.padding.top
-            + content_height
+            + padding_y
+            + total_height
             + self.style.padding.bottom
             + border_bottom_width
-            + self.style.margin.bottom
+            + self.style.margin.bottom;
+
+        let width = if constraints.has_bounded_width() { constraints.max_width } else {
+            self.calculated_widths.iter().sum::<f32>() + padding_x + border_left_width + border_right_width
+        };
+
+        Size::new(width, total_height)
     }
 
-    fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
+    fn layout(&mut self, env: &LayoutEnvironment, buf: &mut LayoutBuffer) -> Result<LayoutResult, LayoutError> {
         if let Some(id) = &self.id {
             let location = AnchorLocation {
-                local_page_index: ctx.local_page_index,
-                y_pos: ctx.cursor.1 + ctx.bounds.y,
+                local_page_index: env.local_page_index,
+                y_pos: buf.cursor.1 + buf.bounds.y,
             };
-            ctx.defined_anchors.borrow_mut().insert(id.clone(), location);
+            buf.defined_anchors.insert(id.clone(), location);
         }
 
         // --- Box Model Setup ---
-        let margin_to_add = self.style.margin.top.max(ctx.last_v_margin);
-        if !ctx.is_empty() && margin_to_add > ctx.available_height() {
+        let margin_to_add = self.style.margin.top.max(buf.last_v_margin);
+        if !buf.is_empty() && margin_to_add > buf.available_height() {
             return Ok(LayoutResult::Partial(Box::new(self.clone())));
         }
-        ctx.advance_cursor(margin_to_add);
-        ctx.last_v_margin = 0.0;
+        buf.advance_cursor(margin_to_add);
+        buf.last_v_margin = 0.0;
 
         let border_top_width = self.style.border_top.as_ref().map_or(0.0, |b| b.width);
         let border_bottom_width = self.style.border_bottom.as_ref().map_or(0.0, |b| b.width);
         let border_left_width = self.style.border_left.as_ref().map_or(0.0, |b| b.width);
         let border_right_width = self.style.border_right.as_ref().map_or(0.0, |b| b.width);
 
-        let block_start_y_in_ctx = ctx.cursor.1;
-        ctx.advance_cursor(border_top_width + self.style.padding.top);
-        let content_start_y_in_ctx = ctx.cursor.1;
+        let block_start_y_in_ctx = buf.cursor.1;
+        buf.advance_cursor(border_top_width + self.style.padding.top);
+        let content_start_y_in_ctx = buf.cursor.1;
 
         // --- Table Layout Logic ---
         let child_bounds = geom::Rect {
-            x: ctx.bounds.x + border_left_width + self.style.padding.left,
-            y: ctx.bounds.y + content_start_y_in_ctx,
-            width: ctx.bounds.width
+            x: buf.bounds.x + border_left_width + self.style.padding.left,
+            y: buf.bounds.y + content_start_y_in_ctx,
+            width: buf.bounds.width
                 - self.style.padding.left
                 - self.style.padding.right
                 - border_left_width
                 - border_right_width,
-            height: ctx.available_height(),
+            height: buf.available_height(),
         };
-        let mut child_ctx = LayoutContext {
-            engine: ctx.engine,
+        let mut child_buf = LayoutBuffer {
             bounds: child_bounds,
             cursor: (0.0, 0.0),
-            elements: ctx.elements,
+            elements: &mut *buf.elements,
             last_v_margin: 0.0,
-            local_page_index: ctx.local_page_index,
-            defined_anchors: ctx.defined_anchors,
-            index_entries: ctx.index_entries,
+            defined_anchors: &mut *buf.defined_anchors,
+            index_entries: &mut *buf.index_entries,
         };
 
         let num_cols = self.columns.len();
@@ -147,41 +151,58 @@ impl LayoutNode for TableNode {
         let mut content_height_on_this_page = 0.0;
 
         for (i, row) in self.header_rows.iter_mut().enumerate() {
-            if row.height > child_ctx.bounds.height {
-                return Err(LayoutError::ElementTooLarge(row.height, child_ctx.bounds.height));
+            if row.height > child_buf.bounds.height {
+                return Err(LayoutError::ElementTooLarge(row.height, child_buf.bounds.height));
             }
-            if row.height > child_ctx.available_height() && !child_ctx.is_empty() {
+            if row.height > child_buf.available_height() && !child_buf.is_empty() {
                 // This case should be rare (header taller than page), but we handle it by breaking.
                 let remainder = self.body_rows.drain(..).collect();
                 return Ok(LayoutResult::Partial(Box::new(create_remainder_table(self, remainder))));
             }
-            if let Err(e) = row.layout(&mut child_ctx, &mut occupancy, i, self.style.border_spacing) {
+            if let Err(e) = row.layout(env, &mut child_buf, &mut occupancy, i, self.style.border_spacing) {
                 log::warn!("Skipping table header row that failed to lay out: {}", e);
             }
         }
-        content_height_on_this_page += child_ctx.cursor.1;
+        content_height_on_this_page += child_buf.cursor.1;
         row_idx_offset += self.header_rows.len();
 
         for (i, row) in self.body_rows.iter_mut().enumerate() {
-            if row.height > child_ctx.bounds.height {
-                return Err(LayoutError::ElementTooLarge(row.height, child_ctx.bounds.height));
+            if row.height > child_buf.bounds.height {
+                return Err(LayoutError::ElementTooLarge(row.height, child_buf.bounds.height));
             }
-            if row.height > child_ctx.available_height() && !child_ctx.is_empty() {
-                draw_background_and_borders(ctx, &self.style, block_start_y_in_ctx, content_height_on_this_page);
-                ctx.cursor.1 = content_start_y_in_ctx + content_height_on_this_page + self.style.padding.bottom + border_bottom_width;
+            if row.height > child_buf.available_height() && !child_buf.is_empty() {
+                draw_background_and_borders(
+                    child_buf.elements,
+                    buf.bounds,
+                    &self.style,
+                    block_start_y_in_ctx,
+                    content_height_on_this_page
+                );
+
+                buf.cursor.1 = content_start_y_in_ctx + content_height_on_this_page + self.style.padding.bottom + border_bottom_width;
 
                 let remaining_body_rows = self.body_rows.drain(i..).collect();
-                return Ok(LayoutResult::Partial(Box::new(create_remainder_table(self, remaining_body_rows))));
+
+                let mut remainder = create_remainder_table(self, remaining_body_rows);
+                // Remainder also constrained by page width
+                remainder.measure(env, BoxConstraints::tight_width(buf.bounds.width));
+                return Ok(LayoutResult::Partial(Box::new(remainder)));
             }
-            if let Err(e) = row.layout(&mut child_ctx, &mut occupancy, row_idx_offset + i, self.style.border_spacing) {
+            if let Err(e) = row.layout(env, &mut child_buf, &mut occupancy, row_idx_offset + i, self.style.border_spacing) {
                 log::warn!("Skipping table row that failed to lay out: {}", e);
             }
         }
 
-        content_height_on_this_page = child_ctx.cursor.1;
-        draw_background_and_borders(ctx, &self.style, block_start_y_in_ctx, content_height_on_this_page);
-        ctx.cursor.1 = content_start_y_in_ctx + content_height_on_this_page + self.style.padding.bottom + border_bottom_width;
-        ctx.last_v_margin = self.style.margin.bottom;
+        content_height_on_this_page = child_buf.cursor.1;
+        draw_background_and_borders(
+            child_buf.elements,
+            buf.bounds,
+            &self.style,
+            block_start_y_in_ctx,
+            content_height_on_this_page
+        );
+        buf.cursor.1 = content_start_y_in_ctx + content_height_on_this_page + self.style.padding.bottom + border_bottom_width;
+        buf.last_v_margin = self.style.margin.bottom;
 
         Ok(LayoutResult::Full)
     }
@@ -217,7 +238,7 @@ impl TableRowNode {
         }
     }
 
-    fn measure(&mut self, engine: &LayoutEngine, col_widths: &[f32]) {
+    fn measure(&mut self, env: &LayoutEnvironment, col_widths: &[f32]) {
         self.col_widths = col_widths.to_vec();
         let mut max_height: f32 = 0.0;
         let mut col_cursor = 0;
@@ -225,7 +246,7 @@ impl TableRowNode {
             if col_cursor >= col_widths.len() { break; }
             let end_col = (col_cursor + cell.colspan).min(col_widths.len());
             let cell_width: f32 = col_widths[col_cursor..end_col].iter().sum();
-            cell.measure(engine, cell_width);
+            cell.measure(env, cell_width);
             if cell.rowspan == 1 {
                 max_height = max_height.max(cell.height);
             }
@@ -236,7 +257,8 @@ impl TableRowNode {
 
     fn layout(
         &mut self,
-        ctx: &mut LayoutContext,
+        env: &LayoutEnvironment,
+        buf: &mut LayoutBuffer,
         occupancy: &mut [Vec<bool>],
         row_idx: usize,
         border_spacing: f32,
@@ -258,22 +280,20 @@ impl TableRowNode {
                 .sum::<f32>() + (cell.colspan.saturating_sub(1) as f32 * border_spacing);
 
             let cell_bounds = geom::Rect {
-                x: ctx.bounds.x + current_x,
-                y: ctx.bounds.y + ctx.cursor.1,
+                x: buf.bounds.x + current_x,
+                y: buf.bounds.y + buf.cursor.1,
                 width: cell_width,
                 height: self.height,
             };
-            let mut cell_ctx = LayoutContext {
-                engine: ctx.engine,
+            let mut cell_buf = LayoutBuffer {
                 bounds: cell_bounds,
                 cursor: (0.0, 0.0),
-                elements: ctx.elements,
+                elements: &mut *buf.elements,
                 last_v_margin: 0.0,
-                local_page_index: ctx.local_page_index,
-                defined_anchors: ctx.defined_anchors,
-                index_entries: ctx.index_entries,
+                defined_anchors: &mut *buf.defined_anchors,
+                index_entries: &mut *buf.index_entries,
             };
-            cell.layout(&mut cell_ctx)?;
+            cell.layout(env, &mut cell_buf)?;
 
             for r in 0..cell.rowspan {
                 for c in 0..cell.colspan {
@@ -287,7 +307,7 @@ impl TableRowNode {
             current_x += cell_width + border_spacing;
             col_idx += cell.colspan;
         }
-        ctx.advance_cursor(self.height + border_spacing);
+        buf.advance_cursor(self.height + border_spacing);
         Ok(LayoutResult::Full)
     }
 }
@@ -320,29 +340,40 @@ impl TableCellNode {
         }
     }
 
-    fn measure(&mut self, engine: &LayoutEngine, available_width: f32) {
-        self.height = self.content.measure_content_height(engine, available_width);
+    fn measure(&mut self, env: &LayoutEnvironment, available_width: f32) {
+        // Measure height with fixed width
+        let constraint_fixed = BoxConstraints::tight_width(available_width);
+        self.height = self.content.measure(env, constraint_fixed).height;
+
         // Measure preferred width by giving it "infinite" space
-        self.preferred_width = self.content.measure_intrinsic_width(engine);
+        let constraint_infinite = BoxConstraints {
+            min_width: 0.0, max_width: f32::INFINITY,
+            min_height: 0.0, max_height: f32::INFINITY
+        };
+        self.preferred_width = self.content.measure(env, constraint_infinite).width;
     }
 
-    fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
-        self.content.layout(ctx)
+    fn layout(&mut self, env: &LayoutEnvironment, buf: &mut LayoutBuffer) -> Result<LayoutResult, LayoutError> {
+        self.content.layout(env, buf)
     }
 }
 
 // --- Helper Functions ---
 
 fn calculate_column_widths(
-    engine: &LayoutEngine,
+    env: &LayoutEnvironment,
     columns: &[TableColumnDefinition],
-    header_rows: &[TableRowNode],
-    body_rows: &[TableRowNode],
+    header_rows: &mut [TableRowNode],
+    body_rows: &mut [TableRowNode],
     table_width: f32,
 ) -> Vec<f32> {
     let mut widths = vec![0.0; columns.len()];
     let mut auto_indices = Vec::new();
     let mut remaining_width = table_width;
+
+    // If table width is infinite (unbounded), we just size everything by preferred/intrinsic width?
+    // Or treat percents as 0.
+    let table_width_is_finite = table_width.is_finite();
 
     // 1. Satisfy fixed and percentage widths
     for (i, col) in columns.iter().enumerate() {
@@ -353,8 +384,12 @@ fn calculate_column_widths(
                     remaining_width -= *w;
                 }
                 Dimension::Percent(p) => {
-                    widths[i] = (p / 100.0) * table_width;
-                    remaining_width -= widths[i];
+                    if table_width_is_finite {
+                        widths[i] = (p / 100.0) * table_width;
+                        remaining_width -= widths[i];
+                    } else {
+                        auto_indices.push(i); // Treat as auto if unbounded
+                    }
                 }
                 Dimension::Auto => auto_indices.push(i),
             }
@@ -370,13 +405,24 @@ fn calculate_column_widths(
 
     // 2. Determine preferred widths for auto columns
     let mut preferred_widths: Vec<f32> = vec![0.0; columns.len()];
-    for row in header_rows.iter().chain(body_rows.iter()) {
+
+    // Helper to measure cell preferred width.
+    // Since we are mutably borrowing rows, we need to be careful.
+    // But actually, table cells store preferred width internally after we call measure on them?
+    // No, we calculate widths BEFORE calling measure on rows with those widths.
+    // So we must probe the cells now.
+
+    let infinite_constraint = BoxConstraints {
+        min_width: 0.0, max_width: f32::INFINITY,
+        min_height: 0.0, max_height: f32::INFINITY
+    };
+
+    for row in header_rows.iter_mut().chain(body_rows.iter_mut()) {
         let mut col_cursor = 0;
-        for cell in &row.cells {
+        for cell in &mut row.cells {
             if col_cursor >= columns.len() { break; }
             if auto_indices.contains(&col_cursor) { // Simplified: only considers first col of a span
-                let cell_content = cell.content.clone();
-                let preferred = cell_content.measure_intrinsic_width(engine);
+                let preferred = cell.content.measure(env, infinite_constraint).width;
                 if cell.colspan == 1 {
                     preferred_widths[col_cursor] = preferred_widths[col_cursor].max(preferred);
                 }
@@ -387,6 +433,15 @@ fn calculate_column_widths(
 
     // 3. Distribute remaining width based on preferred widths
     let total_preferred: f32 = auto_indices.iter().map(|&i| preferred_widths[i]).sum();
+
+    if !table_width_is_finite {
+        // Just use preferred widths
+        for &i in &auto_indices {
+            widths[i] = preferred_widths[i];
+        }
+        return widths;
+    }
+
     if total_preferred > 0.0 && remaining_width > total_preferred {
         // Distribute extra space proportionally
         let extra_space = remaining_width - total_preferred;

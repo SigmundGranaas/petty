@@ -1,9 +1,10 @@
-use crate::core::idf::IRNode;
-use crate::core::layout::node::{IndexEntry, LayoutContext, LayoutNode, LayoutResult};
+use crate::core::layout::geom::{BoxConstraints, Size};
+use crate::core::layout::node::{IndexEntry, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult};
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::LayoutError;
 use std::any::Any;
 use std::sync::Arc;
+use crate::core::idf::IRNode;
 
 /// A special `LayoutNode` that represents an index term marker.
 /// It is invisible and its only purpose is to record its position during layout.
@@ -35,13 +36,16 @@ impl LayoutNode for IndexMarkerNode {
         self
     }
 
-    fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
+    fn measure(&mut self, _env: &LayoutEnvironment, _constraints: BoxConstraints) -> Size {
+        Size::zero()
+    }
+
+    fn layout(&mut self, env: &LayoutEnvironment, buf: &mut LayoutBuffer) -> Result<LayoutResult, LayoutError> {
         let entry = IndexEntry {
-            local_page_index: ctx.local_page_index,
-            y_pos: ctx.cursor.1 + ctx.bounds.y,
+            local_page_index: env.local_page_index,
+            y_pos: buf.cursor.1 + buf.bounds.y,
         };
-        ctx.index_entries
-            .borrow_mut()
+        buf.index_entries
             .entry(self.term.clone())
             .or_default()
             .push(entry);

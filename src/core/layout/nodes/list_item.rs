@@ -1,5 +1,5 @@
-use crate::core::idf::IRNode;
-use crate::core::layout::node::{AnchorLocation, LayoutContext, LayoutNode, LayoutResult};
+use crate::core::layout::geom::{BoxConstraints, Size};
+use crate::core::layout::node::{AnchorLocation, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult};
 use crate::core::layout::nodes::block::draw_background_and_borders;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{geom, LayoutElement, LayoutEngine, LayoutError, PositionedElement, TextElement};
@@ -8,6 +8,7 @@ use crate::core::style::list::{ListStylePosition, ListStyleType};
 use crate::core::style::text::TextDecoration;
 use std::any::Any;
 use std::sync::Arc;
+use crate::core::idf::IRNode;
 
 /// A `LayoutNode` for a single item within a list.
 /// It is responsible for drawing its marker (bullet or number) and then
@@ -114,7 +115,7 @@ impl LayoutNode for ListItemNode {
         self
     }
 
-    fn measure(&mut self, engine: &LayoutEngine, available_width: f32) {
+    fn measure(&mut self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
         // List items behave like blocks; their children's available width is reduced
         // by the list item's own padding and borders.
         let border_left_width = self.style.border_left.as_ref().map_or(0.0, |b| b.width);
@@ -122,64 +123,78 @@ impl LayoutNode for ListItemNode {
         const MARKER_SPACING_FACTOR: f32 = 0.4;
         let is_outside_marker = self.style.list_style_position == ListStylePosition::Outside;
         let indent = if is_outside_marker && !self.marker_text.is_empty() {
-            engine.measure_text_width(&self.marker_text, &self.style) + self.style.font_size * MARKER_SPACING_FACTOR
+            env.engine.measure_text_width(&self.marker_text, &self.style) + self.style.font_size * MARKER_SPACING_FACTOR
         } else {
             0.0
         };
 
-        let child_available_width = available_width
-            - self.style.padding.left
-            - self.style.padding.right
-            - border_left_width
-            - border_right_width
-            - indent;
+        let child_constraints = if constraints.has_bounded_width() {
+            let w = (constraints.max_width
+                - self.style.padding.left
+                - self.style.padding.right
+                - border_left_width
+                - border_right_width
+                - indent).max(0.0);
+            BoxConstraints {
+                min_width: 0.0, max_width: w,
+                min_height: 0.0, max_height: f32::INFINITY
+            }
+        } else {
+            BoxConstraints {
+                min_width: 0.0, max_width: f32::INFINITY,
+                min_height: 0.0, max_height: f32::INFINITY
+            }
+        };
 
+        let mut total_content_height = 0.0;
         for child in &mut self.children {
-            child.measure(engine, child_available_width);
+            total_content_height += child.measure(env, child_constraints).height;
         }
-    }
-    fn measure_content_height(&mut self, engine: &LayoutEngine, available_width: f32) -> f32 {
-        if let Some(Dimension::Pt(h)) = self.style.height {
-            return h;
-        }
+
         let border_top_width = self.style.border_top.as_ref().map_or(0.0, |b| b.width);
         let border_bottom_width = self.style.border_bottom.as_ref().map_or(0.0, |b| b.width);
 
-        let content_height: f32 = self
-            .children
-            .iter_mut()
-            .map(|c| c.measure_content_height(engine, available_width))
-            .sum();
+        let height = if let Some(Dimension::Pt(h)) = self.style.height {
+            h
+        } else {
+            border_top_width
+                + self.style.padding.top
+                + total_content_height
+                + self.style.padding.bottom
+                + border_bottom_width
+        };
 
-        border_top_width
-            + self.style.padding.top
-            + content_height
-            + self.style.padding.bottom
-            + border_bottom_width
+        let width = if constraints.has_bounded_width() { constraints.max_width } else {
+            // Unbounded width logic is weak here, usually not needed for list items unless inside flex
+            0.0 // Placeholder, block nodes fill width usually
+        };
+
+        Size::new(width, height)
     }
-    fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
+
+    fn layout(&mut self, env: &LayoutEnvironment, buf: &mut LayoutBuffer) -> Result<LayoutResult, LayoutError> {
         if let Some(id) = &self.id {
             let location = AnchorLocation {
-                local_page_index: ctx.local_page_index,
-                y_pos: ctx.cursor.1 + ctx.bounds.y,
+                local_page_index: env.local_page_index,
+                y_pos: buf.cursor.1 + buf.bounds.y,
             };
-            ctx.defined_anchors.borrow_mut().insert(id.clone(), location);
+            buf.defined_anchors.insert(id.clone(), location);
         }
 
         const MARKER_SPACING_FACTOR: f32 = 0.4;
         let is_outside_marker = self.style.list_style_position == ListStylePosition::Outside;
 
-        let block_start_y_in_ctx = ctx.cursor.1;
+        let block_start_y_in_ctx = buf.cursor.1;
 
         // --- 1. Handle Marker Layout for 'outside' markers ---
         // This happens before the box model is applied to the content.
         let indent = if is_outside_marker && !self.marker_text.is_empty() {
             let marker_available_height = self.style.line_height;
-            if marker_available_height > ctx.available_height() && !ctx.is_empty() {
+            if marker_available_height > buf.available_height() && !buf.is_empty() {
                 return Ok(LayoutResult::Partial(Box::new(self.clone())));
             }
 
-            let marker_width = ctx.engine.measure_text_width(&self.marker_text, &self.style);
+            let marker_width = env.engine.measure_text_width(&self.marker_text, &self.style);
             let marker_spacing = self.style.font_size * MARKER_SPACING_FACTOR;
 
             let marker_box = PositionedElement {
@@ -194,7 +209,7 @@ impl LayoutNode for ListItemNode {
                 }),
                 style: self.style.clone(),
             };
-            ctx.push_element_at(marker_box, 0.0, block_start_y_in_ctx);
+            buf.push_element_at(marker_box, 0.0, block_start_y_in_ctx);
             marker_width + marker_spacing
         } else {
             0.0
@@ -206,52 +221,67 @@ impl LayoutNode for ListItemNode {
         let border_left_width = self.style.border_left.as_ref().map_or(0.0, |b| b.width);
         let border_right_width = self.style.border_right.as_ref().map_or(0.0, |b| b.width);
 
-        ctx.advance_cursor(border_top_width + self.style.padding.top);
-        let content_start_y_in_ctx = ctx.cursor.1;
+        buf.advance_cursor(border_top_width + self.style.padding.top);
+        let content_start_y_in_ctx = buf.cursor.1;
 
         let child_bounds = geom::Rect {
-            x: ctx.bounds.x + border_left_width + self.style.padding.left + indent,
-            y: ctx.bounds.y + content_start_y_in_ctx,
-            width: ctx.bounds.width - self.style.padding.left - self.style.padding.right - border_left_width - border_right_width - indent,
-            height: ctx.available_height(),
+            x: buf.bounds.x + border_left_width + self.style.padding.left + indent,
+            y: buf.bounds.y + content_start_y_in_ctx,
+            width: buf.bounds.width - self.style.padding.left - self.style.padding.right - border_left_width - border_right_width - indent,
+            height: buf.available_height(),
         };
 
-        let mut child_ctx = LayoutContext {
-            engine: ctx.engine,
+        let mut child_buf = LayoutBuffer {
             bounds: child_bounds,
             cursor: (0.0, 0.0),
-            elements: ctx.elements,
+            elements: &mut *buf.elements,
             last_v_margin: 0.0, // List items create a new block formatting context
-            local_page_index: ctx.local_page_index,
-            defined_anchors: ctx.defined_anchors,
-            index_entries: ctx.index_entries,
+            defined_anchors: &mut *buf.defined_anchors,
+            index_entries: &mut *buf.index_entries,
         };
 
         for (i, child) in self.children.iter_mut().enumerate() {
-            match child.layout(&mut child_ctx)? {
+            match child.layout(env, &mut child_buf)? {
                 LayoutResult::Full => continue,
                 LayoutResult::Partial(remainder) => {
-                    let content_height = child_ctx.cursor.1;
-                    draw_background_and_borders(ctx, &self.style, block_start_y_in_ctx, content_height);
-                    ctx.cursor.1 = content_start_y_in_ctx + content_height + self.style.padding.bottom + border_bottom_width;
+                    let content_height = child_buf.cursor.1;
+
+                    draw_background_and_borders(
+                        child_buf.elements,
+                        buf.bounds,
+                        &self.style,
+                        block_start_y_in_ctx,
+                        content_height
+                    );
+
+                    buf.cursor.1 = content_start_y_in_ctx + content_height + self.style.padding.bottom + border_bottom_width;
 
                     let mut remaining_children = vec![remainder];
                     remaining_children.extend(self.children.drain((i + 1)..));
 
-                    let next_page_item = Box::new(ListItemNode {
+                    let mut next_page_item = Box::new(ListItemNode {
                         id: self.id.clone(),
                         children: remaining_children,
                         style: self.style.clone(),
                         marker_text: String::new(), // No marker on subsequent pages
                     });
+                    // Re-measure for next page layout
+                    next_page_item.measure(env, BoxConstraints::tight_width(buf.bounds.width));
                     return Ok(LayoutResult::Partial(next_page_item));
                 }
             }
         }
 
-        let content_height = child_ctx.cursor.1;
-        draw_background_and_borders(ctx, &self.style, block_start_y_in_ctx, content_height);
-        ctx.cursor.1 = content_start_y_in_ctx + content_height + self.style.padding.bottom + border_bottom_width;
+        let content_height = child_buf.cursor.1;
+        draw_background_and_borders(
+            child_buf.elements,
+            buf.bounds,
+            &self.style,
+            block_start_y_in_ctx,
+            content_height
+        );
+
+        buf.cursor.1 = content_start_y_in_ctx + content_height + self.style.padding.bottom + border_bottom_width;
 
         Ok(LayoutResult::Full)
     }

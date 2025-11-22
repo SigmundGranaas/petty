@@ -1,6 +1,6 @@
-// src/core/layout/nodes/paragraph.rs
 use crate::core::idf::IRNode;
-use crate::core::layout::node::{AnchorLocation, LayoutContext, LayoutNode, LayoutResult};
+use crate::core::layout::geom::{BoxConstraints, Size};
+use crate::core::layout::node::{AnchorLocation, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult};
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::text::{atomize_inlines, LayoutAtom};
 use crate::core::layout::{LayoutEngine, LayoutError, PositionedElement};
@@ -55,65 +55,66 @@ impl LayoutNode for ParagraphNode {
         self
     }
 
-    fn measure(&mut self, _engine: &LayoutEngine, _available_width: f32) {
-        // Measurement for paragraph is implicitly handled by the line breaker,
-        // so this method can be empty.
-    }
+    fn measure(&mut self, _env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
+        let margin_y = self.style.margin.top + self.style.margin.bottom;
 
-    fn measure_content_height(&mut self, _engine: &LayoutEngine, available_width: f32) -> f32 {
+        // Intrinsic width query?
+        if !constraints.has_bounded_width() {
+            let width = self.atoms.iter().map(|a| a.width()).sum();
+            // Height is unknown/irrelevant for intrinsic width usually, but lets approximate
+            return Size::new(width, margin_y + self.style.line_height);
+        }
+
+        let available_width = constraints.max_width;
+
         if let Some(Dimension::Pt(h)) = self.style.height {
-            return self.style.margin.top + h + self.style.margin.bottom;
+            return Size::new(available_width, margin_y + h);
         }
 
         if self.atoms.is_empty() {
-            return self.style.margin.top + self.style.margin.bottom;
+            return Size::new(available_width, margin_y);
         }
+
         let lines = break_atoms_into_line_ranges(&self.atoms, available_width);
         let content_height = lines.len() as f32 * self.style.line_height;
 
-        self.style.margin.top + content_height + self.style.margin.bottom
+        Size::new(available_width, margin_y + content_height)
     }
 
-    fn measure_intrinsic_width(&self, _engine: &LayoutEngine) -> f32 {
-        // The max-content width is the sum of all atom widths on a single line.
-        // This simple sum is a good approximation for flex basis calculation.
-        self.atoms.iter().map(|a| a.width()).sum()
-    }
-
-    fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
+    fn layout(&mut self, env: &LayoutEnvironment, buf: &mut LayoutBuffer) -> Result<LayoutResult, LayoutError> {
         if let Some(id) = &self.id {
             let location = AnchorLocation {
-                local_page_index: ctx.local_page_index,
-                y_pos: ctx.cursor.1 + ctx.bounds.y,
+                local_page_index: env.local_page_index,
+                y_pos: buf.cursor.1 + buf.bounds.y,
             };
-            ctx.defined_anchors.borrow_mut().insert(id.clone(), location);
+            buf.defined_anchors.insert(id.clone(), location);
         }
 
         // --- Vertical Margin Collapsing ---
-        let margin_to_add = self.style.margin.top.max(ctx.last_v_margin);
+        let margin_to_add = self.style.margin.top.max(buf.last_v_margin);
 
         if self.atoms.is_empty() {
-            ctx.advance_cursor(margin_to_add);
-            ctx.last_v_margin = self.style.margin.bottom;
+            buf.advance_cursor(margin_to_add);
+            buf.last_v_margin = self.style.margin.bottom;
             return Ok(LayoutResult::Full);
         }
 
-        if !ctx.is_empty() && margin_to_add > ctx.available_height() {
+        if !buf.is_empty() && margin_to_add > buf.available_height() {
             return Ok(LayoutResult::Partial(Box::new(self.clone())));
         }
 
         // Apply the collapsed margin by advancing the cursor.
-        ctx.advance_cursor(margin_to_add);
+        buf.advance_cursor(margin_to_add);
         // The margin has been "used," so reset it for any subsequent children.
-        ctx.last_v_margin = 0.0;
+        buf.last_v_margin = 0.0;
 
-        let available_width = ctx.bounds.width;
+        let available_width = buf.bounds.width;
         let all_line_ranges = break_atoms_into_line_ranges(&self.atoms, available_width);
         let total_lines = all_line_ranges.len();
         let line_height = self.style.line_height;
 
-        let mut lines_that_fit = (ctx.available_height() / line_height).floor() as usize;
-        if ctx.is_empty() && lines_that_fit == 0 && total_lines > 0 {
+        let mut lines_that_fit = (buf.available_height() / line_height).floor() as usize;
+        if buf.is_empty() && lines_that_fit == 0 && total_lines > 0 {
             lines_that_fit = 1;
         }
         lines_that_fit = lines_that_fit.min(total_lines);
@@ -121,7 +122,7 @@ impl LayoutNode for ParagraphNode {
         // --- Orphans Control ---
         // If a break would occur, and it would leave fewer than `orphans` lines on this page,
         // force the entire paragraph to the next page.
-        if !ctx.is_empty() && total_lines > lines_that_fit && lines_that_fit < self.style.orphans {
+        if !buf.is_empty() && total_lines > lines_that_fit && lines_that_fit < self.style.orphans {
             return Ok(LayoutResult::Partial(Box::new(self.clone())));
         }
 
@@ -139,17 +140,18 @@ impl LayoutNode for ParagraphNode {
             let line_atoms = self.atoms[range.clone()].to_vec();
             let is_last_line_of_paragraph = i == total_lines - 1;
             commit_line_to_context(
-                ctx,
+                env,
+                buf,
                 self.style.clone(),
                 line_atoms,
                 available_width,
                 is_last_line_of_paragraph,
             );
-            ctx.advance_cursor(line_height);
+            buf.advance_cursor(line_height);
         }
 
         if lines_that_fit >= total_lines {
-            ctx.last_v_margin = self.style.margin.bottom;
+            buf.last_v_margin = self.style.margin.bottom;
             Ok(LayoutResult::Full)
         } else {
             let remainder_start_idx = all_line_ranges[lines_that_fit].start;
@@ -219,7 +221,8 @@ fn break_atoms_into_line_ranges(atoms: &[LayoutAtom], available_width: f32) -> V
 
 /// Commits a line of atoms to the LayoutContext.
 fn commit_line_to_context(
-    ctx: &mut LayoutContext,
+    env: &LayoutEnvironment,
+    buf: &mut LayoutBuffer,
     parent_style: Arc<ComputedStyle>,
     mut line_atoms: Vec<LayoutAtom>,
     box_width: f32,
@@ -254,7 +257,7 @@ fn commit_line_to_context(
         for atom in line_atoms {
             match atom {
                 LayoutAtom::Word { text, width, style, href } => {
-                    ctx.push_element(PositionedElement {
+                    buf.push_element(PositionedElement {
                         x: current_x,
                         y: 0.0,
                         width,
@@ -273,7 +276,7 @@ fn commit_line_to_context(
                 }
                 LayoutAtom::Image { src, width, height, style, href: _ } => {
                     let y_offset = parent_style.line_height - height;
-                    ctx.push_element(PositionedElement {
+                    buf.push_element(PositionedElement {
                         x: current_x,
                         y: y_offset,
                         width,
@@ -285,7 +288,7 @@ fn commit_line_to_context(
                 }
                 LayoutAtom::PageNumberPlaceholder { target_id, style, href } => {
                     let text = "XX"; // For measurement only
-                    let width = ctx.engine.measure_text_width(text, &style);
+                    let width = env.engine.measure_text_width(text, &style);
                     let placeholder = PositionedElement {
                         x: current_x,
                         y: 0.0,
@@ -297,7 +300,7 @@ fn commit_line_to_context(
                         },
                         style,
                     };
-                    ctx.push_element(placeholder);
+                    buf.push_element(placeholder);
                     current_x += width;
                 }
                 LayoutAtom::LineBreak => {}
@@ -331,7 +334,7 @@ fn commit_line_to_context(
                             break;
                         }
                     }
-                    ctx.push_element(PositionedElement {
+                    buf.push_element(PositionedElement {
                         x: current_x,
                         y: 0.0,
                         width: run_width,
@@ -354,7 +357,7 @@ fn commit_line_to_context(
                     ..
                 } => {
                     let y_offset = parent_style.line_height - height;
-                    ctx.push_element(PositionedElement {
+                    buf.push_element(PositionedElement {
                         x: current_x,
                         y: y_offset,
                         width: *width,
@@ -367,7 +370,7 @@ fn commit_line_to_context(
                 }
                 LayoutAtom::PageNumberPlaceholder { target_id, style, href } => {
                     let text = "XX"; // For measurement only
-                    let width = ctx.engine.measure_text_width(text, style);
+                    let width = env.engine.measure_text_width(text, style);
                     let placeholder = PositionedElement {
                         x: current_x,
                         y: 0.0,
@@ -379,7 +382,7 @@ fn commit_line_to_context(
                         },
                         style: style.clone(),
                     };
-                    ctx.push_element(placeholder);
+                    buf.push_element(placeholder);
                     current_x += width;
                     atom_idx += 1;
                 }

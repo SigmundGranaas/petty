@@ -1,6 +1,6 @@
-// src/core/layout/nodes/list.rs
 use crate::core::idf::IRNode;
-use crate::core::layout::node::{AnchorLocation, LayoutContext, LayoutNode, LayoutResult};
+use crate::core::layout::geom::{BoxConstraints, Size};
+use crate::core::layout::node::{AnchorLocation, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult};
 use crate::core::layout::nodes::block::BlockNode;
 use crate::core::layout::nodes::list_item::ListItemNode;
 use crate::core::layout::style::ComputedStyle;
@@ -91,21 +91,19 @@ impl LayoutNode for ListNode {
         self
     }
 
-    fn measure(&mut self, engine: &LayoutEngine, available_width: f32) {
-        self.block.measure(engine, available_width);
+    fn measure(&mut self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
+        self.block.measure(env, constraints)
     }
-    fn measure_content_height(&mut self, engine: &LayoutEngine, available_width: f32) -> f32 {
-        self.block.measure_content_height(engine, available_width)
-    }
-    fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
+
+    fn layout(&mut self, env: &LayoutEnvironment, buf: &mut LayoutBuffer) -> Result<LayoutResult, LayoutError> {
         if let Some(id) = &self.id {
             let location = AnchorLocation {
-                local_page_index: ctx.local_page_index,
-                y_pos: ctx.cursor.1 + ctx.bounds.y,
+                local_page_index: env.local_page_index,
+                y_pos: buf.cursor.1 + buf.bounds.y,
             };
-            ctx.defined_anchors.borrow_mut().insert(id.clone(), location);
+            buf.defined_anchors.insert(id.clone(), location);
         }
         // Delegate directly to the inner BlockNode.
-        self.block.layout(ctx)
+        self.block.layout(env, buf)
     }
 }
