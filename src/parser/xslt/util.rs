@@ -2,6 +2,7 @@
 use crate::parser::{Location, ParseError};
 use crate::parser::xslt::xpath;
 use crate::parser::xslt::ast::{AttributeValueTemplate, AvtPart};
+use crate::parser::xslt::compiler::CompilerBuilder;
 use quick_xml::events::BytesStart;
 use std::collections::HashMap;
 
@@ -20,6 +21,7 @@ const STYLE_PROPERTIES: &[&[u8]] = &[
 ];
 
 pub(crate) fn get_non_style_attributes(
+    builder: &mut CompilerBuilder,
     attrs: &OwnedAttributes,
 ) -> Result<HashMap<String, AttributeValueTemplate>, ParseError> {
     let mut non_style_attrs = HashMap::new();
@@ -30,7 +32,7 @@ pub(crate) fn get_non_style_attributes(
         let value_str = std::str::from_utf8(value)?;
         non_style_attrs.insert(
             String::from_utf8(key.clone())?,
-            parse_avt(value_str)?,
+            parse_avt(builder, value_str)?,
         );
     }
     Ok(non_style_attrs)
@@ -55,7 +57,7 @@ pub(crate) fn get_line_col_from_pos(xml_str: &str, pos: usize) -> (usize, usize)
 }
 
 /// Parses an Attribute Value Template string like "Hello {user/name}" into parts.
-pub(crate) fn parse_avt(text: &str) -> Result<AttributeValueTemplate, ParseError> {
+pub(crate) fn parse_avt(builder: &mut CompilerBuilder, text: &str) -> Result<AttributeValueTemplate, ParseError> {
     if !text.contains('{') {
         return Ok(AttributeValueTemplate::Static(text.to_string()));
     }
@@ -76,7 +78,7 @@ pub(crate) fn parse_avt(text: &str) -> Result<AttributeValueTemplate, ParseError
             .ok_or_else(|| ParseError::TemplateParse("Unclosed { expression in AVT".to_string()))?;
         let inner = text[start + 1..start + end].trim();
 
-        let expression = xpath::parse_expression(inner)?;
+        let expression = builder.parse_xpath_and_detect_features(inner)?;
         parts.push(AvtPart::Dynamic(expression));
         last_end = start + end + 1;
     }

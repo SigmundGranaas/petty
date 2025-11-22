@@ -345,9 +345,6 @@ impl<'s, 'a, N: DataSourceNode<'a> + 'a> TemplateExecutor<'s, 'a, N> {
             XsltInstruction::Table { styles, columns, header, body } => {
                 executor_handlers::table::handle_table(self, styles, columns, header, body, context_node, context_position, context_size, builder)?
             }
-            XsltInstruction::TableOfContents { styles } => {
-                builder.add_table_of_contents(styles);
-            }
             XsltInstruction::PageBreak { master_name } => {
                 let evaluated_name = if let Some(avt) = master_name {
                     let merged_vars = self.get_merged_variables();

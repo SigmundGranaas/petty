@@ -281,12 +281,7 @@ impl StylesheetBuilder for CompilerBuilder {
             b"page-break" => self.handle_page_break(attrs)?,
             b"toc" | b"fo:table-of-contents" => {
                 self.features.has_table_of_contents = true;
-                let instr = XsltInstruction::TableOfContents {
-                    styles: self.resolve_styles(&attrs, location)?,
-                };
-                if let Some(parent) = self.instruction_stack.last_mut() {
-                    parent.push(instr);
-                }
+                // This tag is now just a feature marker and does not produce an instruction.
             }
             b"column" | b"fo:table-column" => self.handle_table_column(attrs)?,
             b"page-number-placeholder" => {

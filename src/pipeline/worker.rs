@@ -98,7 +98,7 @@ fn ensure_heading_ids(nodes: &mut [IRNode]) {
                 if meta.id.is_none() {
                     let text = extract_text_from_inlines(children);
                     let slug = slug::slugify(&text);
-                    let mut rng = rand::thread_rng();
+                    let mut rng = rand::rng();
                     let suffix: u32 = rng.random();
                     meta.id = Some(format!("{}-{}", slug, suffix));
                 }

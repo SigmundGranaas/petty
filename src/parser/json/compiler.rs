@@ -1,4 +1,3 @@
-// src/parser/json/compiler.rs
 //! Implements the "Compilation" phase for the JSON parser.
 //! It transforms the Serde-parsed AST into a validated, executable instruction set.
 
@@ -177,10 +176,42 @@ impl<'a> Compiler<'a> {
     }
 
     fn compile_table_node(&self, table: &ast::JsonTable) -> Result<JsonInstruction, ParseError> {
+        let columns = table
+            .columns
+            .iter()
+            .map(|c| {
+                let style = c
+                    .style
+                    .as_ref()
+                    .and_then(|name| self.stylesheet.styles.get(name))
+                    .map(|arc_style| (**arc_style).clone());
+
+                let header_style = c
+                    .header_style
+                    .as_ref()
+                    .and_then(|name| self.stylesheet.styles.get(name))
+                    .map(|arc_style| (**arc_style).clone());
+
+                TableColumnDefinition {
+                    width: c.width.clone(),
+                    style,
+                    header_style,
+                }
+            })
+            .collect();
+
         Ok(JsonInstruction::Table(CompiledTable {
-            styles: self.compile_styles(&table.style_names, &table.style_override, table.id.clone())?,
-            columns: table.columns.iter().map(|c| TableColumnDefinition { width: c.width.clone(), style: c.style.clone(), header_style: c.header_style.clone() }).collect(),
-            header: table.header.as_ref().map(|h| self.compile_children(&h.rows)).transpose()?,
+            styles: self.compile_styles(
+                &table.style_names,
+                &table.style_override,
+                table.id.clone(),
+            )?,
+            columns,
+            header: table
+                .header
+                .as_ref()
+                .map(|h| self.compile_children(&h.rows))
+                .transpose()?,
             body: self.compile_children(&table.body.rows)?,
         }))
     }

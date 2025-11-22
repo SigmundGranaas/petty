@@ -33,7 +33,7 @@ impl CompilerBuilder {
         let location = get_line_col_from_pos(source, pos).into();
         if let BuilderState::InstructionBody(attrs) = current_state {
             let styles = self.resolve_styles(&attrs, location)?;
-            let non_style_attrs = super::util::get_non_style_attributes(&attrs)?;
+            let non_style_attrs = super::util::get_non_style_attributes(self, &attrs)?;
             let instr = XsltInstruction::ContentTag {
                 tag_name: e.name().as_ref().to_vec(),
                 styles,
@@ -61,7 +61,7 @@ impl CompilerBuilder {
         if let BuilderState::InstructionElement(attrs) = current_state {
             let name_avt_str = get_attr_owned_required(&attrs, b"name", b"xsl:element", pos, source)?;
             let instr = XsltInstruction::Element {
-                name: crate::parser::xslt::util::parse_avt(&name_avt_str)?,
+                name: crate::parser::xslt::util::parse_avt(self, &name_avt_str)?,
                 body: PreparsedTemplate(body),
             };
             if let Some(parent) = self.instruction_stack.last_mut() {
@@ -141,7 +141,7 @@ impl CompilerBuilder {
             BuilderState::InstructionAttribute(attrs) => {
                 let attr_name_str = get_attr_owned_required(&attrs, b"name", b"xsl:attribute", pos, source)?;
                 let instr = XsltInstruction::Attribute {
-                    name: crate::parser::xslt::util::parse_avt(&attr_name_str)?,
+                    name: crate::parser::xslt::util::parse_avt(self, &attr_name_str)?,
                     body: PreparsedTemplate(body),
                 };
                 if let Some(parent) = self.instruction_stack.last_mut() {

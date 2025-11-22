@@ -175,9 +175,6 @@ pub enum XsltInstruction {
         header: Option<PreparsedTemplate>,
         body: PreparsedTemplate,
     },
-    TableOfContents {
-        styles: PreparsedStyles,
-    },
     PageBreak {
         master_name: Option<AttributeValueTemplate>,
     },

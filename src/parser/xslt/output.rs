@@ -43,7 +43,6 @@ pub trait OutputBuilder {
     fn add_text(&mut self, text: &str);
 
     // --- Special elements ---
-    fn add_table_of_contents(&mut self, styles: &PreparsedStyles);
     fn start_heading(&mut self, styles: &PreparsedStyles, level: u8);
     fn end_heading(&mut self);
     fn add_page_break(&mut self, master_name: Option<String>);

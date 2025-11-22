@@ -139,7 +139,6 @@ pub(crate) fn handle_attribute<'s, 'a, N: DataSourceNode<'a> + 'a>(
         fn end_table_row(&mut self) {}
         fn start_table_cell(&mut self, _: &PreparsedStyles) {}
         fn end_table_cell(&mut self) {}
-        fn add_table_of_contents(&mut self, _: &PreparsedStyles) {}
         fn start_heading(&mut self, _: &PreparsedStyles, _: u8) {}
         fn end_heading(&mut self) {}
         fn add_page_break(&mut self, _: Option<String>) {}

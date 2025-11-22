@@ -262,7 +262,7 @@ impl OutputBuilder for IdfBuilder {
         }
     }
     fn end_table_row(&mut self) {
-        // No-op: Rows are managed by the parent table.
+        // No-op: Rows are managed by the parent row.
     }
 
     fn start_table_cell(&mut self, styles: &PreparsedStyles) {
@@ -377,10 +377,6 @@ impl OutputBuilder for IdfBuilder {
     }
     fn end_heading(&mut self) {
         self.end_block();
-    }
-
-    fn add_table_of_contents(&mut self, _styles: &PreparsedStyles) {
-
     }
 
     fn add_page_break(&mut self, master_name: Option<String>) {

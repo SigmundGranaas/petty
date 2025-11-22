@@ -129,8 +129,8 @@ fn test_table_colspan_and_rowspan() {
         body: Box::new(TableBody { rows: vec![
             // Row 1
             TableRow { cells: vec![
-                TableCell { rowspan: 2, children: vec![create_paragraph("A")], ..Default::default() },
-                TableCell { colspan: 2, children: vec![create_paragraph("B")], ..Default::default() },
+                TableCell { row_span: 2, children: vec![create_paragraph("A")], ..Default::default() },
+                TableCell { col_span: 2, children: vec![create_paragraph("B")], ..Default::default() },
             ]},
             // Row 2
             TableRow { cells: vec![

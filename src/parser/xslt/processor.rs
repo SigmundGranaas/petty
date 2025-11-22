@@ -1,5 +1,3 @@
-// src/parser/xslt/processor.rs
-// src/parser/xslt/processor.rs
 use super::{ast, compiler};
 use super::executor::{self, ExecutionError};
 use crate::core::idf::IRNode;
@@ -692,6 +690,87 @@ mod tests {
         assert_eq!(sales_block_children.len(), 2);
         assert_eq!(sales_block_children[0].get_text_content().trim(), "Bob"); // Sorted
         assert_eq!(sales_block_children[1].get_text_content().trim(), "David");
+    }
+
+    #[test]
+    fn test_feature_detection_index_and_toc() {
+        let xslt = r#"
+            <xsl:stylesheet version="1.0"
+                xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+                xmlns:petty="https://petty.rs/ns/1.0">
+
+                <xsl:template match="/">
+                    <p>
+                        <xsl:value-of select="petty:index('my-term')"/>
+                    </p>
+                    <toc/> <!-- Old-style TOC for feature detection -->
+                </xsl:template>
+            </xsl:stylesheet>
+        "#;
+
+        let parser = XsltParser;
+        let features = parser.parse(xslt, PathBuf::new()).unwrap();
+        let flags = features.main_template.features();
+
+        assert!(flags.uses_index_function, "uses_index_function should be true");
+        assert!(flags.has_table_of_contents, "has_table_of_contents should be true");
+        assert_eq!(features.role_templates.len(), 0);
+    }
+
+    #[test]
+    fn test_xslt_role_template_parsing_and_execution() {
+        let xslt_with_roles = r#"
+            <xsl:stylesheet version="1.0"
+                xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+                xmlns:petty="https://petty.rs/ns/1.0">
+
+                <!-- Main template -->
+                <xsl:template match="/">
+                    <p>Main Content</p>
+                </xsl:template>
+
+                <!-- Role template for page header -->
+                <xsl:template match="/" petty:role="page-header">
+                    <p>Page Header for page <xsl:value-of select="*/page_number"/> of <xsl:value-of select="*/page_count"/></p>
+                </xsl:template>
+
+                <!-- Role template for table of contents -->
+                <xsl:template match="/" petty:role="table-of-contents">
+                    <toc>
+                        <xsl:for-each select="headings/item">
+                            <p><xsl:value-of select="text"/> ...... <xsl:value-of select="page_number"/></p>
+                        </xsl:for-each>
+                    </toc>
+                </xsl:template>
+            </xsl:stylesheet>
+        "#;
+
+        let parser = XsltParser;
+        let features = parser.parse(xslt_with_roles, PathBuf::new()).unwrap();
+
+        // 1. Check features struct
+        assert!(features.main_template.features().has_table_of_contents == false);
+        assert_eq!(features.role_templates.len(), 2);
+        assert!(features.role_templates.contains_key("page-header"));
+        assert!(features.role_templates.contains_key("table-of-contents"));
+
+        // 2. Execute main template
+        let main_result = features.main_template.execute("<data/>", ExecutionConfig::default()).unwrap();
+        assert_eq!(main_result[0].get_text_content(), "Main Content");
+
+        // 3. Execute 'page-header' role template
+        let header_template = features.role_templates.get("page-header").unwrap();
+        let header_data = r#"{ "page_number": 5, "page_count": 10 }"#;
+        let header_config = ExecutionConfig { format: DataSourceFormat::Json, ..Default::default() };
+        let header_result = header_template.execute(header_data, header_config).unwrap();
+        assert_eq!(header_result[0].get_text_content(), "Page Header for page 5 of 10");
+
+        // 4. Execute 'table-of-contents' role template
+        let toc_template = features.role_templates.get("table-of-contents").unwrap();
+        let toc_data = r#"{ "headings": [ { "text": "Chapter 1", "page_number": 1 } ] }"#;
+        let toc_config = ExecutionConfig { format: DataSourceFormat::Json, ..Default::default() };
+        let toc_result = toc_template.execute(toc_data, toc_config).unwrap();
+        assert_eq!(toc_result[0].get_text_content().trim(), "Chapter 1 ...... 1");
     }
 
     // Helper to get all text from an IRNode for simple assertions

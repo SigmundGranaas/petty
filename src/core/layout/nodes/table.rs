@@ -315,8 +315,8 @@ impl TableCellNode {
             content: BlockNode::new_from_children(None, children, cell_style),
             height: 0.0,
             preferred_width: 0.0,
-            colspan: cell.colspan.max(1),
-            rowspan: cell.rowspan.max(1),
+            colspan: cell.col_span.max(1),
+            rowspan: cell.row_span.max(1),
         }
     }
 

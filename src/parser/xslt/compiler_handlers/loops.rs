@@ -89,7 +89,7 @@ impl CompilerBuilder {
         let instr = XsltInstruction::ApplyTemplates {
             select: select_expr,
             mode: get_attr_owned_optional(&attrs, b"mode")?
-                .map(|s| crate::parser::xslt::util::parse_avt(&s))
+                .map(|s| crate::parser::xslt::util::parse_avt(self, &s))
                 .transpose()?,
             sort_keys: vec![],
         };

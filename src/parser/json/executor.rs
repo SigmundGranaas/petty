@@ -383,8 +383,8 @@ impl TryFrom<IRNode> for TableCell {
                 style_sets: meta.style_sets,
                 style_override: meta.style_override,
                 children,
-                colspan: 1,
-                rowspan: 1,
+                col_span: 1,
+                row_span: 1,
             })
         } else {
             Err(ParseError::TemplateParse(format!(
