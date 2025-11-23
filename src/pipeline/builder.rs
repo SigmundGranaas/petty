@@ -30,7 +30,7 @@ pub struct PipelineBuilder {
 
 impl Default for PipelineBuilder {
     fn default() -> Self {
-        let mut font_manager = FontManager::new();
+        let font_manager = FontManager::new();
         font_manager.load_fallback_font();
         Self {
             template_features: None,
@@ -79,11 +79,11 @@ impl PipelineBuilder {
 
     /// Scans the host system for installed fonts and adds them to the pipeline's font database.
     /// This is the recommended way to get broad font support.
-    pub fn with_system_fonts(mut self, system_fonts: bool) -> Self { if system_fonts { self.font_manager.load_system_fonts(); } self }
+    pub fn with_system_fonts(self, system_fonts: bool) -> Self { if system_fonts { self.font_manager.load_system_fonts(); } self }
 
     /// Scans a directory for font files (`.ttf`, `.otf`, etc.) and adds them to the font database.
     /// Call this for any custom fonts not installed on the system.
-    pub fn with_font_dir<P: AsRef<Path>>(mut self, path: P) -> Self { self.font_manager.load_fonts_from_dir(path.as_ref()); self }
+    pub fn with_font_dir<P: AsRef<Path>>(self, path: P) -> Self { self.font_manager.load_fonts_from_dir(path.as_ref()); self }
 
     /// Selects the PDF rendering backend to use.
     pub fn with_pdf_backend(mut self, backend: PdfBackend) -> Self { self.pdf_backend = backend; self }

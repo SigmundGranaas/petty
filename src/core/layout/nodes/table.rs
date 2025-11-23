@@ -1,12 +1,29 @@
-use crate::core::layout::geom::{BoxConstraints, Size};
-use crate::core::layout::node::{AnchorLocation, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult};
+use crate::core::idf::{IRNode, TableColumnDefinition, TableRow};
+use crate::core::layout::builder::NodeBuilder;
+use crate::core::layout::geom::{self, BoxConstraints, Size};
+use crate::core::layout::node::{
+    AnchorLocation, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult,
+};
 use crate::core::layout::nodes::block::{draw_background_and_borders, BlockNode};
 use crate::core::layout::style::ComputedStyle;
-use crate::core::layout::{geom, LayoutEngine, LayoutError};
+use crate::core::layout::{LayoutEngine, LayoutError};
 use crate::core::style::dimension::Dimension;
 use std::any::Any;
 use std::sync::Arc;
-use crate::core::idf::{IRNode, TableColumnDefinition, TableRow};
+
+pub struct TableBuilder;
+
+impl NodeBuilder for TableBuilder {
+    fn build(
+        &self,
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+    ) -> Box<dyn LayoutNode> {
+        Box::new(TableNode::new(node, engine, parent_style))
+    }
+}
+
 // --- Main Table Node ---
 
 #[derive(Debug, Clone)]
@@ -22,18 +39,34 @@ pub struct TableNode {
 impl TableNode {
     pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Self {
         let (meta, columns, header, body) = match node {
-            IRNode::Table { meta, columns, header, body, .. } => (meta, columns, header, body),
+            IRNode::Table {
+                meta,
+                columns,
+                header,
+                body,
+                ..
+            } => (meta, columns, header, body),
             _ => panic!("TableNode must be created from IRNode::Table"),
         };
 
-        let style = engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), &parent_style);
+        let style =
+            engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), &parent_style);
 
         let header_rows = header
             .as_ref()
-            .map(|h| h.rows.iter().map(|r| TableRowNode::new(r, &style, engine)).collect())
+            .map(|h| {
+                h.rows
+                    .iter()
+                    .map(|r| TableRowNode::new(r, &style, engine))
+                    .collect()
+            })
             .unwrap_or_default();
 
-        let body_rows = body.rows.iter().map(|r| TableRowNode::new(r, &style, engine)).collect();
+        let body_rows = body
+            .rows
+            .iter()
+            .map(|r| TableRowNode::new(r, &style, engine))
+            .collect();
 
         Self {
             id: meta.id.clone(),
@@ -91,14 +124,23 @@ impl LayoutNode for TableNode {
             + border_bottom_width
             + self.style.margin.bottom;
 
-        let width = if constraints.has_bounded_width() { constraints.max_width } else {
-            self.calculated_widths.iter().sum::<f32>() + padding_x + border_left_width + border_right_width
+        let width = if constraints.has_bounded_width() {
+            constraints.max_width
+        } else {
+            self.calculated_widths.iter().sum::<f32>()
+                + padding_x
+                + border_left_width
+                + border_right_width
         };
 
         Size::new(width, total_height)
     }
 
-    fn layout(&mut self, env: &LayoutEnvironment, buf: &mut LayoutBuffer) -> Result<LayoutResult, LayoutError> {
+    fn layout(
+        &mut self,
+        env: &LayoutEnvironment,
+        buf: &mut LayoutBuffer,
+    ) -> Result<LayoutResult, LayoutError> {
         if let Some(id) = &self.id {
             let location = AnchorLocation {
                 local_page_index: env.local_page_index,
@@ -152,14 +194,25 @@ impl LayoutNode for TableNode {
 
         for (i, row) in self.header_rows.iter_mut().enumerate() {
             if row.height > child_buf.bounds.height {
-                return Err(LayoutError::ElementTooLarge(row.height, child_buf.bounds.height));
+                return Err(LayoutError::ElementTooLarge(
+                    row.height,
+                    child_buf.bounds.height,
+                ));
             }
             if row.height > child_buf.available_height() && !child_buf.is_empty() {
                 // This case should be rare (header taller than page), but we handle it by breaking.
                 let remainder = self.body_rows.drain(..).collect();
-                return Ok(LayoutResult::Partial(Box::new(create_remainder_table(self, remainder))));
+                return Ok(LayoutResult::Partial(Box::new(create_remainder_table(
+                    self, remainder,
+                ))));
             }
-            if let Err(e) = row.layout(env, &mut child_buf, &mut occupancy, i, self.style.border_spacing) {
+            if let Err(e) = row.layout(
+                env,
+                &mut child_buf,
+                &mut occupancy,
+                i,
+                self.style.border_spacing,
+            ) {
                 log::warn!("Skipping table header row that failed to lay out: {}", e);
             }
         }
@@ -168,7 +221,10 @@ impl LayoutNode for TableNode {
 
         for (i, row) in self.body_rows.iter_mut().enumerate() {
             if row.height > child_buf.bounds.height {
-                return Err(LayoutError::ElementTooLarge(row.height, child_buf.bounds.height));
+                return Err(LayoutError::ElementTooLarge(
+                    row.height,
+                    child_buf.bounds.height,
+                ));
             }
             if row.height > child_buf.available_height() && !child_buf.is_empty() {
                 draw_background_and_borders(
@@ -176,10 +232,13 @@ impl LayoutNode for TableNode {
                     buf.bounds,
                     &self.style,
                     block_start_y_in_ctx,
-                    content_height_on_this_page
+                    content_height_on_this_page,
                 );
 
-                buf.cursor.1 = content_start_y_in_ctx + content_height_on_this_page + self.style.padding.bottom + border_bottom_width;
+                buf.cursor.1 = content_start_y_in_ctx
+                    + content_height_on_this_page
+                    + self.style.padding.bottom
+                    + border_bottom_width;
 
                 let remaining_body_rows = self.body_rows.drain(i..).collect();
 
@@ -188,7 +247,13 @@ impl LayoutNode for TableNode {
                 remainder.measure(env, BoxConstraints::tight_width(buf.bounds.width));
                 return Ok(LayoutResult::Partial(Box::new(remainder)));
             }
-            if let Err(e) = row.layout(env, &mut child_buf, &mut occupancy, row_idx_offset + i, self.style.border_spacing) {
+            if let Err(e) = row.layout(
+                env,
+                &mut child_buf,
+                &mut occupancy,
+                row_idx_offset + i,
+                self.style.border_spacing,
+            ) {
                 log::warn!("Skipping table row that failed to lay out: {}", e);
             }
         }
@@ -199,16 +264,22 @@ impl LayoutNode for TableNode {
             buf.bounds,
             &self.style,
             block_start_y_in_ctx,
-            content_height_on_this_page
+            content_height_on_this_page,
         );
-        buf.cursor.1 = content_start_y_in_ctx + content_height_on_this_page + self.style.padding.bottom + border_bottom_width;
+        buf.cursor.1 = content_start_y_in_ctx
+            + content_height_on_this_page
+            + self.style.padding.bottom
+            + border_bottom_width;
         buf.last_v_margin = self.style.margin.bottom;
 
         Ok(LayoutResult::Full)
     }
 }
 
-fn create_remainder_table(original_table: &TableNode, remaining_body_rows: Vec<TableRowNode>) -> TableNode {
+fn create_remainder_table(
+    original_table: &TableNode,
+    remaining_body_rows: Vec<TableRowNode>,
+) -> TableNode {
     TableNode {
         id: original_table.id.clone(),
         header_rows: original_table.header_rows.clone(),
@@ -230,7 +301,11 @@ pub struct TableRowNode {
 
 impl TableRowNode {
     fn new(row: &TableRow, style: &Arc<ComputedStyle>, engine: &LayoutEngine) -> Self {
-        let cells = row.cells.iter().map(|c| TableCellNode::new(c, style, engine)).collect();
+        let cells = row
+            .cells
+            .iter()
+            .map(|c| TableCellNode::new(c, style, engine))
+            .collect();
         Self {
             cells,
             height: 0.0,
@@ -243,7 +318,9 @@ impl TableRowNode {
         let mut max_height: f32 = 0.0;
         let mut col_cursor = 0;
         for cell in self.cells.iter_mut() {
-            if col_cursor >= col_widths.len() { break; }
+            if col_cursor >= col_widths.len() {
+                break;
+            }
             let end_col = (col_cursor + cell.colspan).min(col_widths.len());
             let cell_width: f32 = col_widths[col_cursor..end_col].iter().sum();
             cell.measure(env, cell_width);
@@ -266,7 +343,12 @@ impl TableRowNode {
         let mut current_x = 0.0;
         let mut col_idx = 0;
         for cell in self.cells.iter_mut() {
-            while col_idx < self.col_widths.len() && occupancy.get(row_idx).and_then(|r| r.get(col_idx)).map_or(false, |&o| o) {
+            while col_idx < self.col_widths.len()
+                && occupancy
+                .get(row_idx)
+                .and_then(|r| r.get(col_idx))
+                .map_or(false, |&o| o)
+            {
                 current_x += self.col_widths[col_idx] + border_spacing;
                 col_idx += 1;
             }
@@ -276,8 +358,14 @@ impl TableRowNode {
 
             let cell_col_idx = col_idx;
             let cell_width = (0..cell.colspan)
-                .map(|i| self.col_widths.get(cell_col_idx + i).copied().unwrap_or(0.0))
-                .sum::<f32>() + (cell.colspan.saturating_sub(1) as f32 * border_spacing);
+                .map(|i| {
+                    self.col_widths
+                        .get(cell_col_idx + i)
+                        .copied()
+                        .unwrap_or(0.0)
+                })
+                .sum::<f32>()
+                + (cell.colspan.saturating_sub(1) as f32 * border_spacing);
 
             let cell_bounds = geom::Rect {
                 x: buf.bounds.x + current_x,
@@ -324,8 +412,13 @@ struct TableCellNode {
 }
 
 impl TableCellNode {
-    fn new(cell: &crate::core::idf::TableCell, style: &Arc<ComputedStyle>, engine: &LayoutEngine) -> Self {
-        let cell_style = engine.compute_style(&cell.style_sets, cell.style_override.as_ref(), style);
+    fn new(
+        cell: &crate::core::idf::TableCell,
+        style: &Arc<ComputedStyle>,
+        engine: &LayoutEngine,
+    ) -> Self {
+        let cell_style =
+            engine.compute_style(&cell.style_sets, cell.style_override.as_ref(), style);
         let children = cell
             .children
             .iter()
@@ -347,13 +440,19 @@ impl TableCellNode {
 
         // Measure preferred width by giving it "infinite" space
         let constraint_infinite = BoxConstraints {
-            min_width: 0.0, max_width: f32::INFINITY,
-            min_height: 0.0, max_height: f32::INFINITY
+            min_width: 0.0,
+            max_width: f32::INFINITY,
+            min_height: 0.0,
+            max_height: f32::INFINITY,
         };
         self.preferred_width = self.content.measure(env, constraint_infinite).width;
     }
 
-    fn layout(&mut self, env: &LayoutEnvironment, buf: &mut LayoutBuffer) -> Result<LayoutResult, LayoutError> {
+    fn layout(
+        &mut self,
+        env: &LayoutEnvironment,
+        buf: &mut LayoutBuffer,
+    ) -> Result<LayoutResult, LayoutError> {
         self.content.layout(env, buf)
     }
 }
@@ -413,15 +512,20 @@ fn calculate_column_widths(
     // So we must probe the cells now.
 
     let infinite_constraint = BoxConstraints {
-        min_width: 0.0, max_width: f32::INFINITY,
-        min_height: 0.0, max_height: f32::INFINITY
+        min_width: 0.0,
+        max_width: f32::INFINITY,
+        min_height: 0.0,
+        max_height: f32::INFINITY,
     };
 
     for row in header_rows.iter_mut().chain(body_rows.iter_mut()) {
         let mut col_cursor = 0;
         for cell in &mut row.cells {
-            if col_cursor >= columns.len() { break; }
-            if auto_indices.contains(&col_cursor) { // Simplified: only considers first col of a span
+            if col_cursor >= columns.len() {
+                break;
+            }
+            if auto_indices.contains(&col_cursor) {
+                // Simplified: only considers first col of a span
                 let preferred = cell.content.measure(env, infinite_constraint).width;
                 if cell.colspan == 1 {
                     preferred_widths[col_cursor] = preferred_widths[col_cursor].max(preferred);

@@ -1,151 +1,104 @@
-// src/core/layout/text.rs
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/text.rs
 use crate::core::idf::InlineNode;
 use crate::core::layout::engine::LayoutEngine;
 use crate::core::layout::style::ComputedStyle;
+use cosmic_text::{AttrsList};
 use std::sync::Arc;
 
-#[derive(Debug, Clone)]
-pub enum LayoutAtom {
-    Word {
-        text: String,
-        width: f32,
-        style: Arc<ComputedStyle>,
-        href: Option<String>,
-    },
-    Space {
-        width: f32,
-        style: Arc<ComputedStyle>,
-        href: Option<String>,
-    },
-    Image {
-        src: String,
-        width: f32,
-        height: f32,
-        style: Arc<ComputedStyle>,
-        href: Option<String>,
-    },
-    PageNumberPlaceholder {
-        target_id: String,
-        style: Arc<ComputedStyle>,
-        href: Option<String>,
-    },
-    LineBreak,
+/// A helper to flatten a tree of `InlineNode`s into a plain string and a list of attributes
+/// (spans) suitable for `cosmic_text`.
+pub struct TextBuilder<'a> {
+    engine: &'a LayoutEngine,
+    pub content: String,
+    pub attrs_list: AttrsList,
+    /// Stores link targets. The index in this vector corresponds to `Attrs::metadata`.
+    /// 0 is reserved for "no link". metadata 1 maps to index 0 in this vector.
+    pub links: Vec<String>,
 }
 
-impl LayoutAtom {
-    pub fn width(&self) -> f32 {
-        match self {
-            LayoutAtom::Word { width, .. } => *width,
-            LayoutAtom::Space { width, .. } => *width,
-            LayoutAtom::Image { width, .. } => *width,
-            LayoutAtom::PageNumberPlaceholder { style, .. } => {
-                // Use a standard placeholder width for measurement.
-                // The actual width will be determined by the renderer.
-                style.font_size * 2.0 // Approx "XX"
-            }
-            LayoutAtom::LineBreak => 0.0,
+impl<'a> TextBuilder<'a> {
+    pub fn new(engine: &'a LayoutEngine, base_style: &Arc<ComputedStyle>) -> Self {
+        let base_attrs = engine.font_manager.attrs_from_style(base_style);
+        Self {
+            engine,
+            content: String::new(),
+            attrs_list: AttrsList::new(&base_attrs),
+            links: Vec::new(),
         }
     }
-    pub fn is_space(&self) -> bool {
-        matches!(self, LayoutAtom::Space { .. })
-    }
-}
 
-pub fn atomize_inlines(
-    engine: &LayoutEngine,
-    inlines: &[InlineNode],
-    parent_style: &Arc<ComputedStyle>,
-    parent_href: Option<String>,
-) -> Vec<LayoutAtom> {
-    let mut atoms = Vec::new();
-    for inline in inlines {
-        match inline {
-            InlineNode::Text(text) => {
-                for word in text.split_inclusive(' ') {
-                    if word.ends_with(' ') {
-                        let word_part = word.trim_end();
-                        if !word_part.is_empty() {
-                            atoms.push(LayoutAtom::Word {
-                                text: word_part.to_string(),
-                                width: engine.measure_text_width(word_part, parent_style),
-                                style: parent_style.clone(),
-                                href: parent_href.clone(),
-                            });
-                        }
-                        atoms.push(LayoutAtom::Space {
-                            width: engine.measure_text_width(" ", parent_style),
-                            style: parent_style.clone(),
-                            href: parent_href.clone(),
-                        });
-                    } else if !word.is_empty() {
-                        atoms.push(LayoutAtom::Word {
-                            text: word.to_string(),
-                            width: engine.measure_text_width(word, parent_style),
-                            style: parent_style.clone(),
-                            href: parent_href.clone(),
-                        });
+    pub fn process_inlines(&mut self, inlines: &[InlineNode], parent_style: &Arc<ComputedStyle>) {
+        self.process_inlines_recursive(inlines, parent_style, 0);
+    }
+
+    fn process_inlines_recursive(
+        &mut self,
+        inlines: &[InlineNode],
+        parent_style: &Arc<ComputedStyle>,
+        current_link_idx: usize
+    ) {
+        for node in inlines {
+            match node {
+                InlineNode::Text(text) => {
+                    let start = self.content.len();
+                    self.content.push_str(text);
+                    let end = self.content.len();
+
+                    let mut attrs = self.engine.font_manager.attrs_from_style(parent_style);
+                    attrs.metadata = current_link_idx;
+
+                    self.attrs_list.add_span(start..end, &attrs);
+                }
+                InlineNode::StyledSpan { meta, children } => {
+                    let style = self.resolve_meta_style(meta, parent_style);
+                    self.process_inlines_recursive(children, &style, current_link_idx);
+                }
+                InlineNode::Hyperlink { meta, children, href } => {
+                    let style = self.resolve_meta_style(meta, parent_style);
+
+                    // Register new link
+                    self.links.push(href.clone());
+                    let new_link_idx = self.links.len(); // 1-based index for metadata
+
+                    self.process_inlines_recursive(children, &style, new_link_idx);
+                }
+                InlineNode::PageReference { meta, children, .. } => {
+                    let style = self.resolve_meta_style(meta, parent_style);
+                    if children.is_empty() {
+                        // Insert placeholder text for page numbers
+                        let start = self.content.len();
+                        self.content.push_str("XX");
+                        let end = self.content.len();
+                        let mut attrs = self.engine.font_manager.attrs_from_style(&style);
+                        attrs.metadata = current_link_idx;
+                        self.attrs_list.add_span(start..end, &attrs);
+                    } else {
+                        self.process_inlines_recursive(children, &style, current_link_idx);
                     }
                 }
-            }
-            InlineNode::StyledSpan { meta, children } => {
-                let style =
-                    engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), parent_style);
-                atoms.extend(atomize_inlines(engine, children, &style, parent_href.clone()));
-            }
-            InlineNode::Hyperlink {
-                href,
-                meta,
-                children,
-            } => {
-                let style =
-                    engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), parent_style);
-                atoms.extend(atomize_inlines(
-                    engine,
-                    children,
-                    &style,
-                    Some(href.clone()),
-                ));
-            }
-            InlineNode::Image { meta, src } => {
-                let style = engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), parent_style);
-                let height = style.font_size; // Basic heuristic for inline image height
-                let width = height; // Assume square for now
-                atoms.push(LayoutAtom::Image {
-                    src: src.clone(),
-                    width,
-                    height,
-                    style,
-                    href: parent_href.clone(),
-                });
-            }
-            InlineNode::PageReference { target_id, meta, children } => {
-                let style = engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), parent_style);
+                InlineNode::LineBreak => {
+                    let start = self.content.len();
+                    self.content.push('\n');
+                    let end = self.content.len();
 
-                let href = if children.is_empty() {
-                    // A page number placeholder is not a link unless it is explicitly wrapped
-                    // in a Hyperlink node.
-                    parent_href.clone()
-                } else {
-                    // A cross-reference with text content should be a link.
-                    parent_href.clone().or_else(|| Some(format!("#{}", target_id)))
-                };
-
-                atoms.extend(atomize_inlines(engine, children, &style, href.clone()));
-
-                // If children is empty, this is a "render page number here" reference.
-                if children.is_empty() {
-                    atoms.push(LayoutAtom::PageNumberPlaceholder {
-                        target_id: target_id.clone(),
-                        style,
-                        href,
-                    });
+                    // Ensure the newline character is covered by a span so cosmic-text
+                    // processes it correctly as part of the text flow.
+                    let mut attrs = self.engine.font_manager.attrs_from_style(parent_style);
+                    attrs.metadata = current_link_idx;
+                    self.attrs_list.add_span(start..end, &attrs);
                 }
-            }
-            InlineNode::LineBreak => {
-                atoms.push(LayoutAtom::LineBreak);
+                InlineNode::Image { .. } => {
+                    // Images in text flow not supported yet
+                    log::warn!("Inline images are not supported in the current text engine refactor.");
+                }
             }
         }
     }
-    atoms
+
+    fn resolve_meta_style(
+        &self,
+        meta: &crate::core::idf::InlineMetadata,
+        parent_style: &Arc<ComputedStyle>,
+    ) -> Arc<ComputedStyle> {
+        self.engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), parent_style)
+    }
 }

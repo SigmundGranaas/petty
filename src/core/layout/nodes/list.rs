@@ -1,12 +1,28 @@
 use crate::core::idf::IRNode;
+use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::geom::{BoxConstraints, Size};
-use crate::core::layout::node::{AnchorLocation, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult};
+use crate::core::layout::node::{
+    AnchorLocation, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult,
+};
 use crate::core::layout::nodes::block::BlockNode;
 use crate::core::layout::nodes::list_item::ListItemNode;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{LayoutEngine, LayoutError};
 use std::any::Any;
 use std::sync::Arc;
+
+pub struct ListBuilder;
+
+impl NodeBuilder for ListBuilder {
+    fn build(
+        &self,
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+    ) -> Box<dyn LayoutNode> {
+        Box::new(ListNode::new(node, engine, parent_style))
+    }
+}
 
 /// A `LayoutNode` for list containers (`<ul>`, `<ol>`).
 /// Its primary role is to create `ListItemNode` children, passing them their index.
@@ -20,11 +36,7 @@ pub struct ListNode {
 }
 
 impl ListNode {
-    pub fn new(
-        node: &IRNode,
-        engine: &LayoutEngine,
-        parent_style: Arc<ComputedStyle>,
-    ) -> Self {
+    pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Self {
         Self::new_with_depth(node, engine, parent_style, 0)
     }
 
@@ -36,7 +48,12 @@ impl ListNode {
     ) -> Self {
         let style = engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
         let (meta, ir_children, start) = match node {
-            IRNode::List { meta, children, start, .. } => (meta, children, *start),
+            IRNode::List {
+                meta,
+                children,
+                start,
+                ..
+            } => (meta, children, *start),
             _ => panic!("ListNode must be created from an IRNode::List"),
         };
 
@@ -81,7 +98,6 @@ impl ListNode {
     }
 }
 
-
 impl LayoutNode for ListNode {
     fn style(&self) -> &Arc<ComputedStyle> {
         self.block.style()
@@ -95,7 +111,11 @@ impl LayoutNode for ListNode {
         self.block.measure(env, constraints)
     }
 
-    fn layout(&mut self, env: &LayoutEnvironment, buf: &mut LayoutBuffer) -> Result<LayoutResult, LayoutError> {
+    fn layout(
+        &mut self,
+        env: &LayoutEnvironment,
+        buf: &mut LayoutBuffer,
+    ) -> Result<LayoutResult, LayoutError> {
         if let Some(id) = &self.id {
             let location = AnchorLocation {
                 local_page_index: env.local_page_index,

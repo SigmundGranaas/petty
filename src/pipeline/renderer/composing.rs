@@ -14,18 +14,6 @@ use std::collections::{BTreeMap, HashMap};
 use std::io::{Cursor, Seek, Write};
 
 /// A rendering strategy that composes a final document from multiple sources.
-///
-/// This renderer is the counterpart to the `MetadataGeneratingProvider`. It expects
-/// to receive a `Document` object and a pre-rendered PDF body. Its primary jobs are:
-///
-/// 1.  **Composition:** Execute "role templates" (e.g., for a table of contents)
-///     using the `Document` object as a data source, render them to separate PDF pages,
-///     and merge them with the main PDF body.
-/// 2.  **Overlays:** Execute "overlay" templates (e.g., for page headers/footers)
-///     and apply their content to each page of the final document.
-/// 3.  **Fixups:** Apply document-wide modifications that were impossible in a
-///     single pass, such as adding hyperlink annotations and PDF outlines (bookmarks),
-///     using the metadata from the `Document` object.
 #[derive(Clone)]
 pub struct ComposingRenderer;
 
@@ -63,9 +51,6 @@ impl RenderingStrategy for ComposingRenderer {
         let mut main_doc = LopdfDocument::load_from(&mut body_artifact)?;
         info!("[COMPOSER] Body artifact loaded with {} pages.", main_doc.get_pages().len());
 
-        // Snapshot the Body Page Object IDs.
-        // We need these to resolve links from the TOC to the Body, even after prepending shifts page numbers.
-        // get_pages returns BTreeMap<PageNumber, ObjectId>. We want a Vec where index+1 = original body page number.
         let original_body_page_ids: Vec<ObjectId> = main_doc.get_pages().values().cloned().collect();
         let anchor_map: HashMap<String, &Anchor> = doc_metadata.anchors.iter().map(|a| (a.id.clone(), a)).collect();
 
@@ -74,13 +59,9 @@ impl RenderingStrategy for ComposingRenderer {
         let mut prepended_pages = 0;
 
         // --- Phase 1: Page Generation & Merging ---
-        // Defined roles for explicit ordering.
-        // "Prepend" roles are processed in reverse order so that the first one in the list
-        // ends up at the very front of the document.
         let prepend_roles = ["cover-page", "preface", "table-of-contents"];
         let append_roles = ["back-cover"];
 
-        // 1a. Process Prepend Roles (Reverse Order)
         for role in prepend_roles.iter().rev() {
             if let Some(template) = context.role_templates.get(*role) {
                 info!("[COMPOSER] Executing prepend role template: '{}'", role);
@@ -94,12 +75,14 @@ impl RenderingStrategy for ComposingRenderer {
                 let (laid_out_pages, _, _) = temp_renderer.layout_engine.paginate(&stylesheet, ir_nodes)?;
 
                 if !laid_out_pages.is_empty() {
-                    // 1. Collect Links from the Role Layout
                     let pending_links = collect_links_from_layout(&laid_out_pages);
 
-                    // 2. Render Role PDF
                     let mut new_page_ids = vec![];
-                    let font_map: HashMap<_, _> = temp_renderer.layout_engine.font_manager.db().faces().enumerate().map(|(i, f)| (f.post_script_name.clone(), format!("F{}", i + 1))).collect();
+                    let font_map: HashMap<String, String>;
+                    {
+                        let system = temp_renderer.layout_engine.font_manager.system.lock().unwrap();
+                        font_map = system.db().faces().enumerate().map(|(i, f)| (f.post_script_name.clone(), format!("F{}", i + 1))).collect();
+                    }
 
                     for page_elements in laid_out_pages {
                         let content_id = temp_renderer.render_page_content(page_elements, &font_map, page_width, page_height)?;
@@ -115,18 +98,12 @@ impl RenderingStrategy for ComposingRenderer {
                     prepended_pages += role_page_count;
                     merge_documents(&mut main_doc, role_doc, true)?;
 
-                    // 3. Resolve Links immediately
-                    // Since we prepended, the new pages are at indices 1..=role_page_count of the updated main_doc
                     let current_pages = main_doc.get_pages();
-                    // Note: get_pages() returns a map sorted by page number.
-                    // The pages we just prepended are 1, 2, ..., role_page_count.
 
                     for link in pending_links {
-                        // Find target body page
                         if let Some(anchor) = anchor_map.get(&link.target_id) {
                             let body_page_idx = anchor.page_number.saturating_sub(1);
                             if let Some(target_obj_id) = original_body_page_ids.get(body_page_idx) {
-                                // Find source page object in the merged doc
                                 let source_page_num = (link.local_page_idx + 1) as u32;
                                 if let Some(source_page_id) = current_pages.get(&source_page_num) {
                                     create_link_annotation(
@@ -145,7 +122,6 @@ impl RenderingStrategy for ComposingRenderer {
             }
         }
 
-        // 1b. Process Append Roles
         for role in append_roles.iter() {
             if let Some(template) = context.role_templates.get(*role) {
                 info!("[COMPOSER] Executing append role template: '{}'", role);
@@ -160,7 +136,11 @@ impl RenderingStrategy for ComposingRenderer {
 
                 if !laid_out_pages.is_empty() {
                     let mut new_page_ids = vec![];
-                    let font_map: HashMap<_, _> = temp_renderer.layout_engine.font_manager.db().faces().enumerate().map(|(i, f)| (f.post_script_name.clone(), format!("F{}", i + 1))).collect();
+                    let font_map: HashMap<String, String>;
+                    {
+                        let system = temp_renderer.layout_engine.font_manager.system.lock().unwrap();
+                        font_map = system.db().faces().enumerate().map(|(i, f)| (f.post_script_name.clone(), format!("F{}", i + 1))).collect();
+                    }
 
                     for page_elements in laid_out_pages {
                         let content_id = temp_renderer.render_page_content(page_elements, &font_map, page_width, page_height)?;
@@ -189,7 +169,6 @@ impl RenderingStrategy for ComposingRenderer {
 
                 for (i, page_id) in page_ids.iter().enumerate() {
                     let page_number = i + 1;
-                    // Note: We provide the final page count here so "Page X of Y" logic works correctly
                     let overlay_context_val = json!({
                         "document": &*doc_metadata, "page_number": page_number, "page_count": final_page_count
                     });
@@ -202,7 +181,11 @@ impl RenderingStrategy for ComposingRenderer {
                         if !overlay_pages.is_empty() {
                             warn!("[COMPOSER] Overlay template for role '{}' generated more than one page of content. Only the first will be used.", role);
                         }
-                        let font_map: HashMap<_, _> = context.font_manager.db().faces().enumerate().map(|(i, f)| (f.post_script_name.clone(), format!("F{}", i + 1))).collect();
+                        let font_map: HashMap<String, String>;
+                        {
+                            let system = context.font_manager.system.lock().unwrap();
+                            font_map = system.db().faces().enumerate().map(|(i, f)| (f.post_script_name.clone(), format!("F{}", i + 1))).collect();
+                        }
                         let content = crate::render::lopdf_helpers::render_elements_to_content(elements, &font_map, page_width, page_height)?;
                         overlay_content(&mut main_doc, *page_id, content.encode()?)?;
                     }
@@ -213,16 +196,13 @@ impl RenderingStrategy for ComposingRenderer {
         // --- Phase 3: Fixups (Main Body Links and Outlines) ---
         if !doc_metadata.hyperlinks.is_empty() || !doc_metadata.headings.is_empty() {
             info!("[COMPOSER] Applying fixups (body links, outlines).");
-            // Re-fetch final page mapping
             let final_page_ids: Vec<ObjectId> = main_doc.get_pages().into_values().collect();
             let root_id = main_doc.trailer.get(b"Root")?.as_reference()?;
 
-            // Existing Body Links
             let annots_by_page = create_link_annotations_for_body(&mut main_doc, &doc_metadata, &final_page_ids, page_height, prepended_pages)?;
             for (page_idx, annot_ids) in annots_by_page {
                 if page_idx > 0 && page_idx <= final_page_ids.len() {
                     let page_id = final_page_ids[page_idx - 1];
-                    // Use the robust append helper to handle Indirect Reference Annots
                     append_annotations_to_page(&mut main_doc, page_id, annot_ids)?;
                 }
             }
@@ -264,33 +244,28 @@ fn collect_links_from_layout(pages: &[Vec<PositionedElement>]) -> Vec<PendingLin
     links
 }
 
-/// Helper to robustly append annotations to a page, handling cases where "Annots"
-/// is an Array or an Indirect Reference to an Array.
 fn append_annotations_to_page(
     doc: &mut LopdfDocument,
     page_id: ObjectId,
     annot_ids: Vec<ObjectId>,
 ) -> Result<(), PipelineError> {
-    // Resolve the Annots object ID if it's a reference, or get the page dictionary directly
     let annots_array_ref = if let Ok(Object::Dictionary(page_dict)) = doc.get_object(page_id) {
         match page_dict.get(b"Annots") {
-            Ok(Object::Array(_)) => None, // Direct array, modify page_dict directly later
-            Ok(Object::Reference(ref_id)) => Some(*ref_id), // Indirect array
-            _ => None, // Missing or other type, create new in page_dict
+            Ok(Object::Array(_)) => None,
+            Ok(Object::Reference(ref_id)) => Some(*ref_id),
+            _ => None,
         }
     } else {
         return Ok(());
     };
 
     if let Some(ref_id) = annots_array_ref {
-        // Case 1: Annots is an Indirect Reference. Update the referenced Array.
         if let Ok(Object::Array(annots)) = doc.get_object_mut(ref_id) {
             for id in annot_ids {
                 annots.push(Object::Reference(id));
             }
         }
     } else {
-        // Case 2: Annots is a direct Array or missing. Update the Page dictionary.
         if let Ok(Object::Dictionary(page_dict)) = doc.get_object_mut(page_id) {
             if page_dict.has(b"Annots") {
                 if let Ok(Object::Array(annots)) = page_dict.get_mut(b"Annots") {
@@ -320,10 +295,6 @@ fn create_link_annotation(
     let action = dictionary! { "Type" => "Action", "S" => "GoTo", "D" => dest };
     let action_id = doc.add_object(action);
 
-    // Convert layout coordinates (Top-Left origin) to PDF coordinates (Bottom-Left origin)
-    // Rect: [LLx, LLy, URx, URy]
-    // LLy = Height - (y + h)
-    // URy = Height - y
     let pdf_rect = vec![
         rect[0].into(), (page_height - rect[3]).into(),
         rect[2].into(), (page_height - rect[1]).into(),
@@ -339,7 +310,6 @@ fn create_link_annotation(
     Ok(())
 }
 
-// Renamed from create_link_annotations_for_doc for clarity
 fn create_link_annotations_for_body(
     doc: &mut LopdfDocument,
     doc_meta: &Document,
@@ -376,7 +346,6 @@ fn create_link_annotations_for_body(
     Ok(annots_by_page)
 }
 
-/// Creates PDF outlines (bookmarks) by consuming the `Document` metadata.
 fn build_outlines_for_doc(
     doc: &mut LopdfDocument,
     doc_meta: &Document,

@@ -1,11 +1,27 @@
+use crate::core::idf::IRNode;
+use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::geom::{BoxConstraints, Size};
-use crate::core::layout::node::{AnchorLocation, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult};
+use crate::core::layout::node::{
+    AnchorLocation, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult,
+};
 use crate::core::layout::nodes::paragraph::ParagraphNode;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{LayoutEngine, LayoutError};
 use std::any::Any;
 use std::sync::Arc;
-use crate::core::idf::IRNode;
+
+pub struct HeadingBuilder;
+
+impl NodeBuilder for HeadingBuilder {
+    fn build(
+        &self,
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+    ) -> Box<dyn LayoutNode> {
+        Box::new(HeadingNode::new(node, engine, parent_style))
+    }
+}
 
 /// A `LayoutNode` for headings (`<h1>`, `<h2>`, etc.).
 /// It behaves like a paragraph but also registers itself as an anchor.
@@ -19,7 +35,11 @@ pub struct HeadingNode {
 impl HeadingNode {
     pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Self {
         let (meta, _level, children) = match node {
-            IRNode::Heading { meta, level, children } => (meta, level, children),
+            IRNode::Heading {
+                meta,
+                level,
+                children,
+            } => (meta, level, children),
             _ => panic!("HeadingNode must be created from an IRNode::Heading"),
         };
 
@@ -53,7 +73,11 @@ impl LayoutNode for HeadingNode {
         self.p_node.measure(env, constraints)
     }
 
-    fn layout(&mut self, env: &LayoutEnvironment, buf: &mut LayoutBuffer) -> Result<LayoutResult, LayoutError> {
+    fn layout(
+        &mut self,
+        env: &LayoutEnvironment,
+        buf: &mut LayoutBuffer,
+    ) -> Result<LayoutResult, LayoutError> {
         if let Some(id) = &self.id {
             // The anchor position is right before the top margin is applied.
             let location = AnchorLocation {

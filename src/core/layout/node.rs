@@ -24,6 +24,7 @@ pub struct IndexEntry {
 }
 
 /// The immutable environment (read-only access to fonts, styles, global config).
+#[derive(Clone, Copy)]
 pub struct LayoutEnvironment<'a> {
     pub engine: &'a LayoutEngine,
     pub local_page_index: usize,

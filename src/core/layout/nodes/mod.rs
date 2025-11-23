@@ -14,6 +14,8 @@ pub mod table;
 #[cfg(test)]
 mod block_test;
 #[cfg(test)]
+mod block_split_test;
+#[cfg(test)]
 mod flex_test;
 #[cfg(test)]
 mod image_test;

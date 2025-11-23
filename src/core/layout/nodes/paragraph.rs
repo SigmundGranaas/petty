@@ -1,48 +1,147 @@
 use crate::core::idf::IRNode;
+use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::geom::{BoxConstraints, Size};
-use crate::core::layout::node::{AnchorLocation, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult};
+use crate::core::layout::node::{
+    AnchorLocation, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult,
+};
 use crate::core::layout::style::ComputedStyle;
-use crate::core::layout::text::{atomize_inlines, LayoutAtom};
-use crate::core::layout::{LayoutEngine, LayoutError, PositionedElement};
+use crate::core::layout::text::TextBuilder;
+use crate::core::layout::{LayoutEngine, LayoutError, PositionedElement, TextElement};
 use crate::core::style::dimension::Dimension;
 use crate::core::style::text::TextAlign;
+use cosmic_text::{Buffer, LayoutRun, Metrics, Wrap};
 use std::any::Any;
-use std::ops::Range;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-/// A `LayoutNode` implementation for paragraphs, capable of line-breaking and page-splitting.
-#[derive(Debug, Clone)]
+pub struct ParagraphBuilder;
+
+impl NodeBuilder for ParagraphBuilder {
+    fn build(
+        &self,
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+    ) -> Box<dyn LayoutNode> {
+        Box::new(ParagraphNode::new(node, engine, parent_style))
+    }
+}
+
+/// A `LayoutNode` implementation for paragraphs using `cosmic-text` for shaping and wrapping.
+#[derive(Clone)]
 pub struct ParagraphNode {
     id: Option<String>,
-    atoms: Vec<LayoutAtom>,
+    /// Flattened text content.
+    text_content: String,
+    /// Attributes (styles) for runs within the text.
+    attrs_list: cosmic_text::AttrsList,
+    /// Links extracted from the text, indexed by metadata in attrs.
+    links: Vec<String>,
+
     style: Arc<ComputedStyle>,
+
+    /// The vertical offset (in pixels/points) into the shaped buffer to start rendering from.
+    /// This is used for pagination (splitting a paragraph across pages).
+    scroll_offset: f32,
+
+    /// Cached cosmic-text buffer to avoid re-shaping on every measure/layout call.
+    buffer: Arc<Mutex<Buffer>>,
+}
+
+impl std::fmt::Debug for ParagraphNode {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ParagraphNode")
+            .field("id", &self.id)
+            .field("text_content", &self.text_content)
+            .field("style", &self.style)
+            .field("scroll_offset", &self.scroll_offset)
+            .finish()
+    }
 }
 
 impl ParagraphNode {
-    /// Creates a new `ParagraphNode` from an `IRNode::Paragraph`.
     pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Self {
         let style = engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
         let (meta, inlines) = match node {
             IRNode::Paragraph { meta, children } => (meta, children),
             _ => panic!("ParagraphNode must be created from an IRNode::Paragraph"),
         };
-        let atoms = atomize_inlines(engine, inlines, &style, None);
+
+        let mut builder = TextBuilder::new(engine, &style);
+        builder.process_inlines(inlines, &style);
+
+        // Initialize and populate the buffer once
+        let mut system = engine.font_manager.system.lock().unwrap();
+        let metrics = Metrics::new(style.font_size, style.line_height);
+        let mut buffer = Buffer::new(&mut system, metrics);
+
+        let default_attrs = engine.font_manager.attrs_from_style(&style);
+        let spans = builder.attrs_list.spans().into_iter().map(|(range, attrs)| {
+            (
+                &builder.content[range.clone()],
+                attrs.as_attrs()
+            )
+        });
+
+        buffer.set_rich_text(
+            &mut system,
+            spans,
+            &default_attrs,
+            cosmic_text::Shaping::Advanced,
+            None
+        );
+        buffer.set_wrap(&mut system, Wrap::Word);
+
         Self {
             id: meta.id.clone(),
-            atoms,
+            text_content: builder.content,
+            attrs_list: builder.attrs_list,
+            links: builder.links,
             style,
+            scroll_offset: 0.0,
+            buffer: Arc::new(Mutex::new(buffer)),
         }
     }
 
-    /// Prepends text to the paragraph's atoms, useful for list markers.
     pub fn prepend_text(&mut self, text: &str, engine: &LayoutEngine) {
-        let word = LayoutAtom::Word {
-            text: text.to_string(),
-            width: engine.measure_text_width(text, &self.style),
-            style: self.style.clone(),
-            href: None,
-        };
-        self.atoms.insert(0, word);
+        let shift_amount = text.len();
+        let mut new_content = String::from(text);
+        new_content.push_str(&self.text_content);
+
+        let default_attrs = engine.font_manager.attrs_from_style(&self.style);
+        let mut new_attrs = cosmic_text::AttrsList::new(&default_attrs);
+
+        // Add the new span for the prepended text
+        new_attrs.add_span(0..shift_amount, &default_attrs);
+
+        // Shift existing spans
+        for (range, attrs) in self.attrs_list.spans() {
+            let new_range = (range.start + shift_amount)..(range.end + shift_amount);
+            new_attrs.add_span(new_range, &attrs.as_attrs());
+        }
+
+        self.text_content = new_content;
+        self.attrs_list = new_attrs;
+
+        // Update the shared buffer with new content.
+        // Since prepend_text is typically called on a cloned node (e.g. in ListItem),
+        // modifying the shared buffer updates the logical content for this node chain.
+        let mut buffer = self.buffer.lock().unwrap();
+        let mut system = engine.font_manager.system.lock().unwrap();
+
+        let spans = self.attrs_list.spans().into_iter().map(|(range, attrs)| {
+            (
+                &self.text_content[range.clone()],
+                attrs.as_attrs()
+            )
+        });
+
+        buffer.set_rich_text(
+            &mut system,
+            spans,
+            &default_attrs,
+            cosmic_text::Shaping::Advanced,
+            None
+        );
     }
 }
 
@@ -55,33 +154,54 @@ impl LayoutNode for ParagraphNode {
         self
     }
 
-    fn measure(&mut self, _env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
+    fn measure(&mut self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
         let margin_y = self.style.margin.top + self.style.margin.bottom;
 
-        // Intrinsic width query?
-        if !constraints.has_bounded_width() {
-            let width = self.atoms.iter().map(|a| a.width()).sum();
-            // Height is unknown/irrelevant for intrinsic width usually, but lets approximate
-            return Size::new(width, margin_y + self.style.line_height);
-        }
+        let mut buffer = self.buffer.lock().unwrap();
+        let mut system = env.engine.font_manager.system.lock().unwrap();
 
-        let available_width = constraints.max_width;
+        let set_width = if constraints.has_bounded_width() {
+            Some(constraints.max_width)
+        } else {
+            None
+        };
+
+        buffer.set_size(&mut system, set_width, None);
+        buffer.shape_until_scroll(&mut system, false);
+
+        let mut max_width: f32 = 0.0;
+        let mut height: f32 = 0.0;
+
+        // Determine ascent correction to normalize Y coordinates
+        let ascent_correction = buffer.layout_runs().next().map(|r| r.line_y).unwrap_or(0.0);
+
+        for run in buffer.layout_runs() {
+            max_width = max_width.max(run.line_w);
+            let line_top = run.line_y - ascent_correction;
+            height = line_top + run.line_height;
+        }
 
         if let Some(Dimension::Pt(h)) = self.style.height {
-            return Size::new(available_width, margin_y + h);
+            height = h;
         }
 
-        if self.atoms.is_empty() {
-            return Size::new(available_width, margin_y);
+        if self.text_content.is_empty() {
+            height = 0.0;
+            if let Some(Dimension::Pt(h)) = self.style.height {
+                height = h;
+            } else if let Dimension::Pt(h) = self.style.min_height {
+                height = h;
+            }
         }
 
-        let lines = break_atoms_into_line_ranges(&self.atoms, available_width);
-        let content_height = lines.len() as f32 * self.style.line_height;
-
-        Size::new(available_width, margin_y + content_height)
+        Size::new(max_width, height + margin_y)
     }
 
-    fn layout(&mut self, env: &LayoutEnvironment, buf: &mut LayoutBuffer) -> Result<LayoutResult, LayoutError> {
+    fn layout(
+        &mut self,
+        env: &LayoutEnvironment,
+        buf: &mut LayoutBuffer,
+    ) -> Result<LayoutResult, LayoutError> {
         if let Some(id) = &self.id {
             let location = AnchorLocation {
                 local_page_index: env.local_page_index,
@@ -90,306 +210,214 @@ impl LayoutNode for ParagraphNode {
             buf.defined_anchors.insert(id.clone(), location);
         }
 
-        // --- Vertical Margin Collapsing ---
         let margin_to_add = self.style.margin.top.max(buf.last_v_margin);
+        let is_continuation = self.scroll_offset > 0.0;
 
-        if self.atoms.is_empty() {
+        if !is_continuation {
+            // Rely on cursor position instead of `!buf.is_empty()` to support isolated contexts.
+            if buf.cursor.1 > 0.0 && margin_to_add > buf.available_height() {
+                return Ok(LayoutResult::Partial(Box::new(self.clone())));
+            }
             buf.advance_cursor(margin_to_add);
+        }
+        buf.last_v_margin = 0.0;
+
+        let mut buffer = self.buffer.lock().unwrap();
+        let mut system = env.engine.font_manager.system.lock().unwrap();
+
+        let align = match self.style.text_align {
+            TextAlign::Left => cosmic_text::Align::Left,
+            TextAlign::Right => cosmic_text::Align::Right,
+            TextAlign::Center => cosmic_text::Align::Center,
+            TextAlign::Justify => cosmic_text::Align::Justified,
+        };
+        for line in buffer.lines.iter_mut() {
+            line.set_align(Some(align));
+        }
+
+        let width = buf.bounds.width;
+        buffer.set_size(&mut system, Some(width), None);
+        buffer.shape_until_scroll(&mut system, false);
+
+        let available_height = buf.available_height();
+
+        let all_runs: Vec<LayoutRun> = buffer.layout_runs().collect();
+        let ascent_correction = all_runs.first().map(|r| r.line_y).unwrap_or(0.0);
+
+        let remaining_runs: Vec<&LayoutRun> = all_runs.iter()
+            .filter(|run| (run.line_y - ascent_correction) >= self.scroll_offset - 0.01)
+            .collect();
+
+        if remaining_runs.is_empty() {
             buf.last_v_margin = self.style.margin.bottom;
             return Ok(LayoutResult::Full);
         }
 
-        if !buf.is_empty() && margin_to_add > buf.available_height() {
-            return Ok(LayoutResult::Partial(Box::new(self.clone())));
-        }
+        let mut runs_to_render = Vec::new();
+        let mut next_page_start_y = None;
 
-        // Apply the collapsed margin by advancing the cursor.
-        buf.advance_cursor(margin_to_add);
-        // The margin has been "used," so reset it for any subsequent children.
-        buf.last_v_margin = 0.0;
+        let orphans = self.style.orphans.max(1) as usize;
+        let widows = self.style.widows.max(1) as usize;
 
-        let available_width = buf.bounds.width;
-        let all_line_ranges = break_atoms_into_line_ranges(&self.atoms, available_width);
-        let total_lines = all_line_ranges.len();
-        let line_height = self.style.line_height;
+        let mut fit_count = 0;
+        for run in &remaining_runs {
+            let line_top = run.line_y - ascent_correction;
+            let local_y = line_top - self.scroll_offset;
 
-        let mut lines_that_fit = (buf.available_height() / line_height).floor() as usize;
-        if buf.is_empty() && lines_that_fit == 0 && total_lines > 0 {
-            lines_that_fit = 1;
-        }
-        lines_that_fit = lines_that_fit.min(total_lines);
-
-        // --- Orphans Control ---
-        // If a break would occur, and it would leave fewer than `orphans` lines on this page,
-        // force the entire paragraph to the next page.
-        if !buf.is_empty() && total_lines > lines_that_fit && lines_that_fit < self.style.orphans {
-            return Ok(LayoutResult::Partial(Box::new(self.clone())));
-        }
-
-        // --- Widows Control ---
-        if lines_that_fit < total_lines && lines_that_fit > 0 {
-            let remaining_lines_count = total_lines - lines_that_fit;
-            if remaining_lines_count < self.style.widows {
-                let lines_to_move = (self.style.widows - remaining_lines_count).min(lines_that_fit);
-                lines_that_fit -= lines_to_move;
+            if local_y + run.line_height <= available_height + 0.1 {
+                fit_count += 1;
+            } else {
+                break;
             }
         }
 
-        for i in 0..lines_that_fit {
-            let range = &all_line_ranges[i];
-            let line_atoms = self.atoms[range.clone()].to_vec();
-            let is_last_line_of_paragraph = i == total_lines - 1;
-            commit_line_to_context(
-                env,
-                buf,
-                self.style.clone(),
-                line_atoms,
-                available_width,
-                is_last_line_of_paragraph,
-            );
-            buf.advance_cursor(line_height);
-        }
-
-        if lines_that_fit >= total_lines {
-            buf.last_v_margin = self.style.margin.bottom;
-            Ok(LayoutResult::Full)
+        if fit_count == remaining_runs.len() {
+            runs_to_render.extend(remaining_runs);
         } else {
-            let remainder_start_idx = all_line_ranges[lines_that_fit].start;
-            let remainder_atoms = self.atoms[remainder_start_idx..].to_vec();
-            let remainder = Box::new(ParagraphNode {
-                id: self.id.clone(),
-                atoms: remainder_atoms,
-                style: self.style.clone(),
-            });
-            Ok(LayoutResult::Partial(remainder))
-        }
-    }
-}
-
-fn break_atoms_into_line_ranges(atoms: &[LayoutAtom], available_width: f32) -> Vec<Range<usize>> {
-    if atoms.is_empty() {
-        return vec![];
-    }
-    let mut lines = Vec::new();
-    let mut current_pos = 0;
-
-    while current_pos < atoms.len() {
-        let mut line_start = current_pos;
-        while line_start < atoms.len() && atoms[line_start].is_space() {
-            line_start += 1;
-        }
-        if line_start >= atoms.len() {
-            break;
-        }
-
-        let mut line_buffer_width = 0.0;
-        let mut potential_break_idx = line_start;
-        let mut line_end = line_start;
-        let mut next_pos = line_start;
-
-        for i in line_start..atoms.len() {
-            let atom = &atoms[i];
-            if let LayoutAtom::LineBreak = atom {
-                line_end = i;
-                next_pos = i + 1;
-                break;
-            }
-
-            if !atom.is_space() && line_buffer_width > 0.0 && (line_buffer_width + atom.width()) > available_width {
-                if potential_break_idx > line_start {
-                    line_end = potential_break_idx;
-                    next_pos = potential_break_idx;
-                } else {
-                    line_end = i;
-                    next_pos = i;
+            if fit_count < orphans {
+                if buf.cursor.1 > 0.0 {
+                    return Ok(LayoutResult::Partial(Box::new(self.clone())));
                 }
-                break;
             }
-            line_buffer_width += atom.width();
-            if atom.is_space() {
-                potential_break_idx = i;
+
+            let remaining_count = remaining_runs.len() - fit_count;
+            if remaining_count < widows {
+                let needed = widows - remaining_count;
+                if fit_count > needed {
+                    fit_count -= needed;
+                } else {
+                    if buf.cursor.1 > 0.0 {
+                        return Ok(LayoutResult::Partial(Box::new(self.clone())));
+                    }
+                }
             }
-            line_end = i + 1;
-            next_pos = i + 1;
+
+            if fit_count == 0 && buf.cursor.1 == 0.0 && !remaining_runs.is_empty() {
+                fit_count = 1;
+            }
+
+            for i in 0..fit_count {
+                runs_to_render.push(remaining_runs[i]);
+            }
+
+            if fit_count < remaining_runs.len() {
+                let next_run = remaining_runs[fit_count];
+                next_page_start_y = Some(next_run.line_y - ascent_correction);
+            }
         }
 
-        lines.push(line_start..line_end);
-        current_pos = next_pos;
+        let mut last_run_bottom = 0.0;
+        let is_justified = self.style.text_align == TextAlign::Justify;
+
+        for run in runs_to_render {
+            let line_top = run.line_y - ascent_correction;
+            let local_y = line_top - self.scroll_offset;
+
+            let mut group_glyphs: Vec<&cosmic_text::LayoutGlyph> = Vec::new();
+            let mut current_metadata = if let Some(first) = run.glyphs.first() { first.metadata } else { 0 };
+
+            for glyph in run.glyphs.iter() {
+                let metadata_changed = glyph.metadata != current_metadata;
+                let mut should_break = metadata_changed;
+
+                if !should_break && is_justified && !group_glyphs.is_empty() {
+                    let first_g = group_glyphs[0];
+                    let group_is_space = run.text[first_g.start..first_g.end].chars().all(char::is_whitespace);
+                    let current_is_space = run.text[glyph.start..glyph.end].chars().all(char::is_whitespace);
+
+                    if group_is_space != current_is_space {
+                        should_break = true;
+                    }
+                }
+
+                if should_break {
+                    flush_group(
+                        buf,
+                        &group_glyphs,
+                        current_metadata,
+                        local_y,
+                        run.line_height,
+                        &self.style,
+                        &self.links,
+                        run.text
+                    );
+                    group_glyphs.clear();
+                    current_metadata = glyph.metadata;
+                }
+                group_glyphs.push(glyph);
+            }
+
+            if !group_glyphs.is_empty() {
+                flush_group(
+                    buf,
+                    &group_glyphs,
+                    current_metadata,
+                    local_y,
+                    run.line_height,
+                    &self.style,
+                    &self.links,
+                    run.text
+                );
+            }
+
+            last_run_bottom = local_y + run.line_height;
+        }
+
+        if let Some(break_y) = next_page_start_y {
+            buf.advance_cursor(last_run_bottom);
+            let mut remainder = self.clone();
+            remainder.scroll_offset = break_y;
+            return Ok(LayoutResult::Partial(Box::new(remainder)));
+        }
+
+        buf.advance_cursor(last_run_bottom);
+        buf.last_v_margin = self.style.margin.bottom;
+
+        Ok(LayoutResult::Full)
     }
-    lines
 }
 
-/// Commits a line of atoms to the LayoutContext.
-fn commit_line_to_context(
-    env: &LayoutEnvironment,
+fn flush_group(
     buf: &mut LayoutBuffer,
-    parent_style: Arc<ComputedStyle>,
-    mut line_atoms: Vec<LayoutAtom>,
-    box_width: f32,
-    is_last_line: bool,
+    glyphs: &[&cosmic_text::LayoutGlyph],
+    metadata: usize,
+    y: f32,
+    height: f32,
+    style: &Arc<ComputedStyle>,
+    links: &[String],
+    full_text: &str
 ) {
-    if line_atoms.is_empty() {
-        return;
-    }
-    while line_atoms.last().map_or(false, |a| a.is_space()) {
-        line_atoms.pop();
-    }
-    if line_atoms.is_empty() {
-        return;
-    }
-    let total_content_width: f32 = line_atoms.iter().map(|a| a.width()).sum();
-    let justify = !is_last_line && parent_style.text_align == TextAlign::Justify;
+    if glyphs.is_empty() { return; }
 
-    let mut current_x = match parent_style.text_align {
-        TextAlign::Left | TextAlign::Justify => 0.0,
-        TextAlign::Center => (box_width - total_content_width).max(0.0) / 2.0,
-        TextAlign::Right => (box_width - total_content_width).max(0.0),
+    let start_x = glyphs.first().unwrap().x;
+    let end_x = glyphs.last().unwrap().x + glyphs.last().unwrap().w;
+    let width = end_x - start_x;
+
+    let start_idx = glyphs.first().unwrap().start;
+    let end_idx = glyphs.last().unwrap().end;
+
+    let start_idx = start_idx.min(full_text.len());
+    let end_idx = end_idx.min(full_text.len());
+
+    let text_segment = &full_text[start_idx..end_idx];
+
+    let href = if metadata > 0 && metadata <= links.len() {
+        Some(links[metadata - 1].clone())
+    } else {
+        None
     };
 
-    if justify {
-        let space_count = line_atoms.iter().filter(|a| a.is_space()).count();
-        let justification_space = if space_count > 0 {
-            (box_width - total_content_width).max(0.0) / space_count as f32
-        } else {
-            0.0
-        };
-
-        for atom in line_atoms {
-            match atom {
-                LayoutAtom::Word { text, width, style, href } => {
-                    buf.push_element(PositionedElement {
-                        x: current_x,
-                        y: 0.0,
-                        width,
-                        height: style.line_height,
-                        element: crate::core::layout::LayoutElement::Text(crate::core::layout::TextElement {
-                            content: text,
-                            href,
-                            text_decoration: style.text_decoration.clone(),
-                        }),
-                        style,
-                    });
-                    current_x += width;
-                }
-                LayoutAtom::Space { width, .. } => {
-                    current_x += width + justification_space;
-                }
-                LayoutAtom::Image { src, width, height, style, href: _ } => {
-                    let y_offset = parent_style.line_height - height;
-                    buf.push_element(PositionedElement {
-                        x: current_x,
-                        y: y_offset,
-                        width,
-                        height,
-                        element: crate::core::layout::LayoutElement::Image(crate::core::layout::ImageElement { src }),
-                        style,
-                    });
-                    current_x += width;
-                }
-                LayoutAtom::PageNumberPlaceholder { target_id, style, href } => {
-                    let text = "XX"; // For measurement only
-                    let width = env.engine.measure_text_width(text, &style);
-                    let placeholder = PositionedElement {
-                        x: current_x,
-                        y: 0.0,
-                        width,
-                        height: style.line_height,
-                        element: crate::core::layout::LayoutElement::PageNumberPlaceholder {
-                            target_id,
-                            href,
-                        },
-                        style,
-                    };
-                    buf.push_element(placeholder);
-                    current_x += width;
-                }
-                LayoutAtom::LineBreak => {}
-            }
-        }
-    } else {
-        let mut atom_idx = 0;
-        while atom_idx < line_atoms.len() {
-            let atom = &line_atoms[atom_idx];
-            match atom {
-                LayoutAtom::Word { .. } | LayoutAtom::Space { .. } => {
-                    let mut run_text = String::new();
-                    let mut run_width = 0.0;
-                    let (base_style, base_href) = match atom {
-                        LayoutAtom::Word { style, href, .. } => (style, href),
-                        LayoutAtom::Space { style, href, .. } => (style, href),
-                        _ => unreachable!(),
-                    };
-                    let mut run_end_idx = atom_idx;
-                    for i in atom_idx..line_atoms.len() {
-                        let (current_style, current_href, text_part, part_width) = match &line_atoms[i] {
-                            LayoutAtom::Word { text, width, style, href } => (style, href, text.as_str(), *width),
-                            LayoutAtom::Space { width, style, href } => (style, href, " ", *width),
-                            _ => break,
-                        };
-                        if Arc::ptr_eq(current_style, base_style) && current_href == base_href {
-                            run_text.push_str(text_part);
-                            run_width += part_width;
-                            run_end_idx = i;
-                        } else {
-                            break;
-                        }
-                    }
-                    buf.push_element(PositionedElement {
-                        x: current_x,
-                        y: 0.0,
-                        width: run_width,
-                        height: base_style.line_height,
-                        element: crate::core::layout::LayoutElement::Text(crate::core::layout::TextElement {
-                            content: run_text,
-                            href: base_href.clone(),
-                            text_decoration: base_style.text_decoration.clone(),
-                        }),
-                        style: base_style.clone(),
-                    });
-                    current_x += run_width;
-                    atom_idx = run_end_idx + 1;
-                }
-                LayoutAtom::Image {
-                    src,
-                    width,
-                    height,
-                    style,
-                    ..
-                } => {
-                    let y_offset = parent_style.line_height - height;
-                    buf.push_element(PositionedElement {
-                        x: current_x,
-                        y: y_offset,
-                        width: *width,
-                        height: *height,
-                        element: crate::core::layout::LayoutElement::Image(crate::core::layout::ImageElement { src: src.clone() }),
-                        style: style.clone(),
-                    });
-                    current_x += width;
-                    atom_idx += 1;
-                }
-                LayoutAtom::PageNumberPlaceholder { target_id, style, href } => {
-                    let text = "XX"; // For measurement only
-                    let width = env.engine.measure_text_width(text, style);
-                    let placeholder = PositionedElement {
-                        x: current_x,
-                        y: 0.0,
-                        width,
-                        height: style.line_height,
-                        element: crate::core::layout::LayoutElement::PageNumberPlaceholder {
-                            target_id: target_id.clone(),
-                            href: href.clone(),
-                        },
-                        style: style.clone(),
-                    };
-                    buf.push_element(placeholder);
-                    current_x += width;
-                    atom_idx += 1;
-                }
-                LayoutAtom::LineBreak => {
-                    atom_idx += 1;
-                }
-            }
-        }
-    }
+    let element = PositionedElement {
+        x: start_x,
+        y,
+        width,
+        height,
+        element: crate::core::layout::LayoutElement::Text(TextElement {
+            content: text_segment.to_string(),
+            href,
+            text_decoration: style.text_decoration.clone(),
+        }),
+        style: style.clone(),
+    };
+    buf.push_element(element);
 }

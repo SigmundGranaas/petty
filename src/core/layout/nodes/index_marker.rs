@@ -1,10 +1,26 @@
+use crate::core::idf::IRNode;
+use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::geom::{BoxConstraints, Size};
-use crate::core::layout::node::{IndexEntry, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult};
+use crate::core::layout::node::{
+    IndexEntry, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult,
+};
 use crate::core::layout::style::ComputedStyle;
-use crate::core::layout::LayoutError;
+use crate::core::layout::{LayoutEngine, LayoutError};
 use std::any::Any;
 use std::sync::Arc;
-use crate::core::idf::IRNode;
+
+pub struct IndexMarkerBuilder;
+
+impl NodeBuilder for IndexMarkerBuilder {
+    fn build(
+        &self,
+        node: &IRNode,
+        _engine: &LayoutEngine,
+        _parent_style: Arc<ComputedStyle>,
+    ) -> Box<dyn LayoutNode> {
+        Box::new(IndexMarkerNode::new(node))
+    }
+}
 
 /// A special `LayoutNode` that represents an index term marker.
 /// It is invisible and its only purpose is to record its position during layout.
@@ -40,7 +56,11 @@ impl LayoutNode for IndexMarkerNode {
         Size::zero()
     }
 
-    fn layout(&mut self, env: &LayoutEnvironment, buf: &mut LayoutBuffer) -> Result<LayoutResult, LayoutError> {
+    fn layout(
+        &mut self,
+        env: &LayoutEnvironment,
+        buf: &mut LayoutBuffer,
+    ) -> Result<LayoutResult, LayoutError> {
         let entry = IndexEntry {
             local_page_index: env.local_page_index,
             y_pos: buf.cursor.1 + buf.bounds.y,

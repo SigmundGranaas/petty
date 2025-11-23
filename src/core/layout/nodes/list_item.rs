@@ -1,4 +1,3 @@
-use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{AnchorLocation, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult};
 use crate::core::layout::nodes::block::draw_background_and_borders;
 use crate::core::layout::style::ComputedStyle;
@@ -9,6 +8,7 @@ use crate::core::style::text::TextDecoration;
 use std::any::Any;
 use std::sync::Arc;
 use crate::core::idf::IRNode;
+use crate::core::layout::geom::{BoxConstraints, Size};
 
 /// A `LayoutNode` for a single item within a list.
 /// It is responsible for drawing its marker (bullet or number) and then
@@ -259,10 +259,19 @@ impl LayoutNode for ListItemNode {
                     let mut remaining_children = vec![remainder];
                     remaining_children.extend(self.children.drain((i + 1)..));
 
+                    // FIX: Reset top properties for the continuation
+                    let mut next_style = (*self.style).clone();
+                    next_style.margin.top = 0.0;
+                    next_style.border_top = None;
+                    next_style.padding.top = 0.0;
+                    if next_style.height.is_some() {
+                        next_style.height = None;
+                    }
+
                     let mut next_page_item = Box::new(ListItemNode {
                         id: self.id.clone(),
                         children: remaining_children,
-                        style: self.style.clone(),
+                        style: Arc::new(next_style),
                         marker_text: String::new(), // No marker on subsequent pages
                     });
                     // Re-measure for next page layout

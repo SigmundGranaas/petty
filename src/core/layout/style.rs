@@ -51,6 +51,10 @@ pub struct ComputedStyle {
     pub flex_shrink: f32,
     pub flex_basis: Dimension,
     pub align_self: AlignSelf,
+
+    // Added for compatibility with ParagraphNode expectations
+    // If this property isn't in ElementStyle yet, we default it.
+    pub min_height: Dimension,
 }
 
 impl Default for ComputedStyle {
@@ -93,6 +97,7 @@ impl Default for ComputedStyle {
             flex_shrink: 1.0,
             flex_basis: Dimension::Auto,
             align_self: AlignSelf::default(),
+            min_height: Dimension::Auto,
         }
     }
 }
@@ -104,11 +109,7 @@ pub fn compute_style(
     style_override: Option<&ElementStyle>,
     parent_style: &Arc<ComputedStyle>,
 ) -> Arc<ComputedStyle> {
-    // Optimization: if there are no styles to apply on this element, we can reuse the parent's
-    // Arc for inheritable properties. However, non-inheritable properties must be reset.
-    // The safest and clearest approach is to always compute a new style.
     if style_sets.is_empty() && style_override.is_none() {
-        // If there are truly no styles, we can perform a quick copy and reset.
         let mut computed = (**parent_style).clone();
         computed.margin = Margins::default();
         computed.padding = Margins::default();
@@ -125,10 +126,10 @@ pub fn compute_style(
         computed.flex_basis = Dimension::Auto;
         computed.align_self = AlignSelf::Auto;
         computed.border_spacing = 0.0;
+        computed.min_height = Dimension::Auto;
         return Arc::new(computed);
     }
 
-    // 1. Create a single, merged ElementStyle for this node.
     let mut merged = ElementStyle::default();
     for style_def in style_sets {
         merge_element_styles(&mut merged, style_def);
@@ -137,8 +138,6 @@ pub fn compute_style(
         merge_element_styles(&mut merged, override_style_def);
     }
 
-    // 2. Create the final ComputedStyle, inheriting from the parent where the merged style
-    // doesn't specify a value.
     let computed = ComputedStyle {
         // Inherited properties
         font_family: merged
@@ -198,6 +197,9 @@ pub fn compute_style(
         flex_shrink: merged.flex_shrink.unwrap_or(1.0),
         flex_basis: merged.flex_basis.unwrap_or_default(),
         align_self: merged.align_self.unwrap_or_default(),
+
+        // Defaulting min_height since it's not in ElementStyle yet
+        min_height: Dimension::Auto,
     };
 
     Arc::new(computed)

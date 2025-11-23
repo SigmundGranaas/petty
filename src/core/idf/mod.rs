@@ -101,6 +101,23 @@ impl IRNode {
     pub fn style_override(&self) -> Option<&ElementStyle> {
         self.meta().and_then(|m| m.style_override.as_ref())
     }
+
+    /// Returns a string identifier for the node type, used for dynamic dispatch in the layout engine.
+    pub fn kind(&self) -> &'static str {
+        match self {
+            IRNode::Root(_) => "root",
+            IRNode::Block { .. } => "block",
+            IRNode::Paragraph { .. } => "paragraph",
+            IRNode::Heading { .. } => "heading",
+            IRNode::Image { .. } => "image",
+            IRNode::FlexContainer { .. } => "flex-container",
+            IRNode::List { .. } => "list",
+            IRNode::ListItem { .. } => "list-item",
+            IRNode::Table { .. } => "table",
+            IRNode::PageBreak { .. } => "page-break",
+            IRNode::IndexMarker { .. } => "index-marker",
+        }
+    }
 }
 
 

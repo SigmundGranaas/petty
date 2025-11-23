@@ -1,5 +1,4 @@
 // src/render/lopdf_renderer.rs
-// src/render/lopdf_renderer.rs
 use super::renderer::{DocumentRenderer, RenderError};
 use super::streaming_writer::StreamingPdfWriter;
 use crate::core::idf::SharedData;
@@ -13,11 +12,6 @@ use std::io::{Cursor, Seek, Write};
 use std::sync::Arc;
 
 /// A PDF renderer using the `lopdf` library, capable of both streaming and buffering.
-///
-/// This renderer acts as a "toolkit" driven by a higher-level strategy. It writes
-/// directly to the provided writer `W`. For streaming strategies, `W` is the final
-/// output stream. For buffering strategies (like Hybrid's first pass), `W` can
-/// be a `Cursor<Vec<u8>>`.
 pub struct LopdfRenderer<W: Write + Seek + Send> {
     pub(crate) writer: Option<StreamingPdfWriter<W>>,
     pub stylesheet: Arc<Stylesheet>,
@@ -29,9 +23,13 @@ pub struct LopdfRenderer<W: Write + Seek + Send> {
 impl<W: Write + Seek + Send> LopdfRenderer<W> {
     pub fn new(layout_engine: LayoutEngine, stylesheet: Arc<Stylesheet>) -> Result<Self, RenderError> {
         let mut font_map = HashMap::new();
-        for (i, face) in layout_engine.font_manager.db().faces().enumerate() {
+
+        // Lock system before accessing db
+        let system = layout_engine.font_manager.system.lock().unwrap();
+        for (i, face) in system.db().faces().enumerate() {
             font_map.insert(face.post_script_name.clone(), format!("F{}", i + 1));
         }
+        drop(system); // Explicit drop to avoid borrow conflict in struct construction
 
         Ok(Self {
             writer: None,
@@ -42,14 +40,10 @@ impl<W: Write + Seek + Send> LopdfRenderer<W> {
         })
     }
 
-    /// Provides mutable access to the underlying `StreamingPdfWriter`, allowing
-    /// helper functions to buffer objects directly. This is typically used by
-    /// the TwoPassStrategy.
     pub fn writer_mut(&mut self) -> Option<&mut StreamingPdfWriter<W>> {
         self.writer.as_mut()
     }
 
-    /// Writes a Page object dictionary with a specific ID. Used by TwoPassStrategy.
     pub fn write_page_object_at_id(
         &mut self,
         page_id: ObjectId,
@@ -75,11 +69,8 @@ impl<W: Write + Seek + Send> LopdfRenderer<W> {
         Ok(())
     }
 }
-// This implementation is specialized for when the writer is a `Cursor`.
+
 impl LopdfRenderer<Cursor<Vec<u8>>> {
-    /// A specialized finish method for in-memory rendering that returns the
-    /// generated PDF bytes directly from the internal buffer. This is used by
-    /// the ComposingRenderer to generate role templates in memory.
     pub fn finish_into_buffer(mut self, page_ids: Vec<ObjectId>) -> Result<Vec<u8>, RenderError> {
         if let Some(mut writer) = self.writer.take() {
             writer.set_page_ids(page_ids);
@@ -96,7 +87,11 @@ impl LopdfRenderer<Cursor<Vec<u8>>> {
 impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> {
     fn begin_document(&mut self, writer: W) -> Result<(), RenderError> {
         let mut font_dict = Dictionary::new();
-        for face in self.layout_engine.font_manager.db().faces() {
+
+        // Lock system before accessing db
+        let system = self.layout_engine.font_manager.system.lock().unwrap();
+
+        for face in system.db().faces() {
             if let Some(internal_name) = self.font_map.get(&face.post_script_name) {
                 let single_font_dict = dictionary! {
                     "Type" => "Font", "Subtype" => "Type1", "BaseFont" => face.post_script_name.clone(), "Encoding" => "WinAnsiEncoding",
@@ -104,18 +99,14 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> 
                 font_dict.set(internal_name.as_bytes(), Object::Dictionary(single_font_dict));
             }
         }
-        // The writer is now the final destination passed in from the strategy.
         self.writer = Some(StreamingPdfWriter::new(writer, "1.7", font_dict)?);
         Ok(())
     }
 
     fn add_resources(&mut self, _resources: &HashMap<String, SharedData>) -> Result<(), RenderError> {
-        // TODO: Implement image resource handling for lopdf
         Ok(())
     }
 
-    /// Renders page content and BUFFERS it. This implementation is for the TwoPassStrategy.
-    /// Streaming strategies will bypass this and use the writer directly.
     fn render_page_content(
         &mut self,
         elements: Vec<PositionedElement>,
@@ -134,7 +125,6 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> 
         Ok(content_id)
     }
 
-    /// Creates a Page dictionary and BUFFERS it. This is for the TwoPassStrategy.
     fn write_page_object(
         &mut self,
         content_stream_ids: Vec<ObjectId>,
@@ -164,11 +154,10 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> 
     }
 
     fn finish(self: Box<Self>, page_ids: Vec<ObjectId>) -> Result<W, renderer::RenderError> {
-        let mut renderer = *self; // Move out of the box
+        let mut renderer = *self;
         if let Some(mut internal_writer) = renderer.writer.take() {
             internal_writer.set_page_ids(page_ids);
             internal_writer.set_outline_root_id(renderer.outline_root_id);
-            // This now finishes writing to the final destination writer and returns it.
             let writer = internal_writer.finish()?;
             Ok(writer)
         } else {

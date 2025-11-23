@@ -1,17 +1,19 @@
 use super::geom::{self, BoxConstraints};
 use super::node::{AnchorLocation, IndexEntry, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult};
-use super::nodes::block::BlockNode;
-use super::nodes::flex::FlexNode;
-use super::nodes::heading::HeadingNode;
-use super::nodes::image::ImageNode;
-use super::nodes::index_marker::IndexMarkerNode;
-use super::nodes::list::ListNode;
-use super::nodes::page_break::PageBreakNode;
-use super::nodes::paragraph::ParagraphNode;
-use super::nodes::table::TableNode;
+use super::nodes::block::{BlockBuilder, RootBuilder};
+use super::nodes::flex::FlexBuilder;
+use super::nodes::heading::HeadingBuilder;
+use super::nodes::image::ImageBuilder;
+use super::nodes::index_marker::IndexMarkerBuilder;
+use super::nodes::list::ListBuilder;
+use super::nodes::page_break::PageBreakBuilder;
+use super::nodes::paragraph::ParagraphBuilder;
+use super::nodes::table::TableBuilder;
 use super::style::{self, ComputedStyle};
 use super::{FontManager, IRNode, PipelineError, PositionedElement};
+use crate::core::layout::builder::NodeRegistry;
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
+use cosmic_text::{Buffer, Metrics};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -20,18 +22,32 @@ use std::sync::Arc;
 #[derive(Clone)]
 pub struct LayoutEngine {
     pub(crate) font_manager: Arc<FontManager>,
+    pub(crate) registry: Arc<NodeRegistry>,
 }
 
 impl LayoutEngine {
     /// Creates a new layout engine.
     pub fn new(font_manager: Arc<FontManager>) -> Self {
-        LayoutEngine { font_manager }
+        let mut registry = NodeRegistry::new();
+
+        registry.register("root", Box::new(RootBuilder));
+        registry.register("block", Box::new(BlockBuilder));
+        registry.register("list-item", Box::new(BlockBuilder)); // List items use block logic
+        registry.register("paragraph", Box::new(ParagraphBuilder));
+        registry.register("heading", Box::new(HeadingBuilder));
+        registry.register("image", Box::new(ImageBuilder));
+        registry.register("flex-container", Box::new(FlexBuilder));
+        registry.register("list", Box::new(ListBuilder));
+        registry.register("table", Box::new(TableBuilder));
+        registry.register("page-break", Box::new(PageBreakBuilder));
+        registry.register("index-marker", Box::new(IndexMarkerBuilder));
+
+        LayoutEngine {
+            font_manager,
+            registry: Arc::new(registry),
+        }
     }
 
-    /// The main entry point into the layout process.
-    /// This method implements a cooperative pagination algorithm that processes a
-    /// complete `IRNode` tree, breaking it into pages based on content flow and
-    /// explicit page breaks.
     pub fn paginate(
         &self,
         stylesheet: &Stylesheet,
@@ -44,7 +60,6 @@ impl LayoutEngine {
         ),
         PipelineError,
     > {
-        // --- Main Layout Pass ---
         let mut pages = Vec::new();
         let mut current_work: Option<Box<dyn LayoutNode>> = Some(self.build_layout_node_tree(
             &IRNode::Root(ir_nodes),
@@ -77,14 +92,11 @@ impl LayoutEngine {
                 height: content_height,
             };
 
-            // Setup LayoutEnvironment
             let env = LayoutEnvironment {
                 engine: self,
                 local_page_index: pages.len(),
             };
 
-            // Before layout, perform the measurement pass on the current work item.
-            // For pagination, we constrain the width strictly, but leave height loose.
             let constraints = BoxConstraints::tight_width(content_width);
             work_item.measure(&env, constraints);
 
@@ -95,21 +107,15 @@ impl LayoutEngine {
                 &mut index_entries,
             );
 
-            // Layout this page
             let result = work_item.layout(&env, &mut buf)?;
 
-            // A page should be added if it's the first one, or if it contains any content.
-            // This prevents creating empty pages in the middle of a document when an element
-            // that doesn't fit causes a page break without rendering anything.
-            if pages.is_empty() || !page_elements.is_empty() {
-                pages.push(page_elements);
-            }
+            // Always push the page, even if empty. This ensures that structural page breaks
+            // or empty containers that span pages are respected.
+            pages.push(page_elements);
 
-            // Prepare for next page
             match result {
-                LayoutResult::Full => { /* Done with all content, loop will terminate. */ }
+                LayoutResult::Full => {}
                 LayoutResult::Partial(mut remainder) => {
-                    // Check if the reason for the page break was an explicit <page-break> tag.
                     if let Some(new_master) = remainder.check_for_page_break() {
                         current_master_name = new_master.unwrap_or(current_master_name);
                     }
@@ -120,8 +126,6 @@ impl LayoutEngine {
         Ok((pages, defined_anchors, index_entries))
     }
 
-    /// Helper function to build a vector of `LayoutNode`s from `IRNode` children.
-    /// This centralizes the recursive calls to `build_layout_node_tree`.
     pub(crate) fn build_layout_node_children(
         &self,
         ir_children: &[IRNode],
@@ -133,36 +137,16 @@ impl LayoutEngine {
             .collect()
     }
 
-    /// Factory function to convert an `IRNode` into a `LayoutNode`.
-    /// This function is the single point of recursion for building the layout tree.
     pub(crate) fn build_layout_node_tree(
         &self,
         node: &IRNode,
         parent_style: Arc<ComputedStyle>,
     ) -> Box<dyn LayoutNode> {
-        match node {
-            IRNode::Root(children) => {
-                let style = self.get_default_style();
-                let children_nodes = self.build_layout_node_children(children, style.clone());
-                Box::new(BlockNode::new_from_children(None, children_nodes, style))
-            }
-            IRNode::Block { meta, children } | IRNode::ListItem { meta, children } => {
-                let style = self.compute_style(&meta.style_sets, meta.style_override.as_ref(), &parent_style);
-                let children_nodes = self.build_layout_node_children(children, style.clone());
-                Box::new(BlockNode::new_from_children(meta.id.clone(), children_nodes, style))
-            }
-            IRNode::List { .. } => Box::new(ListNode::new(node, self, parent_style)),
-            IRNode::FlexContainer { meta, children } => {
-                let style = self.compute_style(&meta.style_sets, meta.style_override.as_ref(), &parent_style);
-                let children_nodes = self.build_layout_node_children(children, style.clone());
-                Box::new(FlexNode::new_from_children(meta.id.clone(), children_nodes, style))
-            }
-            IRNode::Table { .. } => Box::new(TableNode::new(node, self, parent_style)),
-            IRNode::Paragraph { .. } => Box::new(ParagraphNode::new(node, self, parent_style)),
-            IRNode::Image { .. } => Box::new(ImageNode::new(node, self, parent_style)),
-            IRNode::Heading { .. } => Box::new(HeadingNode::new(node, self, parent_style)),
-            IRNode::IndexMarker { .. } => Box::new(IndexMarkerNode::new(node)),
-            IRNode::PageBreak { master_name } => Box::new(PageBreakNode::new(master_name.clone())),
+        let kind = node.kind();
+        if let Some(builder) = self.registry.get(kind) {
+            builder.build(node, self, parent_style)
+        } else {
+            panic!("No NodeBuilder registered for node type: {}", kind);
         }
     }
 
@@ -179,7 +163,25 @@ impl LayoutEngine {
         style::get_default_style()
     }
 
+    /// Measures text width using `cosmic-text`.
+    /// Used by Table/Flex logic for intrinsic sizing.
     pub fn measure_text_width(&self, text: &str, style: &Arc<ComputedStyle>) -> f32 {
-        self.font_manager.measure_text(text, style)
+        let mut system = self.font_manager.system.lock().unwrap();
+        let metrics = Metrics::new(style.font_size, style.line_height);
+        let mut buffer = Buffer::new(&mut system, metrics);
+
+        let attrs = self.font_manager.attrs_from_style(style);
+        // Pass &attrs as required by cosmic-text API
+        buffer.set_text(&mut system, text, &attrs, cosmic_text::Shaping::Advanced);
+
+        // No wrapping for width measurement implies infinite line length
+        buffer.set_size(&mut system, None, None);
+        buffer.shape_until_scroll(&mut system, false);
+
+        let mut max_w: f32 = 0.0;
+        for run in buffer.layout_runs() {
+            max_w = max_w.max(run.line_w);
+        }
+        max_w
     }
 }

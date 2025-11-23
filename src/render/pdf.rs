@@ -1,5 +1,4 @@
-// src/render/pdf.rs
-use super::{drawing, renderer}; // Import renderer for its RenderError type
+use super::{drawing, renderer};
 use crate::render::DocumentRenderer;
 use handlebars::Handlebars;
 use lopdf::ObjectId;
@@ -45,10 +44,15 @@ impl<W: io::Write + Send> PdfDocumentRenderer<W> {
         let mut fonts = HashMap::new();
         let mut default_font_id: Option<FontId> = None;
 
-        for face in layout_engine.font_manager.db().faces() {
+        // Lock system before accessing db
+        let system = layout_engine.font_manager.system.lock().unwrap();
+
+        for face in system.db().faces() {
             let face_post_script_name = face.post_script_name.clone();
             let face_index = face.index;
-            layout_engine.font_manager.db().with_face_data(face.id, |font_data, _| {
+            let id = face.id;
+
+            system.db().with_face_data(id, |font_data, _| {
                 let mut warnings = Vec::new();
                 match ParsedFont::from_bytes(font_data, face_index as usize, &mut warnings) {
                     Some(parsed_font) => {
@@ -69,6 +73,8 @@ impl<W: io::Write + Send> PdfDocumentRenderer<W> {
             renderer::RenderError::InternalPdfError("No fonts were loaded, cannot create PDF.".to_string())
         })?;
 
+        drop(system);
+
         Ok(PdfDocumentRenderer {
             document: doc,
             fonts,
@@ -81,7 +87,6 @@ impl<W: io::Write + Send> PdfDocumentRenderer<W> {
         })
     }
 
-    /// Decodes image data, adds it as an XObject to the PDF resources, and caches it.
     pub(crate) fn add_image_xobject(
         &mut self,
         src: &str,
@@ -98,7 +103,6 @@ impl<W: io::Write + Send> PdfDocumentRenderer<W> {
         Ok((xobj_id, dims))
     }
 
-    /// Gets the dimensions of the page in millimeters.
     pub(crate) fn get_page_dimensions_mm(page_layout: &PageLayout) -> (Mm, Mm) {
         let (w, h) = page_layout.size.dimensions_pt();
         (Pt(w).into(), Pt(h).into())
@@ -136,7 +140,6 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for PdfDocumentRender
         let ops = render_page_to_ops(ctx, elements)?;
         let content_id = self.buffered_page_ops.len();
         self.buffered_page_ops.push(ops);
-        // Return a dummy ObjectId for trait compatibility
         Ok((content_id as u32, 0))
     }
 
@@ -147,8 +150,6 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for PdfDocumentRender
         page_width_pt: f32,
         page_height_pt: f32,
     ) -> Result<ObjectId, renderer::RenderError> {
-        // `printpdf` doesn't work with pre-made content streams this way.
-        // We'll combine the buffered ops and add a page.
         let mut final_ops = Vec::new();
         for (content_id, _) in content_stream_ids {
             if let Some(ops) = self.buffered_page_ops.get(content_id as usize) {
@@ -171,12 +172,10 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for PdfDocumentRender
         self.document.pages.push(pdf_page);
         let page_id = self.document.pages.len();
 
-        // Return a dummy ObjectId for trait compatibility
         Ok((page_id as u32, 0))
     }
 
     fn set_outline_root(&mut self, _outline_root_id: ObjectId) {
-        // Not supported in this simplified implementation for printpdf
     }
 
     fn finish(self: Box<Self>, _page_ids: Vec<ObjectId>) -> Result<W, renderer::RenderError> {
@@ -202,7 +201,6 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for PdfDocumentRender
 }
 
 
-// ... existing helper structs and functions ...
 #[derive(Serialize)]
 struct FooterRenderContext<'a> {
     #[serde(flatten)]
@@ -273,10 +271,6 @@ pub(crate) fn render_footer_to_ops(
     layout_engine: &LayoutEngine, stylesheet: &Stylesheet, fonts: &HashMap<String, FontId>, default_font: &FontId,
     _context: &Value, page_layout: &PageLayout, page_num: usize, template_engine: &Handlebars,
 ) -> Result<Option<Vec<Op>>, renderer::RenderError> {
-    // TODO: This function is currently a no-op due to a refactoring of PageLayout.
-    // The footer is now a list of `TemplateNode`s and requires a more complex
-    // rendering process (parse -> layout -> render), similar to a document body.
-    // This needs to be re-implemented.
     let _ = (layout_engine, stylesheet, fonts, default_font, _context, page_layout, page_num, template_engine);
     Ok(None)
 }

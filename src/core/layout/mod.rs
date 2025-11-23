@@ -13,6 +13,7 @@ pub use self::engine::LayoutEngine;
 pub use self::node::{AnchorLocation, IndexEntry, LayoutBuffer, LayoutEnvironment};
 
 // Declare the modules that make up the layout engine.
+pub mod builder;
 mod elements;
 mod engine;
 pub mod fonts;

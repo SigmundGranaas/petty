@@ -96,11 +96,6 @@ pub(crate) fn spawn_workers(
 
 
 /// A true streaming consumer that guarantees in-order processing.
-///
-/// It receives laid-out sequences from workers and uses a re-ordering buffer
-/// to ensure that `sequence-N` is always processed and written to the stream
-/// before `sequence-N+1`. This maintains low memory by only buffering the
-/// out-of-order "gaps" in the sequence.
 pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
     rx2: async_channel::Receiver<(usize, Result<LaidOutSequence, PipelineError>)>,
     renderer: &mut LopdfRenderer<W>,
@@ -113,14 +108,17 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
     let mut all_page_ids = Vec::new();
     let mut pass1_result = Pass1Result::default();
     let mut global_page_offset = 0;
-    let font_map: HashMap<String, String> = renderer
-        .layout_engine
-        .font_manager
-        .db()
-        .faces()
-        .enumerate()
-        .map(|(i, face)| (face.post_script_name.clone(), format!("F{}", i + 1)))
-        .collect();
+
+    let font_map: HashMap<String, String>;
+    {
+        let system = renderer.layout_engine.font_manager.system.lock().unwrap();
+        font_map = system
+            .db()
+            .faces()
+            .enumerate()
+            .map(|(i, face)| (face.post_script_name.clone(), format!("F{}", i + 1)))
+            .collect();
+    }
 
     while let Ok((index, result)) = rx2.recv_blocking() {
         buffer.insert(index, result);

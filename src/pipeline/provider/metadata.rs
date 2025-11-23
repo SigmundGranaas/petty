@@ -260,7 +260,7 @@ mod tests {
         let template_str = serde_json::to_string(&template_json).unwrap();
         let parser = JsonParser;
         let features = parser.parse(&template_str, PathBuf::new()).unwrap();
-        let mut font_manager = FontManager::new();
+        let font_manager = FontManager::new();
         font_manager.load_fallback_font();
         let context = PipelineContext {
             compiled_template: features.main_template,

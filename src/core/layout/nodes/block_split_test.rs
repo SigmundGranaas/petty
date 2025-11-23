@@ -1,4 +1,3 @@
-#![cfg(test)]
 use crate::core::idf::{IRNode, NodeMetadata};
 use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
 use crate::core::style::dimension::{Dimension, Margins, PageSize};
@@ -256,16 +255,52 @@ fn test_flex_wrap_with_page_break() {
     // The item "4" text should appear on Page 1.
     assert!(find_first_text_box_with_content(page1, "4").is_some());
 
-    // Since content fit on Page 1, Page 2 might be empty or contain the empty remainder of the block?
-    // Actually, if content fits, BlockNode renders fully.
-    // But BlockNode measure/layout doesn't perfectly respect fixed height for drawing content?
-    // If it did split, remainder would be on Page 2.
-    // Let's check if there's anything on Page 2.
-    // If Page 2 exists, it means something spilled over.
-    // Block fixed height 40. Content 14.4.
-    // If Block respects fixed height, it consumes 40px.
-    // 20px on Page 1. 20px on Page 2.
-    // So Page 2 should exist.
-
     // Just verifying we have 2 pages is good enough to show break happened.
+}
+
+#[test]
+fn test_block_split_resets_padding_and_border() {
+    let stylesheet = Stylesheet {
+        page_masters: HashMap::from([(
+            "master".to_string(),
+            PageLayout {
+                size: PageSize::Custom { width: 500.0, height: 100.0 }, // 100 height
+                margins: Some(Margins::all(10.0)), // Content height 80
+                ..Default::default()
+            },
+        )]),
+        default_page_master_name: Some("master".to_string()),
+        ..Default::default()
+    };
+
+    let block_style = ElementStyle {
+        padding: Some(Margins { top: 20.0, ..Default::default() }),
+        border_top: Some(crate::core::style::border::Border {
+            width: 10.0,
+            style: crate::core::style::border::BorderStyle::Solid,
+            color: Default::default(),
+        }),
+        ..Default::default()
+    };
+
+    let nodes = vec![IRNode::Block {
+        meta: NodeMetadata {
+            style_override: Some(block_style),
+            ..Default::default()
+        },
+        children: vec![
+            create_paragraph("Child 1"), // ~14.4px
+            create_paragraph("Child 2\nLine 2\nLine 3\nLine 4"), // Taller to force push/split
+        ],
+    }];
+
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
+    assert_eq!(pages.len(), 2);
+
+    let page2 = &pages[1];
+    let text_on_p2 = find_first_text_box_with_content(page2, "Line").unwrap();
+
+    // If bug exists, y will be > 10.0 (e.g. 10 + 10 + 20 = 40).
+    // If fixed, y should be 10.0 (plus maybe small margin if paragraph has one, default is 0).
+    assert!((text_on_p2.y - 10.0).abs() < 1.0, "Content on page 2 should start at top margin, got {}", text_on_p2.y);
 }

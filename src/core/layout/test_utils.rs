@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 /// Creates a default layout engine for testing purposes.
 pub fn create_test_engine() -> LayoutEngine {
-    let mut font_manager = FontManager::new();
+    let font_manager = FontManager::new();
     font_manager.load_fallback_font();
     LayoutEngine::new(Arc::new(font_manager))
 }

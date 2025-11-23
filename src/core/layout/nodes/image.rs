@@ -1,11 +1,29 @@
+use crate::core::idf::IRNode;
+use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::geom::{BoxConstraints, Size};
-use crate::core::layout::node::{AnchorLocation, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult};
+use crate::core::layout::node::{
+    AnchorLocation, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult,
+};
 use crate::core::layout::style::ComputedStyle;
-use crate::core::layout::{ImageElement, LayoutElement, LayoutEngine, LayoutError, PositionedElement};
+use crate::core::layout::{
+    ImageElement, LayoutElement, LayoutEngine, LayoutError, PositionedElement,
+};
 use crate::core::style::dimension::Dimension;
 use std::any::Any;
 use std::sync::Arc;
-use crate::core::idf::IRNode;
+
+pub struct ImageBuilder;
+
+impl NodeBuilder for ImageBuilder {
+    fn build(
+        &self,
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+    ) -> Box<dyn LayoutNode> {
+        Box::new(ImageNode::new(node, engine, parent_style))
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ImageNode {
@@ -22,7 +40,8 @@ impl ImageNode {
             IRNode::Image { meta, src } => (meta, src.clone()),
             _ => panic!("ImageNode must be created from IRNode::Image"),
         };
-        let style = engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), &parent_style);
+        let style =
+            engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), &parent_style);
 
         Self {
             id: meta.id.clone(),
@@ -42,8 +61,20 @@ impl ImageNode {
 
         self.width = match &self.style.width {
             Some(Dimension::Pt(w)) => *w,
-            Some(Dimension::Percent(p)) => if available_width.is_finite() { available_width * (p / 100.0) } else { 0.0 },
-            _ => if available_width.is_finite() { available_width } else { 100.0 }, // Fallback size for infinite
+            Some(Dimension::Percent(p)) => {
+                if available_width.is_finite() {
+                    available_width * (p / 100.0)
+                } else {
+                    0.0
+                }
+            }
+            _ => {
+                if available_width.is_finite() {
+                    available_width
+                } else {
+                    100.0
+                }
+            } // Fallback size for infinite
         };
         self.height = match &self.style.height {
             Some(Dimension::Pt(h)) => *h,
@@ -71,7 +102,11 @@ impl LayoutNode for ImageNode {
         Size::new(content_size.width, total_height)
     }
 
-    fn layout(&mut self, env: &LayoutEnvironment, buf: &mut LayoutBuffer) -> Result<LayoutResult, LayoutError> {
+    fn layout(
+        &mut self,
+        env: &LayoutEnvironment,
+        buf: &mut LayoutBuffer,
+    ) -> Result<LayoutResult, LayoutError> {
         if let Some(id) = &self.id {
             let location = AnchorLocation {
                 local_page_index: env.local_page_index,
