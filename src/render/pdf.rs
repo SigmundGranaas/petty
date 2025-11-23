@@ -250,8 +250,8 @@ pub(crate) struct RenderContext<'a> {
 }
 
 pub(crate) fn get_styled_font_name(style: &Arc<ComputedStyle>) -> String {
-    let family = &style.font_family;
-    match style.font_weight {
+    let family = &style.text.font_family;
+    match style.text.font_weight {
         FontWeight::Bold | FontWeight::Black => format!("{}-Bold", family),
         _ => family.to_string(),
     }

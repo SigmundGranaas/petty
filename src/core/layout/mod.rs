@@ -4,13 +4,17 @@ use thiserror::Error;
 pub enum LayoutError {
     #[error("Node has a height of {0:.2} which exceeds the total page content height of {1:.2}.")]
     ElementTooLarge(f32, f32),
+    #[error("Builder mismatch: Expected {0} node, got {1}.")]
+    BuilderMismatch(&'static str, &'static str),
+    #[error("Generic layout error: {0}")]
+    Generic(String),
 }
 
 /// The tree-based, multi-pass layout engine.
 
 // Re-export the main entry point and key types for external use.
 pub use self::engine::LayoutEngine;
-pub use self::node::{AnchorLocation, IndexEntry, LayoutBuffer, LayoutEnvironment};
+pub use self::node::{AnchorLocation, IndexEntry, LayoutContext, LayoutEnvironment};
 
 // Declare the modules that make up the layout engine.
 pub mod builder;
@@ -22,6 +26,7 @@ pub mod node;
 pub mod nodes;
 pub mod style;
 pub mod text;
+pub mod util;
 
 // Publicly expose types that are needed for the layout process but defined elsewhere.
 pub use crate::error::PipelineError;

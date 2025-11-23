@@ -241,12 +241,12 @@ impl<'a> PageContext<'a> {
         let style = &el.style;
         let x = el.x;
         let y = self.page_height - (el.y + el.height);
-        if let Some(bg) = &style.background_color {
+        if let Some(bg) = &style.misc.background_color {
             self.content.operations.push(Operation::new("rg", vec![(bg.r as f32 / 255.0).into(), (bg.g as f32 / 255.0).into(), (bg.b as f32 / 255.0).into()]));
             self.content.operations.push(Operation::new("re", vec![x.into(), y.into(), el.width.into(), el.height.into()]));
             self.content.operations.push(Operation::new("f", vec![]));
         }
-        if let Some(border) = &style.border_bottom {
+        if let Some(border) = &style.border.bottom {
             self.content.operations.push(Operation::new("w", vec![border.width.into()]));
             self.content.operations.push(Operation::new("RG", vec![(border.color.r as f32 / 255.0).into(), (border.color.g as f32 / 255.0).into(), (border.color.b as f32 / 255.0).into()]));
             if border.style == crate::core::style::border::BorderStyle::Dotted { self.content.operations.push(Operation::new("d", vec![vec![Object::Integer(1), Object::Integer(2)].into(), 0.into()])); }
@@ -259,8 +259,8 @@ impl<'a> PageContext<'a> {
         Ok(())
     }
     fn get_styled_font_name(style: &Arc<ComputedStyle>) -> String {
-        let family = &style.font_family;
-        match style.font_weight {
+        let family = &style.text.font_family;
+        match style.text.font_weight {
             FontWeight::Bold | FontWeight::Black => format!("{}-Bold", family),
             _ => family.to_string(),
         }
@@ -269,13 +269,13 @@ impl<'a> PageContext<'a> {
         let styled_font_name = Self::get_styled_font_name(style);
         let internal_font_name = self.font_map
             .get(&styled_font_name)
-            .or_else(|| self.font_map.get(style.font_family.as_str()))
+            .or_else(|| self.font_map.get(style.text.font_family.as_str()))
             .unwrap_or(&DEFAULT_LOPDF_FONT_NAME);
 
-        if self.state.font_name != *internal_font_name || self.state.font_size != style.font_size {
-            self.content.operations.push(Operation::new("Tf", vec![Object::Name(internal_font_name.as_bytes().to_vec()), style.font_size.into()]));
+        if self.state.font_name != *internal_font_name || self.state.font_size != style.text.font_size {
+            self.content.operations.push(Operation::new("Tf", vec![Object::Name(internal_font_name.as_bytes().to_vec()), style.text.font_size.into()]));
             self.state.font_name = internal_font_name.to_string();
-            self.state.font_size = style.font_size;
+            self.state.font_size = style.text.font_size;
         }
     }
     fn set_fill_color(&mut self, color: &Color) {
@@ -288,11 +288,11 @@ impl<'a> PageContext<'a> {
         if text.content.trim().is_empty() { return Ok(()); }
         self.content.operations.push(Operation::new("BT", vec![]));
         self.set_font(&el.style);
-        self.set_fill_color(&el.style.color);
+        self.set_fill_color(&el.style.text.color);
 
         let style = &el.style;
         let line_height = el.height;
-        let font_size = style.font_size;
+        let font_size = style.text.font_size;
         let leading = line_height - font_size;
         let ascent_approx = font_size * 0.8;
         let baseline_y = el.y + (leading / 2.0) + ascent_approx;

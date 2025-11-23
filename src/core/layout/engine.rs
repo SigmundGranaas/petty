@@ -1,5 +1,5 @@
 use super::geom::{self, BoxConstraints};
-use super::node::{AnchorLocation, IndexEntry, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult};
+use super::node::{AnchorLocation, IndexEntry, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, RenderNode};
 use super::nodes::block::{BlockBuilder, RootBuilder};
 use super::nodes::flex::FlexBuilder;
 use super::nodes::heading::HeadingBuilder;
@@ -12,13 +12,13 @@ use super::nodes::table::TableBuilder;
 use super::style::{self, ComputedStyle};
 use super::{FontManager, IRNode, PipelineError, PositionedElement};
 use crate::core::layout::builder::NodeRegistry;
+use crate::core::layout::LayoutError;
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
 use cosmic_text::{Buffer, Metrics};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// The main layout engine. It is responsible for orchestrating the multi-pass
-/// layout algorithm on a single `IRNode` tree.
+/// The main layout engine.
 #[derive(Clone)]
 pub struct LayoutEngine {
     pub(crate) font_manager: Arc<FontManager>,
@@ -32,7 +32,7 @@ impl LayoutEngine {
 
         registry.register("root", Box::new(RootBuilder));
         registry.register("block", Box::new(BlockBuilder));
-        registry.register("list-item", Box::new(BlockBuilder)); // List items use block logic
+        registry.register("list-item", Box::new(BlockBuilder));
         registry.register("paragraph", Box::new(ParagraphBuilder));
         registry.register("heading", Box::new(HeadingBuilder));
         registry.register("image", Box::new(ImageBuilder));
@@ -61,10 +61,11 @@ impl LayoutEngine {
         PipelineError,
     > {
         let mut pages = Vec::new();
-        let mut current_work: Option<Box<dyn LayoutNode>> = Some(self.build_layout_node_tree(
+        // Handle result from build
+        let mut current_work: Option<RenderNode> = Some(self.build_layout_node_tree(
             &IRNode::Root(ir_nodes),
             self.get_default_style(),
-        ));
+        )?);
 
         let mut current_master_name = stylesheet
             .default_page_master_name
@@ -100,17 +101,16 @@ impl LayoutEngine {
             let constraints = BoxConstraints::tight_width(content_width);
             work_item.measure(&env, constraints);
 
-            let mut buf = LayoutBuffer::new(
+            let mut ctx = LayoutContext::new(
+                env,
                 bounds,
                 &mut page_elements,
                 &mut defined_anchors,
                 &mut index_entries,
             );
 
-            let result = work_item.layout(&env, &mut buf)?;
+            let result = work_item.layout(&mut ctx).map_err(|e| PipelineError::Layout(e.to_string()))?;
 
-            // Always push the page, even if empty. This ensures that structural page breaks
-            // or empty containers that span pages are respected.
             pages.push(page_elements);
 
             match result {
@@ -130,7 +130,7 @@ impl LayoutEngine {
         &self,
         ir_children: &[IRNode],
         parent_style: Arc<ComputedStyle>,
-    ) -> Vec<Box<dyn LayoutNode>> {
+    ) -> Result<Vec<RenderNode>, LayoutError> {
         ir_children
             .iter()
             .map(|child_ir| self.build_layout_node_tree(child_ir, parent_style.clone()))
@@ -141,12 +141,12 @@ impl LayoutEngine {
         &self,
         node: &IRNode,
         parent_style: Arc<ComputedStyle>,
-    ) -> Box<dyn LayoutNode> {
+    ) -> Result<RenderNode, LayoutError> {
         let kind = node.kind();
         if let Some(builder) = self.registry.get(kind) {
             builder.build(node, self, parent_style)
         } else {
-            panic!("No NodeBuilder registered for node type: {}", kind);
+            Err(LayoutError::Generic(format!("No NodeBuilder registered for node type: {}", kind)))
         }
     }
 
@@ -163,18 +163,14 @@ impl LayoutEngine {
         style::get_default_style()
     }
 
-    /// Measures text width using `cosmic-text`.
-    /// Used by Table/Flex logic for intrinsic sizing.
     pub fn measure_text_width(&self, text: &str, style: &Arc<ComputedStyle>) -> f32 {
         let mut system = self.font_manager.system.lock().unwrap();
-        let metrics = Metrics::new(style.font_size, style.line_height);
+        let metrics = Metrics::new(style.text.font_size, style.text.line_height);
         let mut buffer = Buffer::new(&mut system, metrics);
 
         let attrs = self.font_manager.attrs_from_style(style);
-        // Pass &attrs as required by cosmic-text API
         buffer.set_text(&mut system, text, &attrs, cosmic_text::Shaping::Advanced);
 
-        // No wrapping for width measurement implies infinite line length
         buffer.set_size(&mut system, None, None);
         buffer.shape_until_scroll(&mut system, false);
 

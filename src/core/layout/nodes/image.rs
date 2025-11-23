@@ -2,14 +2,13 @@ use crate::core::idf::IRNode;
 use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
-    AnchorLocation, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult,
+    AnchorLocation, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, RenderNode,
 };
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{
     ImageElement, LayoutElement, LayoutEngine, LayoutError, PositionedElement,
 };
 use crate::core::style::dimension::Dimension;
-use std::any::Any;
 use std::sync::Arc;
 
 pub struct ImageBuilder;
@@ -20,8 +19,8 @@ impl NodeBuilder for ImageBuilder {
         node: &IRNode,
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
-    ) -> Box<dyn LayoutNode> {
-        Box::new(ImageNode::new(node, engine, parent_style))
+    ) -> Result<RenderNode, LayoutError> {
+        Ok(RenderNode::Image(ImageNode::new(node, engine, parent_style)?))
     }
 }
 
@@ -35,21 +34,21 @@ pub struct ImageNode {
 }
 
 impl ImageNode {
-    pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Self {
+    pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Result<Self, LayoutError> {
         let (meta, src) = match node {
             IRNode::Image { meta, src } => (meta, src.clone()),
-            _ => panic!("ImageNode must be created from IRNode::Image"),
+            _ => return Err(LayoutError::BuilderMismatch("Image", node.kind())),
         };
         let style =
             engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), &parent_style);
 
-        Self {
+        Ok(Self {
             id: meta.id.clone(),
             src,
             style,
-            width: 0.0, // Resolved in measure pass
+            width: 0.0,
             height: 0.0,
-        }
+        })
     }
 
     fn resolve_sizes(&mut self, constraints: BoxConstraints) -> Size {
@@ -59,7 +58,7 @@ impl ImageNode {
             f32::INFINITY
         };
 
-        self.width = match &self.style.width {
+        self.width = match &self.style.box_model.width {
             Some(Dimension::Pt(w)) => *w,
             Some(Dimension::Percent(p)) => {
                 if available_width.is_finite() {
@@ -74,13 +73,11 @@ impl ImageNode {
                 } else {
                     100.0
                 }
-            } // Fallback size for infinite
+            }
         };
-        self.height = match &self.style.height {
+        self.height = match &self.style.box_model.height {
             Some(Dimension::Pt(h)) => *h,
-            // A percentage height for a block image usually resolves against the container height,
-            // which we don't know here. We'll treat it as auto.
-            Some(Dimension::Percent(_)) | _ => self.width, // Assume square aspect ratio for auto
+            Some(Dimension::Percent(_)) | _ => self.width,
         };
 
         Size::new(self.width, self.height)
@@ -92,43 +89,44 @@ impl LayoutNode for ImageNode {
         &self.style
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn measure(&mut self, _env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
         let content_size = self.resolve_sizes(constraints);
-        let total_height = self.style.margin.top + content_size.height + self.style.margin.bottom;
+        let total_height = self.style.box_model.margin.top + content_size.height + self.style.box_model.margin.bottom;
         Size::new(content_size.width, total_height)
     }
 
     fn layout(
         &mut self,
-        env: &LayoutEnvironment,
-        buf: &mut LayoutBuffer,
+        ctx: &mut LayoutContext,
     ) -> Result<LayoutResult, LayoutError> {
         if let Some(id) = &self.id {
             let location = AnchorLocation {
-                local_page_index: env.local_page_index,
-                y_pos: buf.cursor.1 + buf.bounds.y,
+                local_page_index: ctx.local_page_index,
+                y_pos: ctx.cursor.1 + ctx.bounds.y,
             };
-            buf.defined_anchors.insert(id.clone(), location);
+            ctx.defined_anchors.insert(id.clone(), location);
         }
 
-        let total_height = self.style.margin.top + self.height + self.style.margin.bottom;
+        let total_height = self.style.box_model.margin.top + self.height + self.style.box_model.margin.bottom;
 
-        if total_height > buf.bounds.height {
-            return Err(LayoutError::ElementTooLarge(total_height, buf.bounds.height));
+        if total_height > ctx.bounds.height {
+            log::warn!(
+                "Image node {:?} (height {:.2}) exceeds total page content height {:.2}. Skipping.",
+                self.id,
+                total_height,
+                ctx.bounds.height
+            );
+            return Ok(LayoutResult::Full);
         }
 
-        if total_height > buf.available_height() && (!buf.is_empty() || buf.cursor.1 > 0.0) {
-            return Ok(LayoutResult::Partial(Box::new(self.clone())));
+        if total_height > ctx.available_height() && (!ctx.is_empty() || ctx.cursor.1 > 0.0) {
+            return Ok(LayoutResult::Partial(RenderNode::Image(self.clone())));
         }
 
-        buf.advance_cursor(self.style.margin.top);
+        ctx.advance_cursor(self.style.box_model.margin.top);
 
         let element = PositionedElement {
-            x: self.style.margin.left,
+            x: self.style.box_model.margin.left,
             y: 0.0,
             width: self.width,
             height: self.height,
@@ -137,10 +135,10 @@ impl LayoutNode for ImageNode {
             }),
             style: self.style.clone(),
         };
-        buf.push_element(element);
+        ctx.push_element(element);
 
-        buf.advance_cursor(self.height);
-        buf.advance_cursor(self.style.margin.bottom);
+        ctx.advance_cursor(self.height);
+        ctx.advance_cursor(self.style.box_model.margin.bottom);
 
         Ok(LayoutResult::Full)
     }

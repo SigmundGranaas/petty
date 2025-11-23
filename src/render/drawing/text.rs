@@ -23,23 +23,23 @@ pub(super) fn draw_text<W: io::Write + Send>(
     let font_id = match page.doc_renderer.fonts.get(&styled_font_name) {
         Some(font) => font,
         None => {
-            if styled_font_name != style.font_family.as_str() {
+            if styled_font_name != style.text.font_family.as_str() {
                 log::warn!(
                     "Font style '{}' not found for rendering, falling back to base font '{}'.",
-                    styled_font_name, style.font_family
+                    styled_font_name, style.text.font_family
                 );
             }
             page.doc_renderer
                 .fonts
-                .get(style.font_family.as_str())
+                .get(style.text.font_family.as_str())
                 .unwrap_or(&page.doc_renderer.default_font)
         }
     };
 
     let fill_color = printpdf::color::Color::Rgb(Rgb::new(
-        style.color.r as f32 / 255.0,
-        style.color.g as f32 / 255.0,
-        style.color.b as f32 / 255.0,
+        style.text.color.r as f32 / 255.0,
+        style.text.color.g as f32 / 255.0,
+        style.text.color.b as f32 / 255.0,
         None,
     ));
 
@@ -52,18 +52,18 @@ pub(super) fn draw_text<W: io::Write + Send>(
         page.state.current_fill_color = Some(fill_color);
     }
     if page.state.current_font_id.as_ref() != Some(font_id)
-        || page.state.current_font_size != Some(style.font_size)
+        || page.state.current_font_size != Some(style.text.font_size)
     {
         page.ops.push(Op::SetFontSize {
-            size: Pt(style.font_size),
+            size: Pt(style.text.font_size),
             font: font_id.clone(),
         });
         page.state.current_font_id = Some(font_id.clone());
-        page.state.current_font_size = Some(style.font_size);
+        page.state.current_font_size = Some(style.text.font_size);
     }
 
     let line_height = positioned.height;
-    let font_size = style.font_size;
+    let font_size = style.text.font_size;
     // Heuristic to vertically center the font's em-box within the line-box and find the baseline.
     // This better respects the `line-height` property from the stylesheet.
     let leading = line_height - font_size;
@@ -99,20 +99,20 @@ pub(super) fn draw_text_stateless(
     let font_id = match ctx.fonts.get(&styled_font_name) {
         Some(font) => font,
         None => {
-            if styled_font_name != style.font_family.as_str() {
+            if styled_font_name != style.text.font_family.as_str() {
                 log::warn!(
                     "Font style '{}' not found for rendering, falling back to base font '{}'.",
-                    styled_font_name, style.font_family
+                    styled_font_name, style.text.font_family
                 );
             }
-            ctx.fonts.get(style.font_family.as_str()).unwrap_or(ctx.default_font)
+            ctx.fonts.get(style.text.font_family.as_str()).unwrap_or(ctx.default_font)
         }
     };
 
     let fill_color = printpdf::color::Color::Rgb(Rgb::new(
-        style.color.r as f32 / 255.0,
-        style.color.g as f32 / 255.0,
-        style.color.b as f32 / 255.0,
+        style.text.color.r as f32 / 255.0,
+        style.text.color.g as f32 / 255.0,
+        style.text.color.b as f32 / 255.0,
         None,
     ));
 
@@ -125,18 +125,18 @@ pub(super) fn draw_text_stateless(
         state.current_fill_color = Some(fill_color);
     }
     if state.current_font_id.as_ref() != Some(font_id)
-        || state.current_font_size != Some(style.font_size)
+        || state.current_font_size != Some(style.text.font_size)
     {
         ops.push(Op::SetFontSize {
-            size: Pt(style.font_size),
+            size: Pt(style.text.font_size),
             font: font_id.clone(),
         });
         state.current_font_id = Some(font_id.clone());
-        state.current_font_size = Some(style.font_size);
+        state.current_font_size = Some(style.text.font_size);
     }
 
     let line_height = positioned.height;
-    let font_size = style.font_size;
+    let font_size = style.text.font_size;
     let leading = line_height - font_size;
     let ascent_approx = font_size * 0.8;
     let baseline_y = positioned.y + (leading / 2.0) + ascent_approx;

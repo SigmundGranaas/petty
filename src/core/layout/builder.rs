@@ -3,19 +3,20 @@
 
 use crate::core::idf::IRNode;
 use crate::core::layout::engine::LayoutEngine;
-use crate::core::layout::node::LayoutNode;
+use crate::core::layout::node::RenderNode;
 use crate::core::layout::style::ComputedStyle;
+use crate::core::layout::LayoutError;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// A trait for types that can build a `LayoutNode` from an `IRNode`.
+/// A trait for types that can build a `RenderNode` from an `IRNode`.
 pub trait NodeBuilder: Send + Sync {
     fn build(
         &self,
         node: &IRNode,
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
-    ) -> Box<dyn LayoutNode>;
+    ) -> Result<RenderNode, LayoutError>;
 }
 
 /// A registry for mapping `IRNode` types (via `kind()`) to `NodeBuilder`s.

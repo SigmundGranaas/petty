@@ -1,9 +1,23 @@
 use crate::core::layout::geom::{BoxConstraints, Size};
+use crate::core::layout::{geom, ComputedStyle, LayoutEngine, LayoutError, PositionedElement};
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
-use crate::core::layout::{geom, ComputedStyle, LayoutEngine, LayoutError, PositionedElement};
+
+// Import all specific node types to form the RenderNode enum
+use crate::core::layout::nodes::{
+    block::BlockNode,
+    flex::FlexNode,
+    heading::HeadingNode,
+    image::ImageNode,
+    index_marker::IndexMarkerNode,
+    list::ListNode,
+    list_item::ListItemNode,
+    page_break::PageBreakNode,
+    paragraph::ParagraphNode,
+    table::TableNode,
+};
 
 /// Stores the resolved location of an anchor target.
 #[derive(Debug, Clone)]
@@ -30,9 +44,13 @@ pub struct LayoutEnvironment<'a> {
     pub local_page_index: usize,
 }
 
-/// The mutable state (writing the output).
-pub struct LayoutBuffer<'a> {
+/// A unified context for the layout pass, handling cursor state, bounds, and output buffers.
+pub struct LayoutContext<'a> {
+    pub engine: &'a LayoutEngine,
+    pub local_page_index: usize,
+    /// The bounding box for the current element's content.
     pub bounds: geom::Rect,
+    /// The current write cursor position relative to `bounds`.
     pub cursor: (f32, f32),
     pub elements: &'a mut Vec<PositionedElement>,
     pub last_v_margin: f32,
@@ -40,14 +58,17 @@ pub struct LayoutBuffer<'a> {
     pub index_entries: &'a mut HashMap<String, Vec<IndexEntry>>,
 }
 
-impl<'a> LayoutBuffer<'a> {
+impl<'a> LayoutContext<'a> {
     pub fn new(
+        env: LayoutEnvironment<'a>,
         bounds: geom::Rect,
         elements: &'a mut Vec<PositionedElement>,
         defined_anchors: &'a mut HashMap<String, AnchorLocation>,
         index_entries: &'a mut HashMap<String, Vec<IndexEntry>>,
     ) -> Self {
         Self {
+            engine: env.engine,
+            local_page_index: env.local_page_index,
             bounds,
             cursor: (0.0, 0.0),
             elements,
@@ -65,11 +86,10 @@ impl<'a> LayoutBuffer<'a> {
         (self.bounds.height - self.cursor.1).max(0.0)
     }
 
-    pub fn push_element(&mut self, element: PositionedElement) {
-        let mut final_element = element;
-        final_element.x += self.bounds.x + self.cursor.0;
-        final_element.y += self.bounds.y + self.cursor.1;
-        self.elements.push(final_element);
+    pub fn push_element(&mut self, mut element: PositionedElement) {
+        element.x += self.bounds.x + self.cursor.0;
+        element.y += self.bounds.y + self.cursor.1;
+        self.elements.push(element);
     }
 
     pub fn push_element_at(&mut self, mut element: PositionedElement, x: f32, y: f32) {
@@ -81,6 +101,27 @@ impl<'a> LayoutBuffer<'a> {
     pub fn is_empty(&self) -> bool {
         self.elements.is_empty()
     }
+
+    /// Creates a child context for laying out nested content.
+    /// This borrows mutable state from the parent context.
+    pub fn with_child_bounds<R>(
+        &mut self,
+        child_bounds: geom::Rect,
+        f: impl FnOnce(&mut LayoutContext) -> R,
+    ) -> R {
+        let mut child_ctx = LayoutContext {
+            engine: self.engine,
+            local_page_index: self.local_page_index,
+            bounds: child_bounds,
+            cursor: (0.0, 0.0),
+            elements: self.elements,
+            last_v_margin: 0.0, // Child block contexts start fresh
+            defined_anchors: self.defined_anchors,
+            index_entries: self.index_entries,
+        };
+
+        f(&mut child_ctx)
+    }
 }
 
 /// The result of a layout operation, enabling cooperative page breaking.
@@ -90,67 +131,104 @@ pub enum LayoutResult {
     Full,
     /// The node was partially laid out. The returned value is the
     /// remainder of the node that needs to be placed on the next page.
-    Partial(Box<dyn LayoutNode>),
+    Partial(RenderNode),
 }
 
-/// A helper trait for cloning trait objects.
-pub trait CloneLayoutNode {
-    fn clone_box(&self) -> Box<dyn LayoutNode>;
+/// The main enum that wraps all concrete layout nodes.
+/// This replaces `Box<dyn LayoutNode>` to use static dispatch.
+#[derive(Debug, Clone)]
+pub enum RenderNode {
+    Block(BlockNode),
+    Flex(FlexNode),
+    Heading(HeadingNode),
+    Image(ImageNode),
+    IndexMarker(IndexMarkerNode),
+    List(ListNode),
+    ListItem(ListItemNode),
+    PageBreak(PageBreakNode),
+    Paragraph(ParagraphNode),
+    Table(TableNode),
 }
 
-impl<T> CloneLayoutNode for T
-where
-    T: 'static + LayoutNode + Clone,
-{
-    fn clone_box(&self) -> Box<dyn LayoutNode> {
-        Box::new(self.clone())
+impl RenderNode {
+    // Helper to delegate `is` checks without casting
+    pub fn is_page_break(&self) -> bool {
+        matches!(self, RenderNode::PageBreak(_))
     }
-}
 
-impl Clone for Box<dyn LayoutNode> {
-    fn clone(&self) -> Box<dyn LayoutNode> {
-        self.clone_box()
+    // Helper to extract specific types if needed
+    pub fn as_page_break(&self) -> Option<&PageBreakNode> {
+        if let RenderNode::PageBreak(n) = self { Some(n) } else { None }
     }
 }
 
 /// The central trait that governs all layout.
-pub trait LayoutNode: Debug + Send + Sync + CloneLayoutNode {
+pub trait LayoutNode: Debug + Send + Sync + Any {
     /// Performs a measurement pass based on the given constraints.
-    ///
-    /// This method serves two purposes:
-    /// 1. Determine the size of the node given the constraints.
-    /// 2. Perform any expensive pre-calculations (like line breaking or table column sizing)
-    ///    and store them in the node state for the subsequent `layout` pass.
-    ///
-    /// If `constraints` are unbounded (e.g. max_width is INFINITY), this method should return
-    /// the node's "intrinsic" size.
     fn measure(&mut self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Size;
 
-    /// Performs the actual layout, writing elements to the buffer.
-    /// This must be called after `measure`.
-    fn layout(&mut self, env: &LayoutEnvironment, buf: &mut LayoutBuffer) -> Result<LayoutResult, LayoutError>;
+    /// Performs the actual layout, writing elements to the context.
+    fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError>;
 
     fn style(&self) -> &Arc<ComputedStyle>;
 
     fn check_for_page_break(&mut self) -> Option<Option<String>> {
         None
     }
-
-    fn as_any(&self) -> &dyn Any;
 }
 
-impl dyn LayoutNode {
-    pub fn is<T: Any>(&self) -> bool {
-        self.as_any().is::<T>()
+// Implement LayoutNode for RenderNode via enum dispatch
+impl LayoutNode for RenderNode {
+    fn measure(&mut self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
+        match self {
+            RenderNode::Block(n) => n.measure(env, constraints),
+            RenderNode::Flex(n) => n.measure(env, constraints),
+            RenderNode::Heading(n) => n.measure(env, constraints),
+            RenderNode::Image(n) => n.measure(env, constraints),
+            RenderNode::IndexMarker(n) => n.measure(env, constraints),
+            RenderNode::List(n) => n.measure(env, constraints),
+            RenderNode::ListItem(n) => n.measure(env, constraints),
+            RenderNode::PageBreak(n) => n.measure(env, constraints),
+            RenderNode::Paragraph(n) => n.measure(env, constraints),
+            RenderNode::Table(n) => n.measure(env, constraints),
+        }
     }
-    pub fn downcast<T: Any>(self: Box<Self>) -> Result<Box<T>, Box<dyn LayoutNode>> {
-        if self.is::<T>() {
-            unsafe {
-                let raw: *mut dyn LayoutNode = Box::into_raw(self);
-                Ok(Box::from_raw(raw as *mut T))
-            }
-        } else {
-            Err(self)
+
+    fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
+        match self {
+            RenderNode::Block(n) => n.layout(ctx),
+            RenderNode::Flex(n) => n.layout(ctx),
+            RenderNode::Heading(n) => n.layout(ctx),
+            RenderNode::Image(n) => n.layout(ctx),
+            RenderNode::IndexMarker(n) => n.layout(ctx),
+            RenderNode::List(n) => n.layout(ctx),
+            RenderNode::ListItem(n) => n.layout(ctx),
+            RenderNode::PageBreak(n) => n.layout(ctx),
+            RenderNode::Paragraph(n) => n.layout(ctx),
+            RenderNode::Table(n) => n.layout(ctx),
+        }
+    }
+
+    fn style(&self) -> &Arc<ComputedStyle> {
+        match self {
+            RenderNode::Block(n) => n.style(),
+            RenderNode::Flex(n) => n.style(),
+            RenderNode::Heading(n) => n.style(),
+            RenderNode::Image(n) => n.style(),
+            RenderNode::IndexMarker(n) => n.style(),
+            RenderNode::List(n) => n.style(),
+            RenderNode::ListItem(n) => n.style(),
+            RenderNode::PageBreak(n) => n.style(),
+            RenderNode::Paragraph(n) => n.style(),
+            RenderNode::Table(n) => n.style(),
+        }
+    }
+
+    fn check_for_page_break(&mut self) -> Option<Option<String>> {
+        match self {
+            RenderNode::Block(n) => n.check_for_page_break(),
+            RenderNode::List(n) => n.check_for_page_break(),
+            _ => None,
         }
     }
 }

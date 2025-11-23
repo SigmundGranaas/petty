@@ -1,4 +1,3 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/style_test.rs
 #![cfg(test)]
 
 use crate::core::layout::style::{compute_style, get_default_style};
@@ -12,38 +11,38 @@ use std::sync::Arc;
 #[test]
 fn test_style_inheritance() {
     let mut parent_style = (*get_default_style()).clone();
-    parent_style.font_family = Arc::new("Times New Roman".to_string());
-    parent_style.font_size = 20.0;
-    parent_style.line_height = 24.0;
-    parent_style.color = Color { r: 10, g: 20, b: 30, a: 1.0 };
-    parent_style.text_align = TextAlign::Center;
+    parent_style.text.font_family = Arc::new("Times New Roman".to_string());
+    parent_style.text.font_size = 20.0;
+    parent_style.text.line_height = 24.0;
+    parent_style.text.color = Color { r: 10, g: 20, b: 30, a: 1.0 };
+    parent_style.text.text_align = TextAlign::Center;
     let parent_arc = Arc::new(parent_style);
 
     let computed = compute_style(&[], None, &parent_arc);
 
-    assert_eq!(*computed.font_family, "Times New Roman");
-    assert_eq!(computed.font_size, 20.0);
-    assert_eq!(computed.line_height, 24.0);
-    assert_eq!(computed.color, Color { r: 10, g: 20, b: 30, a: 1.0 });
-    assert_eq!(computed.text_align, TextAlign::Center);
+    assert_eq!(*computed.text.font_family, "Times New Roman");
+    assert_eq!(computed.text.font_size, 20.0);
+    assert_eq!(computed.text.line_height, 24.0);
+    assert_eq!(computed.text.color, Color { r: 10, g: 20, b: 30, a: 1.0 });
+    assert_eq!(computed.text.text_align, TextAlign::Center);
 }
 
 #[test]
 fn test_style_non_inheritance() {
     let mut parent_style = (*get_default_style()).clone();
-    parent_style.margin = Margins::all(50.0);
-    parent_style.padding = Margins::all(30.0);
-    parent_style.width = Some(Dimension::Pt(100.0));
-    parent_style.background_color = Some(Color { r: 255, g: 0, b: 0, a: 1.0 });
+    parent_style.box_model.margin = Margins::all(50.0);
+    parent_style.box_model.padding = Margins::all(30.0);
+    parent_style.box_model.width = Some(Dimension::Pt(100.0));
+    parent_style.misc.background_color = Some(Color { r: 255, g: 0, b: 0, a: 1.0 });
     let parent_arc = Arc::new(parent_style);
 
     let computed = compute_style(&[], None, &parent_arc);
 
     // Box model properties should be reset to default, not inherited.
-    assert_eq!(computed.margin, Margins::default());
-    assert_eq!(computed.padding, Margins::default());
-    assert_eq!(computed.width, None);
-    assert_eq!(computed.background_color, None);
+    assert_eq!(computed.box_model.margin, Margins::default());
+    assert_eq!(computed.box_model.padding, Margins::default());
+    assert_eq!(computed.box_model.width, None);
+    assert_eq!(computed.misc.background_color, None);
 }
 
 #[test]
@@ -57,8 +56,8 @@ fn test_line_height_auto_calculation() {
     let computed = compute_style(&[], Some(&style_override), &parent_style);
 
     // line_height should be 1.2 * font_size when not specified
-    assert_eq!(computed.font_size, 10.0);
-    assert!((computed.line_height - 12.0).abs() < 0.01);
+    assert_eq!(computed.text.font_size, 10.0);
+    assert!((computed.text.line_height - 12.0).abs() < 0.01);
 
     // It should NOT be auto-calculated if set explicitly
     let style_override_2 = ElementStyle {
@@ -67,16 +66,16 @@ fn test_line_height_auto_calculation() {
         ..Default::default()
     };
     let computed_2 = compute_style(&[], Some(&style_override_2), &parent_style);
-    assert_eq!(computed_2.font_size, 10.0);
-    assert_eq!(computed_2.line_height, 20.0);
+    assert_eq!(computed_2.text.font_size, 10.0);
+    assert_eq!(computed_2.text.line_height, 20.0);
 }
 
 #[test]
 fn test_style_cascade_precedence() {
     // 1. Parent Style
     let mut parent_style = (*get_default_style()).clone();
-    parent_style.font_size = 10.0; // P: 10
-    parent_style.color = Color { r: 255, g: 0, b: 0, a: 1.0 }; // P: Red
+    parent_style.text.font_size = 10.0; // P: 10
+    parent_style.text.color = Color { r: 255, g: 0, b: 0, a: 1.0 }; // P: Red
     let parent_arc = Arc::new(parent_style);
 
     // 2. Named Style Set 1
@@ -103,11 +102,11 @@ fn test_style_cascade_precedence() {
     let computed = compute_style(&style_sets, Some(&style_override), &parent_arc);
 
     // font_size is defined at all levels. Inline (40) should win.
-    assert_eq!(computed.font_size, 40.0);
+    assert_eq!(computed.text.font_size, 40.0);
 
     // color is defined in Parent (Red) and Inline (Blue). Inline should win.
-    assert_eq!(computed.color, Color { r: 0, g: 0, b: 255, a: 1.0 });
+    assert_eq!(computed.text.color, Color { r: 0, g: 0, b: 255, a: 1.0 });
 
     // font_weight is only defined in Named Style 1. It should be applied.
-    assert_eq!(computed.font_weight, FontWeight::Bold);
+    assert_eq!(computed.text.font_weight, FontWeight::Bold);
 }

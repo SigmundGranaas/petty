@@ -2,7 +2,7 @@ use crate::core::idf::IRNode;
 use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
-    AnchorLocation, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult,
+    AnchorLocation, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, RenderNode,
 };
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::text::TextBuilder;
@@ -10,7 +10,6 @@ use crate::core::layout::{LayoutEngine, LayoutError, PositionedElement, TextElem
 use crate::core::style::dimension::Dimension;
 use crate::core::style::text::TextAlign;
 use cosmic_text::{Buffer, LayoutRun, Metrics, Wrap};
-use std::any::Any;
 use std::sync::{Arc, Mutex};
 
 pub struct ParagraphBuilder;
@@ -21,29 +20,19 @@ impl NodeBuilder for ParagraphBuilder {
         node: &IRNode,
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
-    ) -> Box<dyn LayoutNode> {
-        Box::new(ParagraphNode::new(node, engine, parent_style))
+    ) -> Result<RenderNode, LayoutError> {
+        Ok(RenderNode::Paragraph(ParagraphNode::new(node, engine, parent_style)?))
     }
 }
 
-/// A `LayoutNode` implementation for paragraphs using `cosmic-text` for shaping and wrapping.
 #[derive(Clone)]
 pub struct ParagraphNode {
     id: Option<String>,
-    /// Flattened text content.
     text_content: String,
-    /// Attributes (styles) for runs within the text.
     attrs_list: cosmic_text::AttrsList,
-    /// Links extracted from the text, indexed by metadata in attrs.
     links: Vec<String>,
-
     style: Arc<ComputedStyle>,
-
-    /// The vertical offset (in pixels/points) into the shaped buffer to start rendering from.
-    /// This is used for pagination (splitting a paragraph across pages).
     scroll_offset: f32,
-
-    /// Cached cosmic-text buffer to avoid re-shaping on every measure/layout call.
     buffer: Arc<Mutex<Buffer>>,
 }
 
@@ -52,26 +41,24 @@ impl std::fmt::Debug for ParagraphNode {
         f.debug_struct("ParagraphNode")
             .field("id", &self.id)
             .field("text_content", &self.text_content)
-            .field("style", &self.style)
             .field("scroll_offset", &self.scroll_offset)
             .finish()
     }
 }
 
 impl ParagraphNode {
-    pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Self {
+    pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Result<Self, LayoutError> {
         let style = engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
         let (meta, inlines) = match node {
             IRNode::Paragraph { meta, children } => (meta, children),
-            _ => panic!("ParagraphNode must be created from an IRNode::Paragraph"),
+            _ => return Err(LayoutError::BuilderMismatch("Paragraph", node.kind())),
         };
 
         let mut builder = TextBuilder::new(engine, &style);
         builder.process_inlines(inlines, &style);
 
-        // Initialize and populate the buffer once
         let mut system = engine.font_manager.system.lock().unwrap();
-        let metrics = Metrics::new(style.font_size, style.line_height);
+        let metrics = Metrics::new(style.text.font_size, style.text.line_height);
         let mut buffer = Buffer::new(&mut system, metrics);
 
         let default_attrs = engine.font_manager.attrs_from_style(&style);
@@ -91,7 +78,7 @@ impl ParagraphNode {
         );
         buffer.set_wrap(&mut system, Wrap::Word);
 
-        Self {
+        Ok(Self {
             id: meta.id.clone(),
             text_content: builder.content,
             attrs_list: builder.attrs_list,
@@ -99,7 +86,7 @@ impl ParagraphNode {
             style,
             scroll_offset: 0.0,
             buffer: Arc::new(Mutex::new(buffer)),
-        }
+        })
     }
 
     pub fn prepend_text(&mut self, text: &str, engine: &LayoutEngine) {
@@ -110,10 +97,8 @@ impl ParagraphNode {
         let default_attrs = engine.font_manager.attrs_from_style(&self.style);
         let mut new_attrs = cosmic_text::AttrsList::new(&default_attrs);
 
-        // Add the new span for the prepended text
         new_attrs.add_span(0..shift_amount, &default_attrs);
 
-        // Shift existing spans
         for (range, attrs) in self.attrs_list.spans() {
             let new_range = (range.start + shift_amount)..(range.end + shift_amount);
             new_attrs.add_span(new_range, &attrs.as_attrs());
@@ -122,9 +107,6 @@ impl ParagraphNode {
         self.text_content = new_content;
         self.attrs_list = new_attrs;
 
-        // Update the shared buffer with new content.
-        // Since prepend_text is typically called on a cloned node (e.g. in ListItem),
-        // modifying the shared buffer updates the logical content for this node chain.
         let mut buffer = self.buffer.lock().unwrap();
         let mut system = engine.font_manager.system.lock().unwrap();
 
@@ -150,12 +132,8 @@ impl LayoutNode for ParagraphNode {
         &self.style
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn measure(&mut self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
-        let margin_y = self.style.margin.top + self.style.margin.bottom;
+        let margin_y = self.style.box_model.margin.top + self.style.box_model.margin.bottom;
 
         let mut buffer = self.buffer.lock().unwrap();
         let mut system = env.engine.font_manager.system.lock().unwrap();
@@ -172,7 +150,6 @@ impl LayoutNode for ParagraphNode {
         let mut max_width: f32 = 0.0;
         let mut height: f32 = 0.0;
 
-        // Determine ascent correction to normalize Y coordinates
         let ascent_correction = buffer.layout_runs().next().map(|r| r.line_y).unwrap_or(0.0);
 
         for run in buffer.layout_runs() {
@@ -181,15 +158,15 @@ impl LayoutNode for ParagraphNode {
             height = line_top + run.line_height;
         }
 
-        if let Some(Dimension::Pt(h)) = self.style.height {
+        if let Some(Dimension::Pt(h)) = self.style.box_model.height {
             height = h;
         }
 
         if self.text_content.is_empty() {
             height = 0.0;
-            if let Some(Dimension::Pt(h)) = self.style.height {
+            if let Some(Dimension::Pt(h)) = self.style.box_model.height {
                 height = h;
-            } else if let Dimension::Pt(h) = self.style.min_height {
+            } else if let Dimension::Pt(h) = self.style.box_model.min_height {
                 height = h;
             }
         }
@@ -199,33 +176,31 @@ impl LayoutNode for ParagraphNode {
 
     fn layout(
         &mut self,
-        env: &LayoutEnvironment,
-        buf: &mut LayoutBuffer,
+        ctx: &mut LayoutContext,
     ) -> Result<LayoutResult, LayoutError> {
         if let Some(id) = &self.id {
             let location = AnchorLocation {
-                local_page_index: env.local_page_index,
-                y_pos: buf.cursor.1 + buf.bounds.y,
+                local_page_index: ctx.local_page_index,
+                y_pos: ctx.cursor.1 + ctx.bounds.y,
             };
-            buf.defined_anchors.insert(id.clone(), location);
+            ctx.defined_anchors.insert(id.clone(), location);
         }
 
-        let margin_to_add = self.style.margin.top.max(buf.last_v_margin);
+        let margin_to_add = self.style.box_model.margin.top.max(ctx.last_v_margin);
         let is_continuation = self.scroll_offset > 0.0;
 
         if !is_continuation {
-            // Rely on cursor position instead of `!buf.is_empty()` to support isolated contexts.
-            if buf.cursor.1 > 0.0 && margin_to_add > buf.available_height() {
-                return Ok(LayoutResult::Partial(Box::new(self.clone())));
+            if ctx.cursor.1 > 0.0 && margin_to_add > ctx.available_height() {
+                return Ok(LayoutResult::Partial(RenderNode::Paragraph(self.clone())));
             }
-            buf.advance_cursor(margin_to_add);
+            ctx.advance_cursor(margin_to_add);
         }
-        buf.last_v_margin = 0.0;
+        ctx.last_v_margin = 0.0;
 
         let mut buffer = self.buffer.lock().unwrap();
-        let mut system = env.engine.font_manager.system.lock().unwrap();
+        let mut system = ctx.engine.font_manager.system.lock().unwrap();
 
-        let align = match self.style.text_align {
+        let align = match self.style.text.text_align {
             TextAlign::Left => cosmic_text::Align::Left,
             TextAlign::Right => cosmic_text::Align::Right,
             TextAlign::Center => cosmic_text::Align::Center,
@@ -235,11 +210,11 @@ impl LayoutNode for ParagraphNode {
             line.set_align(Some(align));
         }
 
-        let width = buf.bounds.width;
+        let width = ctx.bounds.width;
         buffer.set_size(&mut system, Some(width), None);
         buffer.shape_until_scroll(&mut system, false);
 
-        let available_height = buf.available_height();
+        let available_height = ctx.available_height();
 
         let all_runs: Vec<LayoutRun> = buffer.layout_runs().collect();
         let ascent_correction = all_runs.first().map(|r| r.line_y).unwrap_or(0.0);
@@ -249,15 +224,15 @@ impl LayoutNode for ParagraphNode {
             .collect();
 
         if remaining_runs.is_empty() {
-            buf.last_v_margin = self.style.margin.bottom;
+            ctx.last_v_margin = self.style.box_model.margin.bottom;
             return Ok(LayoutResult::Full);
         }
 
         let mut runs_to_render = Vec::new();
         let mut next_page_start_y = None;
 
-        let orphans = self.style.orphans.max(1) as usize;
-        let widows = self.style.widows.max(1) as usize;
+        let orphans = self.style.misc.orphans.max(1) as usize;
+        let widows = self.style.misc.widows.max(1) as usize;
 
         let mut fit_count = 0;
         for run in &remaining_runs {
@@ -275,8 +250,8 @@ impl LayoutNode for ParagraphNode {
             runs_to_render.extend(remaining_runs);
         } else {
             if fit_count < orphans {
-                if buf.cursor.1 > 0.0 {
-                    return Ok(LayoutResult::Partial(Box::new(self.clone())));
+                if ctx.cursor.1 > 0.0 {
+                    return Ok(LayoutResult::Partial(RenderNode::Paragraph(self.clone())));
                 }
             }
 
@@ -286,13 +261,13 @@ impl LayoutNode for ParagraphNode {
                 if fit_count > needed {
                     fit_count -= needed;
                 } else {
-                    if buf.cursor.1 > 0.0 {
-                        return Ok(LayoutResult::Partial(Box::new(self.clone())));
+                    if ctx.cursor.1 > 0.0 {
+                        return Ok(LayoutResult::Partial(RenderNode::Paragraph(self.clone())));
                     }
                 }
             }
 
-            if fit_count == 0 && buf.cursor.1 == 0.0 && !remaining_runs.is_empty() {
+            if fit_count == 0 && ctx.cursor.1 == 0.0 && !remaining_runs.is_empty() {
                 fit_count = 1;
             }
 
@@ -307,7 +282,7 @@ impl LayoutNode for ParagraphNode {
         }
 
         let mut last_run_bottom = 0.0;
-        let is_justified = self.style.text_align == TextAlign::Justify;
+        let is_justified = self.style.text.text_align == TextAlign::Justify;
 
         for run in runs_to_render {
             let line_top = run.line_y - ascent_correction;
@@ -332,7 +307,7 @@ impl LayoutNode for ParagraphNode {
 
                 if should_break {
                     flush_group(
-                        buf,
+                        ctx,
                         &group_glyphs,
                         current_metadata,
                         local_y,
@@ -349,7 +324,7 @@ impl LayoutNode for ParagraphNode {
 
             if !group_glyphs.is_empty() {
                 flush_group(
-                    buf,
+                    ctx,
                     &group_glyphs,
                     current_metadata,
                     local_y,
@@ -364,21 +339,21 @@ impl LayoutNode for ParagraphNode {
         }
 
         if let Some(break_y) = next_page_start_y {
-            buf.advance_cursor(last_run_bottom);
+            ctx.advance_cursor(last_run_bottom);
             let mut remainder = self.clone();
             remainder.scroll_offset = break_y;
-            return Ok(LayoutResult::Partial(Box::new(remainder)));
+            return Ok(LayoutResult::Partial(RenderNode::Paragraph(remainder)));
         }
 
-        buf.advance_cursor(last_run_bottom);
-        buf.last_v_margin = self.style.margin.bottom;
+        ctx.advance_cursor(last_run_bottom);
+        ctx.last_v_margin = self.style.box_model.margin.bottom;
 
         Ok(LayoutResult::Full)
     }
 }
 
 fn flush_group(
-    buf: &mut LayoutBuffer,
+    ctx: &mut LayoutContext,
     glyphs: &[&cosmic_text::LayoutGlyph],
     metadata: usize,
     y: f32,
@@ -415,9 +390,9 @@ fn flush_group(
         element: crate::core::layout::LayoutElement::Text(TextElement {
             content: text_segment.to_string(),
             href,
-            text_decoration: style.text_decoration.clone(),
+            text_decoration: style.text.text_decoration.clone(),
         }),
         style: style.clone(),
     };
-    buf.push_element(element);
+    ctx.push_element(element);
 }

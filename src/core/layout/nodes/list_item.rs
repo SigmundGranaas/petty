@@ -1,22 +1,19 @@
-use crate::core::layout::node::{AnchorLocation, LayoutBuffer, LayoutEnvironment, LayoutNode, LayoutResult};
+use crate::core::layout::node::{AnchorLocation, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, RenderNode};
 use crate::core::layout::nodes::block::draw_background_and_borders;
 use crate::core::layout::style::ComputedStyle;
+use crate::core::layout::util::VerticalStacker;
 use crate::core::layout::{geom, LayoutElement, LayoutEngine, LayoutError, PositionedElement, TextElement};
 use crate::core::style::dimension::Dimension;
 use crate::core::style::list::{ListStylePosition, ListStyleType};
 use crate::core::style::text::TextDecoration;
-use std::any::Any;
 use std::sync::Arc;
 use crate::core::idf::IRNode;
 use crate::core::layout::geom::{BoxConstraints, Size};
 
-/// A `LayoutNode` for a single item within a list.
-/// It is responsible for drawing its marker (bullet or number) and then
-/// laying out its own children in an indented area.
 #[derive(Debug, Clone)]
 pub struct ListItemNode {
     id: Option<String>,
-    children: Vec<Box<dyn LayoutNode>>,
+    children: Vec<RenderNode>,
     style: Arc<ComputedStyle>,
     marker_text: String,
 }
@@ -28,69 +25,55 @@ impl ListItemNode {
         parent_style: Arc<ComputedStyle>,
         index: usize,
         depth: usize,
-    ) -> Self {
+    ) -> Result<Self, LayoutError> {
         let style = engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
         let (meta, ir_children) = match node {
             IRNode::ListItem { meta, children } => (meta, children),
-            _ => panic!("ListItemNode must be created from an IRNode::ListItem"),
+            _ => return Err(LayoutError::BuilderMismatch("ListItem", node.kind())),
         };
 
-        // When a list item itself contains a list, we must create that child
-        // ListNode with an incremented depth. The generic `build_layout_node_tree`
-        // does not know about list depth, so we handle that case specifically here.
-        let mut children: Vec<Box<dyn LayoutNode>> = ir_children
-            .iter()
-            .map(|child_ir| {
-                // Special handling for nested lists to pass depth correctly
-                if let IRNode::List { .. } = child_ir {
-                    Box::new(super::list::ListNode::new_with_depth(
-                        child_ir,
-                        engine,
-                        style.clone(),
-                        depth + 1, // Pass the incremented depth
-                    )) as Box<dyn LayoutNode>
-                } else {
-                    engine.build_layout_node_tree(child_ir, style.clone())
-                }
-            })
-            .collect();
-
-        // Determine marker content based on style and depth.
-        let marker_text = get_marker_text(&style, index, depth);
-
-        // For 'inside' positioning, prepend the marker to the first paragraph.
-        // This does not currently support image markers.
-        if style.list_style_position == ListStylePosition::Inside && !marker_text.is_empty() {
-            if let Some(first_child) = children.first_mut() {
-                if let Some(p_node) = first_child.as_any().downcast_ref::<super::paragraph::ParagraphNode>() {
-                    let mut new_p_node = p_node.clone();
-                    new_p_node.prepend_text(&format!("{} ", marker_text), engine);
-                    *first_child = Box::new(new_p_node);
-                }
+        let mut children = Vec::new();
+        for child_ir in ir_children {
+            if let IRNode::List { .. } = child_ir {
+                children.push(RenderNode::List(super::list::ListNode::new_with_depth(
+                    child_ir,
+                    engine,
+                    style.clone(),
+                    depth + 1,
+                )?));
+            } else {
+                children.push(engine.build_layout_node_tree(child_ir, style.clone())?);
             }
         }
 
-        Self {
+        let marker_text = get_marker_text(&style, index, depth);
+
+        if style.list.style_position == ListStylePosition::Inside && !marker_text.is_empty() {
+            if let Some(RenderNode::Paragraph(p_node)) = children.first_mut() {
+                let mut new_p_node = p_node.clone();
+                new_p_node.prepend_text(&format!("{} ", marker_text), engine);
+                *p_node = new_p_node;
+            }
+        }
+
+        Ok(Self {
             id: meta.id.clone(),
             children,
             style,
             marker_text,
-        }
+        })
     }
 }
 
 fn get_marker_text(style: &Arc<ComputedStyle>, index: usize, depth: usize) -> String {
-    let list_type_to_use = if depth > 0 && style.list_style_type == ListStyleType::Decimal {
-        // If it's a nested decimal list, cycle through styles for convenience.
-        // An explicitly styled nested list will not enter this branch.
+    let list_type_to_use = if depth > 0 && style.list.style_type == ListStyleType::Decimal {
         match depth % 3 {
             1 => &ListStyleType::LowerAlpha,
             2 => &ListStyleType::LowerRoman,
-            _ => &ListStyleType::Decimal, // for depth 3, 6, etc.
+            _ => &ListStyleType::Decimal,
         }
     } else {
-        // Otherwise, use the style specified for this list level.
-        &style.list_style_type
+        &style.list.style_type
     };
 
     match list_type_to_use {
@@ -111,29 +94,23 @@ impl LayoutNode for ListItemNode {
         &self.style
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
     fn measure(&mut self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
-        // List items behave like blocks; their children's available width is reduced
-        // by the list item's own padding and borders.
-        let border_left_width = self.style.border_left.as_ref().map_or(0.0, |b| b.width);
-        let border_right_width = self.style.border_right.as_ref().map_or(0.0, |b| b.width);
+        let border_left = self.style.border_left_width();
+        let border_right = self.style.border_right_width();
         const MARKER_SPACING_FACTOR: f32 = 0.4;
-        let is_outside_marker = self.style.list_style_position == ListStylePosition::Outside;
+        let is_outside_marker = self.style.list.style_position == ListStylePosition::Outside;
         let indent = if is_outside_marker && !self.marker_text.is_empty() {
-            env.engine.measure_text_width(&self.marker_text, &self.style) + self.style.font_size * MARKER_SPACING_FACTOR
+            env.engine.measure_text_width(&self.marker_text, &self.style) + self.style.text.font_size * MARKER_SPACING_FACTOR
         } else {
             0.0
         };
 
         let child_constraints = if constraints.has_bounded_width() {
             let w = (constraints.max_width
-                - self.style.padding.left
-                - self.style.padding.right
-                - border_left_width
-                - border_right_width
+                - self.style.box_model.padding.left
+                - self.style.box_model.padding.right
+                - border_left
+                - border_right
                 - indent).max(0.0);
             BoxConstraints {
                 min_width: 0.0, max_width: w,
@@ -151,57 +128,52 @@ impl LayoutNode for ListItemNode {
             total_content_height += child.measure(env, child_constraints).height;
         }
 
-        let border_top_width = self.style.border_top.as_ref().map_or(0.0, |b| b.width);
-        let border_bottom_width = self.style.border_bottom.as_ref().map_or(0.0, |b| b.width);
+        let border_top = self.style.border_top_width();
+        let border_bottom = self.style.border_bottom_width();
 
-        let height = if let Some(Dimension::Pt(h)) = self.style.height {
+        let height = if let Some(Dimension::Pt(h)) = self.style.box_model.height {
             h
         } else {
-            border_top_width
-                + self.style.padding.top
+            border_top
+                + self.style.box_model.padding.top
                 + total_content_height
-                + self.style.padding.bottom
-                + border_bottom_width
+                + self.style.box_model.padding.bottom
+                + border_bottom
         };
 
-        let width = if constraints.has_bounded_width() { constraints.max_width } else {
-            // Unbounded width logic is weak here, usually not needed for list items unless inside flex
-            0.0 // Placeholder, block nodes fill width usually
-        };
+        let width = if constraints.has_bounded_width() { constraints.max_width } else { 0.0 };
 
         Size::new(width, height)
     }
 
-    fn layout(&mut self, env: &LayoutEnvironment, buf: &mut LayoutBuffer) -> Result<LayoutResult, LayoutError> {
+    fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
         if let Some(id) = &self.id {
             let location = AnchorLocation {
-                local_page_index: env.local_page_index,
-                y_pos: buf.cursor.1 + buf.bounds.y,
+                local_page_index: ctx.local_page_index,
+                y_pos: ctx.cursor.1 + ctx.bounds.y,
             };
-            buf.defined_anchors.insert(id.clone(), location);
+            ctx.defined_anchors.insert(id.clone(), location);
         }
 
         const MARKER_SPACING_FACTOR: f32 = 0.4;
-        let is_outside_marker = self.style.list_style_position == ListStylePosition::Outside;
+        let is_outside_marker = self.style.list.style_position == ListStylePosition::Outside;
 
-        let block_start_y_in_ctx = buf.cursor.1;
+        let block_start_y_in_ctx = ctx.cursor.1;
 
-        // --- 1. Handle Marker Layout for 'outside' markers ---
-        // This happens before the box model is applied to the content.
         let indent = if is_outside_marker && !self.marker_text.is_empty() {
-            let marker_available_height = self.style.line_height;
-            if marker_available_height > buf.available_height() && !buf.is_empty() {
-                return Ok(LayoutResult::Partial(Box::new(self.clone())));
+            let marker_available_height = self.style.text.line_height;
+            if marker_available_height > ctx.available_height() && !ctx.is_empty() {
+                return Ok(LayoutResult::Partial(RenderNode::ListItem(self.clone())));
             }
 
-            let marker_width = env.engine.measure_text_width(&self.marker_text, &self.style);
-            let marker_spacing = self.style.font_size * MARKER_SPACING_FACTOR;
+            let marker_width = ctx.engine.measure_text_width(&self.marker_text, &self.style);
+            let marker_spacing = self.style.text.font_size * MARKER_SPACING_FACTOR;
 
             let marker_box = PositionedElement {
                 x: 0.0,
-                y: self.style.border_top.as_ref().map_or(0.0, |b| b.width) + self.style.padding.top,
+                y: self.style.border_top_width() + self.style.box_model.padding.top,
                 width: marker_width,
-                height: self.style.line_height,
+                height: self.style.text.line_height,
                 element: LayoutElement::Text(TextElement {
                     content: self.marker_text.clone(),
                     href: None,
@@ -209,94 +181,77 @@ impl LayoutNode for ListItemNode {
                 }),
                 style: self.style.clone(),
             };
-            buf.push_element_at(marker_box, 0.0, block_start_y_in_ctx);
+            ctx.push_element_at(marker_box, 0.0, block_start_y_in_ctx);
             marker_width + marker_spacing
         } else {
             0.0
         };
 
-        // --- 2. Layout Children within a proper box model ---
-        let border_top_width = self.style.border_top.as_ref().map_or(0.0, |b| b.width);
-        let border_bottom_width = self.style.border_bottom.as_ref().map_or(0.0, |b| b.width);
-        let border_left_width = self.style.border_left.as_ref().map_or(0.0, |b| b.width);
-        let border_right_width = self.style.border_right.as_ref().map_or(0.0, |b| b.width);
+        let border_top = self.style.border_top_width();
+        let border_bottom = self.style.border_bottom_width();
+        let border_left = self.style.border_left_width();
+        let _border_right = self.style.border_right_width();
 
-        buf.advance_cursor(border_top_width + self.style.padding.top);
-        let content_start_y_in_ctx = buf.cursor.1;
+        ctx.advance_cursor(border_top + self.style.box_model.padding.top);
+        let content_start_y_in_ctx = ctx.cursor.1;
 
         let child_bounds = geom::Rect {
-            x: buf.bounds.x + border_left_width + self.style.padding.left + indent,
-            y: buf.bounds.y + content_start_y_in_ctx,
-            width: buf.bounds.width - self.style.padding.left - self.style.padding.right - border_left_width - border_right_width - indent,
-            height: buf.available_height(),
+            x: ctx.bounds.x + border_left + self.style.box_model.padding.left + indent,
+            y: ctx.bounds.y + content_start_y_in_ctx,
+            width: ctx.bounds.width - self.style.padding_x() - self.style.border_x() - indent,
+            height: ctx.available_height(),
         };
 
-        let mut child_buf = LayoutBuffer {
-            bounds: child_bounds,
-            cursor: (0.0, 0.0),
-            elements: &mut *buf.elements,
-            last_v_margin: 0.0, // List items create a new block formatting context
-            defined_anchors: &mut *buf.defined_anchors,
-            index_entries: &mut *buf.index_entries,
-        };
+        let (split_result, content_height) = ctx.with_child_bounds(child_bounds, |child_ctx| {
+            let result = VerticalStacker::layout_children(child_ctx, &mut self.children);
+            (result, child_ctx.cursor.1)
+        });
 
-        for (i, child) in self.children.iter_mut().enumerate() {
-            match child.layout(env, &mut child_buf)? {
-                LayoutResult::Full => continue,
-                LayoutResult::Partial(remainder) => {
-                    let content_height = child_buf.cursor.1;
+        // Unwrap logic result from closure
+        let split_result = split_result?;
 
-                    draw_background_and_borders(
-                        child_buf.elements,
-                        buf.bounds,
-                        &self.style,
-                        block_start_y_in_ctx,
-                        content_height
-                    );
+        if let Some(remaining_children) = split_result {
+            draw_background_and_borders(
+                ctx.elements,
+                ctx.bounds,
+                &self.style,
+                block_start_y_in_ctx,
+                content_height
+            );
+            ctx.cursor.1 = content_start_y_in_ctx + content_height + self.style.box_model.padding.bottom + border_bottom;
 
-                    buf.cursor.1 = content_start_y_in_ctx + content_height + self.style.padding.bottom + border_bottom_width;
-
-                    let mut remaining_children = vec![remainder];
-                    remaining_children.extend(self.children.drain((i + 1)..));
-
-                    // FIX: Reset top properties for the continuation
-                    let mut next_style = (*self.style).clone();
-                    next_style.margin.top = 0.0;
-                    next_style.border_top = None;
-                    next_style.padding.top = 0.0;
-                    if next_style.height.is_some() {
-                        next_style.height = None;
-                    }
-
-                    let mut next_page_item = Box::new(ListItemNode {
-                        id: self.id.clone(),
-                        children: remaining_children,
-                        style: Arc::new(next_style),
-                        marker_text: String::new(), // No marker on subsequent pages
-                    });
-                    // Re-measure for next page layout
-                    next_page_item.measure(env, BoxConstraints::tight_width(buf.bounds.width));
-                    return Ok(LayoutResult::Partial(next_page_item));
-                }
+            let mut next_style = (*self.style).clone();
+            next_style.box_model.margin.top = 0.0;
+            next_style.border.top = None;
+            next_style.box_model.padding.top = 0.0;
+            if next_style.box_model.height.is_some() {
+                next_style.box_model.height = None;
             }
+
+            let mut next_page_item = ListItemNode {
+                id: self.id.clone(),
+                children: remaining_children,
+                style: Arc::new(next_style),
+                marker_text: String::new(),
+            };
+            next_page_item.measure(&LayoutEnvironment{ engine: ctx.engine, local_page_index: ctx.local_page_index }, BoxConstraints::tight_width(ctx.bounds.width));
+            return Ok(LayoutResult::Partial(RenderNode::ListItem(next_page_item)));
         }
 
-        let content_height = child_buf.cursor.1;
         draw_background_and_borders(
-            child_buf.elements,
-            buf.bounds,
+            ctx.elements,
+            ctx.bounds,
             &self.style,
             block_start_y_in_ctx,
             content_height
         );
 
-        buf.cursor.1 = content_start_y_in_ctx + content_height + self.style.padding.bottom + border_bottom_width;
+        ctx.cursor.1 = content_start_y_in_ctx + content_height + self.style.box_model.padding.bottom + border_bottom;
 
         Ok(LayoutResult::Full)
     }
 }
 
-// Helper functions for list numbering
 fn int_to_lower_alpha(n: usize) -> String {
     if n == 0 { return "a".to_string(); }
     let mut s = String::new();
