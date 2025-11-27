@@ -14,12 +14,12 @@ fn lorem_ipsum(rng: &mut StdRng, num_paragraphs: usize) -> String {
     let mut paragraphs = Vec::new();
     for _ in 0..num_paragraphs {
         let mut paragraph_content = String::new();
-        let num_sentences = rng.gen_range(3..=7);
+        let num_sentences = rng.random_range(3..=7);
         for s_idx in 0..num_sentences {
             let mut sentence = String::new();
-            let num_words = rng.gen_range(8..=20);
+            let num_words = rng.random_range(8..=20);
             for w_idx in 0..num_words {
-                let word = WORDS[rng.gen_range(0..WORDS.len())];
+                let word = WORDS[rng.random_range(0..WORDS.len())];
                 if w_idx == 0 {
                     let mut c = word.chars();
                     if let Some(first) = c.next() {

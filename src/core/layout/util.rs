@@ -1,57 +1,39 @@
-use crate::core::layout::node::{LayoutContext, LayoutResult, RenderNode, LayoutNode};
-use crate::core::layout::LayoutError;
+use crate::core::layout::{LayoutContext, LayoutError};
+use std::any::Any;
+use crate::core::layout::node::{LayoutResult, RenderNode};
 
-/// A utility to stack children vertically, handling page breaks and margin collapsing.
 pub struct VerticalStacker;
 
 impl VerticalStacker {
-    /// Lays out children vertically into the provided context.
-    /// Returns `Ok(None)` if all children fit.
-    /// Returns `Ok(Some(remainder))` if a break occurred, where `remainder` is the list of children for the next page.
+    /// Lays out children vertically.
+    /// Returns `Ok(LayoutResult::Finished)` if all children fit.
+    /// Returns `Ok(LayoutResult::Break(state))` if a break occurred.
     pub fn layout_children(
         ctx: &mut LayoutContext,
-        children: &mut Vec<RenderNode>,
-    ) -> Result<Option<Vec<RenderNode>>, LayoutError> {
-        let mut next_page_children = Vec::new();
-        let mut split_occurred = false;
+        children: &[RenderNode],
+        constraints: crate::core::layout::geom::BoxConstraints,
+        start_index: usize,
+        mut child_resume_state: Option<Box<dyn Any + Send>>,
+        wrap_state: impl Fn(usize, Box<dyn Any + Send>) -> Box<dyn Any + Send>,
+    ) -> Result<LayoutResult, LayoutError> {
 
-        // Iterate through children. We use an index to split the vector if needed.
-        let mut split_index = None;
-        let mut partial_node = None;
+        for (i, child) in children.iter().enumerate().skip(start_index) {
+            let res = child.layout(ctx, constraints, child_resume_state.take())?;
 
-        for (i, child) in children.iter_mut().enumerate() {
-            if split_occurred {
-                // This shouldn't be reached if we break loop, but conceptually
-                // subsequent children are pushed to next page.
-                break;
-            }
-
-            match child.layout(ctx)? {
-                LayoutResult::Full => continue,
-                LayoutResult::Partial(remainder) => {
-                    split_occurred = true;
-                    partial_node = Some(remainder);
-                    split_index = Some(i);
-                    break;
+            match res {
+                LayoutResult::Finished => {
+                    // Continue to next child
+                }
+                LayoutResult::Break(child_next_state) => {
+                    // Wrap this state and return break
+                    let state_to_return = Box::new(child_next_state); // Just wrap the child state directly? No, caller wraps it.
+                    // Actually, the caller passed `wrap_state`.
+                    // The caller typically wraps (index, child_state).
+                    return Ok(LayoutResult::Break(wrap_state(i, state_to_return)));
                 }
             }
         }
 
-        if split_occurred {
-            if let Some(idx) = split_index {
-                // If we have a partial remainder of the split child, start with that.
-                if let Some(p) = partial_node {
-                    next_page_children.push(p);
-                }
-                // Move all subsequent children to the next page.
-                // We drain starting from idx + 1 because the child at idx was split/processed.
-                if idx + 1 < children.len() {
-                    next_page_children.extend(children.drain((idx + 1)..));
-                }
-            }
-            Ok(Some(next_page_children))
-        } else {
-            Ok(None)
-        }
+        Ok(LayoutResult::Finished)
     }
 }

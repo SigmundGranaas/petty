@@ -34,6 +34,16 @@ pub struct BoxConstraints {
     pub max_height: f32,
 }
 
+impl PartialEq for BoxConstraints {
+    fn eq(&self, other: &Self) -> bool {
+        let eps = 0.001;
+        (self.min_width - other.min_width).abs() < eps
+            && (self.max_width - other.max_width).abs() < eps
+            && (self.min_height - other.min_height).abs() < eps
+            && (self.max_height - other.max_height).abs() < eps
+    }
+}
+
 impl BoxConstraints {
     pub fn new(min_width: f32, max_width: f32, min_height: f32, max_height: f32) -> Self {
         Self {

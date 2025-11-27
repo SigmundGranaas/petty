@@ -1,9 +1,9 @@
-use crate::core::idf::{IRNode, NodeMetadata};
 use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
 use crate::core::style::dimension::{Dimension, Margins, PageSize};
 use crate::core::style::flex::{AlignItems, AlignSelf, FlexDirection, FlexWrap};
 use crate::core::style::stylesheet::{ElementStyle, PageLayout, Stylesheet};
 use std::collections::HashMap;
+use crate::core::idf::{IRNode, NodeMetadata};
 
 fn create_flex_item_with_style(text: &str, style: ElementStyle) -> IRNode {
     IRNode::Block {
@@ -240,22 +240,15 @@ fn test_flex_wrap_with_page_break() {
     let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     assert_eq!(pages.len(), 2);
     let page1 = &pages[0];
-    let _page2 = &pages[1];
+    let page2 = &pages[1];
 
     assert!(find_first_text_box_with_content(page1, "3").is_some());
 
-    // Update: With the relaxed splitting logic, Item 4 starts at y=40 (relative) + 10 (margin).
-    // Page height 60. Available 20.
-    // Item 4 height 40.
-    // It fits 20px.
-    // Since Item 4 is "4" (1 line ~14.4px), content fits in 20px.
-    // So Item 4 renders on Page 1.
-    // The test previously asserted it moved to Page 2.
-    // Since the engine now favors splitting over pushing, we update expectations.
-    // The item "4" text should appear on Page 1.
-    assert!(find_first_text_box_with_content(page1, "4").is_some());
-
-    // Just verifying we have 2 pages is good enough to show break happened.
+    // Item 4 overflows page 1 (available 20h, needs 40h).
+    // FlexNode pushes non-first items to next page.
+    // So Item 4 should be on Page 2.
+    assert!(find_first_text_box_with_content(page1, "4").is_none(), "Item 4 should be pushed to page 2");
+    assert!(find_first_text_box_with_content(page2, "4").is_some(), "Item 4 should be on page 2");
 }
 
 #[test]

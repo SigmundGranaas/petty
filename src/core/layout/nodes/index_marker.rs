@@ -1,4 +1,3 @@
-use crate::core::idf::IRNode;
 use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
@@ -7,6 +6,8 @@ use crate::core::layout::node::{
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{LayoutEngine, LayoutError};
 use std::sync::Arc;
+use std::any::Any;
+use crate::core::idf::IRNode;
 
 pub struct IndexMarkerBuilder;
 
@@ -17,7 +18,7 @@ impl NodeBuilder for IndexMarkerBuilder {
         _engine: &LayoutEngine,
         _parent_style: Arc<ComputedStyle>,
     ) -> Result<RenderNode, LayoutError> {
-        Ok(RenderNode::IndexMarker(IndexMarkerNode::new(node)?))
+        Ok(Box::new(IndexMarkerNode::new(node)?))
     }
 }
 
@@ -45,13 +46,15 @@ impl LayoutNode for IndexMarkerNode {
         &self.style
     }
 
-    fn measure(&mut self, _env: &LayoutEnvironment, _constraints: BoxConstraints) -> Size {
+    fn measure(&self, _env: &LayoutEnvironment, _constraints: BoxConstraints) -> Size {
         Size::zero()
     }
 
     fn layout(
-        &mut self,
+        &self,
         ctx: &mut LayoutContext,
+        _constraints: BoxConstraints,
+        _break_state: Option<Box<dyn Any + Send>>,
     ) -> Result<LayoutResult, LayoutError> {
         let entry = IndexEntry {
             local_page_index: ctx.local_page_index,
@@ -62,6 +65,6 @@ impl LayoutNode for IndexMarkerNode {
             .or_default()
             .push(entry);
 
-        Ok(LayoutResult::Full)
+        Ok(LayoutResult::Finished)
     }
 }

@@ -53,11 +53,7 @@ impl FontManager {
             FontStyle::Oblique => Style::Oblique,
         };
 
-        let family = if style.text.font_family.eq_ignore_ascii_case("Helvetica") {
-            Family::SansSerif
-        } else {
-            Family::Name(&style.text.font_family)
-        };
+        let family = Family::Name(&style.text.font_family);
 
         Attrs::new()
             .family(family)

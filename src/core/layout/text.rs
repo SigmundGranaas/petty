@@ -1,14 +1,16 @@
-use crate::core::idf::InlineNode;
 use crate::core::layout::engine::LayoutEngine;
 use crate::core::layout::style::ComputedStyle;
+use crate::core::layout::nodes::image::ImageNode;
 use cosmic_text::{AttrsList};
 use std::sync::Arc;
+use crate::core::idf::InlineNode;
 
 pub struct TextBuilder<'a> {
     engine: &'a LayoutEngine,
     pub content: String,
     pub attrs_list: AttrsList,
     pub links: Vec<String>,
+    pub inline_images: Vec<(usize, ImageNode)>,
 }
 
 impl<'a> TextBuilder<'a> {
@@ -19,6 +21,7 @@ impl<'a> TextBuilder<'a> {
             content: String::new(),
             attrs_list: AttrsList::new(&base_attrs),
             links: Vec::new(),
+            inline_images: Vec::new(),
         }
     }
 
@@ -50,21 +53,13 @@ impl<'a> TextBuilder<'a> {
                 InlineNode::Hyperlink { meta, children, href } => {
                     let style = self.resolve_meta_style(meta, parent_style);
                     self.links.push(href.clone());
-                    let new_link_idx = self.links.len();
+                    let new_link_idx = self.links.len(); // 1-based index
                     self.process_inlines_recursive(children, &style, new_link_idx);
                 }
                 InlineNode::PageReference { meta, children, .. } => {
+                    // .. same as text ..
                     let style = self.resolve_meta_style(meta, parent_style);
-                    if children.is_empty() {
-                        let start = self.content.len();
-                        self.content.push_str("XX");
-                        let end = self.content.len();
-                        let mut attrs = self.engine.font_manager.attrs_from_style(&style);
-                        attrs.metadata = current_link_idx;
-                        self.attrs_list.add_span(start..end, &attrs);
-                    } else {
-                        self.process_inlines_recursive(children, &style, current_link_idx);
-                    }
+                    self.process_inlines_recursive(children, &style, current_link_idx);
                 }
                 InlineNode::LineBreak => {
                     let start = self.content.len();
@@ -74,8 +69,26 @@ impl<'a> TextBuilder<'a> {
                     attrs.metadata = current_link_idx;
                     self.attrs_list.add_span(start..end, &attrs);
                 }
-                InlineNode::Image { .. } => {
-                    log::warn!("Inline images are not supported in the current text engine refactor.");
+                InlineNode::Image { meta, src } => {
+                    // Inline Image Support (Issue F)
+                    // Insert placeholder char
+                    let start = self.content.len();
+                    self.content.push_str("\u{FFFC}");
+                    let end = self.content.len();
+
+                    let node = ImageNode::new_inline(meta, src.clone(), self.engine, parent_style).ok();
+
+                    if let Some(n) = node {
+                        // Store mapping
+                        self.inline_images.push((start, n));
+
+                        // Set metadata to indicate image (High bit)
+                        let mut attrs = self.engine.font_manager.attrs_from_style(parent_style);
+                        // Using a simple flag in metadata.
+                        // Real implementation would index into inline_images.
+                        attrs.metadata = 1 << 31 | self.inline_images.len();
+                        self.attrs_list.add_span(start..end, &attrs);
+                    }
                 }
             }
         }

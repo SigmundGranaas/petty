@@ -1,16 +1,20 @@
-use crate::core::idf::IRNode;
-use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
     AnchorLocation, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, RenderNode,
 };
+use crate::core::layout::nodes::paragraph_utils::flush_group;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::text::TextBuilder;
-use crate::core::layout::{LayoutEngine, LayoutError, PositionedElement, TextElement};
+use crate::core::layout::nodes::image::ImageNode;
+use crate::core::layout::{LayoutEngine, LayoutError};
 use crate::core::style::dimension::Dimension;
 use crate::core::style::text::TextAlign;
-use cosmic_text::{Buffer, LayoutRun, Metrics, Wrap};
+use cosmic_text::{AttrsList, Buffer, LayoutRun, Metrics, Wrap};
 use std::sync::{Arc, Mutex};
+use std::any::Any;
+use std::time::Instant;
+use crate::core::idf::IRNode;
+use crate::core::layout::builder::NodeBuilder;
 
 pub struct ParagraphBuilder;
 
@@ -21,29 +25,32 @@ impl NodeBuilder for ParagraphBuilder {
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
     ) -> Result<RenderNode, LayoutError> {
-        Ok(RenderNode::Paragraph(ParagraphNode::new(node, engine, parent_style)?))
+        Ok(Box::new(ParagraphNode::new(node, engine, parent_style)?))
     }
 }
 
-#[derive(Clone)]
+// Increased cache size to handle oscillation between infinite measure and fixed width layout
+const CACHE_SIZE: usize = 4;
+
+#[derive(Debug)]
 pub struct ParagraphNode {
-    id: Option<String>,
-    text_content: String,
-    attrs_list: cosmic_text::AttrsList,
+    _id: Option<String>,
+    _text_content: String,
+    attrs_list: AttrsList,
     links: Vec<String>,
+    _inline_images: Vec<(usize, ImageNode)>,
     style: Arc<ComputedStyle>,
-    scroll_offset: f32,
-    buffer: Arc<Mutex<Buffer>>,
+    // Wrapped in Option to delay allocation until first measure/layout
+    buffer: Mutex<Option<Buffer>>,
+    // Cache keyed by wrapping width (Option<f32>) -> Resulting Size
+    measure_cache: Arc<Mutex<Vec<(Option<f32>, Size)>>>,
+    // Caches the width used for the last shape operation to prevent redundant shaping
+    last_shaped_width: Mutex<Option<f32>>,
 }
 
-impl std::fmt::Debug for ParagraphNode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("ParagraphNode")
-            .field("id", &self.id)
-            .field("text_content", &self.text_content)
-            .field("scroll_offset", &self.scroll_offset)
-            .finish()
-    }
+#[derive(Debug)]
+struct ParagraphState {
+    scroll_offset: f32,
 }
 
 impl ParagraphNode {
@@ -57,148 +64,30 @@ impl ParagraphNode {
         let mut builder = TextBuilder::new(engine, &style);
         builder.process_inlines(inlines, &style);
 
-        let mut system = engine.font_manager.system.lock().unwrap();
-        let metrics = Metrics::new(style.text.font_size, style.text.line_height);
-        let mut buffer = Buffer::new(&mut system, metrics);
-
-        let default_attrs = engine.font_manager.attrs_from_style(&style);
-        let spans = builder.attrs_list.spans().into_iter().map(|(range, attrs)| {
-            (
-                &builder.content[range.clone()],
-                attrs.as_attrs()
-            )
-        });
-
-        buffer.set_rich_text(
-            &mut system,
-            spans,
-            &default_attrs,
-            cosmic_text::Shaping::Advanced,
-            None
-        );
-        buffer.set_wrap(&mut system, Wrap::Word);
-
         Ok(Self {
-            id: meta.id.clone(),
-            text_content: builder.content,
+            _id: meta.id.clone(),
+            _text_content: builder.content,
             attrs_list: builder.attrs_list,
             links: builder.links,
+            _inline_images: builder.inline_images,
             style,
-            scroll_offset: 0.0,
-            buffer: Arc::new(Mutex::new(buffer)),
+            buffer: Mutex::new(None),
+            measure_cache: Arc::new(Mutex::new(Vec::with_capacity(CACHE_SIZE))),
+            last_shaped_width: Mutex::new(None),
         })
     }
 
-    pub fn prepend_text(&mut self, text: &str, engine: &LayoutEngine) {
-        let shift_amount = text.len();
-        let mut new_content = String::from(text);
-        new_content.push_str(&self.text_content);
+    /// Helper to initialize the buffer and set text.
+    /// Requires the system lock, so caller must only call this if guard is None.
+    fn initialize_buffer(
+        &self,
+        system: &mut cosmic_text::FontSystem,
+        font_manager: &crate::core::layout::FontManager,
+    ) -> Buffer {
+        let metrics = Metrics::new(self.style.text.font_size, self.style.text.line_height);
+        let mut buffer = Buffer::new(system, metrics);
 
-        let default_attrs = engine.font_manager.attrs_from_style(&self.style);
-        let mut new_attrs = cosmic_text::AttrsList::new(&default_attrs);
-
-        new_attrs.add_span(0..shift_amount, &default_attrs);
-
-        for (range, attrs) in self.attrs_list.spans() {
-            let new_range = (range.start + shift_amount)..(range.end + shift_amount);
-            new_attrs.add_span(new_range, &attrs.as_attrs());
-        }
-
-        self.text_content = new_content;
-        self.attrs_list = new_attrs;
-
-        let mut buffer = self.buffer.lock().unwrap();
-        let mut system = engine.font_manager.system.lock().unwrap();
-
-        let spans = self.attrs_list.spans().into_iter().map(|(range, attrs)| {
-            (
-                &self.text_content[range.clone()],
-                attrs.as_attrs()
-            )
-        });
-
-        buffer.set_rich_text(
-            &mut system,
-            spans,
-            &default_attrs,
-            cosmic_text::Shaping::Advanced,
-            None
-        );
-    }
-}
-
-impl LayoutNode for ParagraphNode {
-    fn style(&self) -> &Arc<ComputedStyle> {
-        &self.style
-    }
-
-    fn measure(&mut self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
-        let margin_y = self.style.box_model.margin.top + self.style.box_model.margin.bottom;
-
-        let mut buffer = self.buffer.lock().unwrap();
-        let mut system = env.engine.font_manager.system.lock().unwrap();
-
-        let set_width = if constraints.has_bounded_width() {
-            Some(constraints.max_width)
-        } else {
-            None
-        };
-
-        buffer.set_size(&mut system, set_width, None);
-        buffer.shape_until_scroll(&mut system, false);
-
-        let mut max_width: f32 = 0.0;
-        let mut height: f32 = 0.0;
-
-        let ascent_correction = buffer.layout_runs().next().map(|r| r.line_y).unwrap_or(0.0);
-
-        for run in buffer.layout_runs() {
-            max_width = max_width.max(run.line_w);
-            let line_top = run.line_y - ascent_correction;
-            height = line_top + run.line_height;
-        }
-
-        if let Some(Dimension::Pt(h)) = self.style.box_model.height {
-            height = h;
-        }
-
-        if self.text_content.is_empty() {
-            height = 0.0;
-            if let Some(Dimension::Pt(h)) = self.style.box_model.height {
-                height = h;
-            } else if let Dimension::Pt(h) = self.style.box_model.min_height {
-                height = h;
-            }
-        }
-
-        Size::new(max_width, height + margin_y)
-    }
-
-    fn layout(
-        &mut self,
-        ctx: &mut LayoutContext,
-    ) -> Result<LayoutResult, LayoutError> {
-        if let Some(id) = &self.id {
-            let location = AnchorLocation {
-                local_page_index: ctx.local_page_index,
-                y_pos: ctx.cursor.1 + ctx.bounds.y,
-            };
-            ctx.defined_anchors.insert(id.clone(), location);
-        }
-
-        let margin_to_add = self.style.box_model.margin.top.max(ctx.last_v_margin);
-        let is_continuation = self.scroll_offset > 0.0;
-
-        if !is_continuation {
-            if ctx.cursor.1 > 0.0 && margin_to_add > ctx.available_height() {
-                return Ok(LayoutResult::Partial(RenderNode::Paragraph(self.clone())));
-            }
-            ctx.advance_cursor(margin_to_add);
-        }
-        ctx.last_v_margin = 0.0;
-
-        let mut buffer = self.buffer.lock().unwrap();
-        let mut system = ctx.engine.font_manager.system.lock().unwrap();
+        buffer.set_wrap(system, Wrap::Word);
 
         let align = match self.style.text.text_align {
             TextAlign::Left => cosmic_text::Align::Left,
@@ -210,9 +99,219 @@ impl LayoutNode for ParagraphNode {
             line.set_align(Some(align));
         }
 
-        let width = ctx.bounds.width;
-        buffer.set_size(&mut system, Some(width), None);
-        buffer.shape_until_scroll(&mut system, false);
+        let default_attrs = font_manager.attrs_from_style(&self.style);
+        let spans = self.attrs_list.spans().into_iter().map(|(range, attrs)| {
+            (
+                &self._text_content[range.clone()],
+                attrs.as_attrs()
+            )
+        });
+
+        buffer.set_rich_text(
+            system,
+            spans,
+            &default_attrs,
+            cosmic_text::Shaping::Advanced,
+            None
+        );
+
+        buffer
+    }
+}
+
+impl LayoutNode for ParagraphNode {
+    fn style(&self) -> &Arc<ComputedStyle> {
+        &self.style
+    }
+
+    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
+        let set_width = if constraints.has_bounded_width() {
+            Some(constraints.max_width)
+        } else {
+            None
+        };
+
+        // 1. Check Cache
+        if let Ok(cache) = self.measure_cache.lock() {
+            for (cached_width, cached_size) in cache.iter() {
+                if width_fuzzy_eq(set_width, *cached_width) {
+                    return *cached_size;
+                }
+                // Reuse unbounded calculation if it fits within constraints
+                if cached_width.is_none() {
+                    if let Some(target_w) = set_width {
+                        if target_w >= cached_size.width - 0.01 {
+                            return *cached_size;
+                        }
+                    }
+                }
+            }
+        }
+
+        let margin_y = self.style.box_model.margin.top + self.style.box_model.margin.bottom;
+
+        // 2. Prepare Buffer (Lazy Init)
+        let mut buffer_guard = self.buffer.lock().unwrap();
+
+        // Critical Optimization: Check if init is needed BEFORE locking the global font system
+        if buffer_guard.is_none() {
+            let start = Instant::now();
+            let mut system = env.engine.font_manager.system.lock().unwrap();
+            let lock_time = start.elapsed();
+            if lock_time.as_millis() > 50 {
+                log::warn!("Paragraph measure lock took {}ms", lock_time.as_millis());
+            }
+
+            *buffer_guard = Some(self.initialize_buffer(&mut system, &env.engine.font_manager));
+        }
+
+        let buffer = buffer_guard.as_mut().unwrap();
+        let mut last_width_guard = self.last_shaped_width.lock().unwrap();
+
+        // 3. Determine if Reshape Needed
+        let width_changed = match (*last_width_guard, set_width) {
+            (Some(curr), Some(target)) => (curr - target).abs() > 0.01,
+            (Some(_), None) => true,
+            (None, Some(target)) => {
+                // Check if current content fits without reshaping
+                let mut max_w: f32 = 0.0;
+                for run in buffer.layout_runs() {
+                    max_w = max_w.max(run.line_w);
+                }
+
+                if max_w == 0.0 && !buffer.lines.is_empty() && buffer.layout_runs().count() == 0 {
+                    true // Unshaped state
+                } else {
+                    max_w > target + 0.01
+                }
+            },
+            (None, None) => {
+                buffer.layout_runs().count() == 0 && !self._text_content.is_empty()
+            },
+        };
+
+        if width_changed {
+            // Only lock global system if we actually need to shape
+            let start = Instant::now();
+            let mut system = env.engine.font_manager.system.lock().unwrap();
+            let lock_time = start.elapsed();
+
+            buffer.set_size(&mut system, set_width, None);
+            buffer.shape_until_scroll(&mut system, false);
+            *last_width_guard = set_width;
+
+            let total_time = start.elapsed();
+            if total_time.as_millis() > 50 {
+                log::warn!("Paragraph measure reshape took {}ms (lock: {}ms)", total_time.as_millis(), lock_time.as_millis());
+            }
+        }
+
+        // 4. Calculate size from buffer (Fast, local memory)
+        let mut max_width: f32 = 0.0;
+        let mut height: f32 = 0.0;
+
+        let runs: Vec<_> = buffer.layout_runs().collect();
+        let ascent_correction = runs.first().map(|r| r.line_y).unwrap_or(0.0);
+
+        for run in runs {
+            max_width = max_width.max(run.line_w);
+            let line_top = run.line_y - ascent_correction;
+            height = line_top + run.line_height;
+        }
+
+        if let Some(Dimension::Pt(h)) = self.style.box_model.height {
+            height = h;
+        }
+
+        let size = Size::new(max_width, height + margin_y);
+
+        // 5. Update Cache
+        if let Ok(mut cache) = self.measure_cache.lock() {
+            if cache.len() >= CACHE_SIZE {
+                cache.remove(0);
+            }
+            cache.push((set_width, size));
+        }
+
+        size
+    }
+
+    fn layout(
+        &self,
+        ctx: &mut LayoutContext,
+        constraints: BoxConstraints,
+        break_state: Option<Box<dyn Any + Send>>,
+    ) -> Result<LayoutResult, LayoutError> {
+        if let Some(id) = &self._id {
+            let location = AnchorLocation {
+                local_page_index: ctx.local_page_index,
+                y_pos: ctx.cursor.1 + ctx.bounds.y,
+            };
+            ctx.defined_anchors.insert(id.clone(), location);
+        }
+
+        let scroll_offset = if let Some(state) = break_state {
+            match state.downcast::<ParagraphState>() {
+                Ok(s) => s.scroll_offset,
+                Err(_) => return Err(LayoutError::Generic("Invalid state passed to ParagraphNode".to_string())),
+            }
+        } else {
+            0.0
+        };
+
+        let is_continuation = scroll_offset > 0.0;
+        let mut margin_applied = 0.0;
+
+        if !is_continuation {
+            let margin_to_add = self.style.box_model.margin.top.max(ctx.last_v_margin);
+
+            if ctx.cursor.1 > 0.1 && margin_to_add > ctx.available_height() {
+                return Ok(LayoutResult::Break(Box::new(ParagraphState { scroll_offset: 0.0 })));
+            }
+
+            ctx.advance_cursor(margin_to_add);
+            margin_applied = margin_to_add;
+        }
+        ctx.last_v_margin = 0.0;
+
+        let width = constraints.has_bounded_width().then_some(constraints.max_width).unwrap_or(ctx.bounds.width);
+
+        let mut buffer_guard = self.buffer.lock().unwrap();
+
+        // Lazy Init (Check before lock)
+        if buffer_guard.is_none() {
+            let mut system = ctx.engine.font_manager.system.lock().unwrap();
+            *buffer_guard = Some(self.initialize_buffer(&mut system, &ctx.engine.font_manager));
+        }
+
+        let buffer = buffer_guard.as_mut().unwrap();
+        let mut last_width_guard = self.last_shaped_width.lock().unwrap();
+
+        let width_changed = match *last_width_guard {
+            Some(w) => (w - width).abs() > 0.01,
+            None => {
+                let mut max_w: f32 = 0.0;
+                for run in buffer.layout_runs() {
+                    max_w = max_w.max(run.line_w);
+                }
+                (max_w == 0.0 && !self._text_content.is_empty()) || max_w > width + 0.01
+            },
+        };
+
+        if width_changed {
+            let start = Instant::now();
+            let mut system = ctx.engine.font_manager.system.lock().unwrap();
+            let lock_time = start.elapsed();
+
+            buffer.set_size(&mut system, Some(width), None);
+            buffer.shape_until_scroll(&mut system, false);
+            *last_width_guard = Some(width);
+
+            let total_time = start.elapsed();
+            if total_time.as_millis() > 50 {
+                log::warn!("Paragraph layout reshape took {}ms (lock: {}ms)", total_time.as_millis(), lock_time.as_millis());
+            }
+        }
 
         let available_height = ctx.available_height();
 
@@ -220,16 +319,13 @@ impl LayoutNode for ParagraphNode {
         let ascent_correction = all_runs.first().map(|r| r.line_y).unwrap_or(0.0);
 
         let remaining_runs: Vec<&LayoutRun> = all_runs.iter()
-            .filter(|run| (run.line_y - ascent_correction) >= self.scroll_offset - 0.01)
+            .filter(|run| (run.line_y - ascent_correction) >= scroll_offset - 0.01)
             .collect();
 
         if remaining_runs.is_empty() {
             ctx.last_v_margin = self.style.box_model.margin.bottom;
-            return Ok(LayoutResult::Full);
+            return Ok(LayoutResult::Finished);
         }
-
-        let mut runs_to_render = Vec::new();
-        let mut next_page_start_y = None;
 
         let orphans = self.style.misc.orphans.max(1) as usize;
         let widows = self.style.misc.widows.max(1) as usize;
@@ -237,8 +333,7 @@ impl LayoutNode for ParagraphNode {
         let mut fit_count = 0;
         for run in &remaining_runs {
             let line_top = run.line_y - ascent_correction;
-            let local_y = line_top - self.scroll_offset;
-
+            let local_y = line_top - scroll_offset;
             if local_y + run.line_height <= available_height + 0.1 {
                 fit_count += 1;
             } else {
@@ -246,49 +341,52 @@ impl LayoutNode for ParagraphNode {
             }
         }
 
-        if fit_count == remaining_runs.len() {
-            runs_to_render.extend(remaining_runs);
-        } else {
-            if fit_count < orphans {
-                if ctx.cursor.1 > 0.0 {
-                    return Ok(LayoutResult::Partial(RenderNode::Paragraph(self.clone())));
+        let mut forced_break_to_start = false;
+        let at_top_threshold = if is_continuation { 0.1 } else { margin_applied + 2.0 };
+        let is_at_top_of_container = ctx.cursor.1 <= at_top_threshold;
+
+        if fit_count < remaining_runs.len() {
+            if fit_count < orphans && !is_continuation {
+                if !is_at_top_of_container {
+                    forced_break_to_start = true;
                 }
             }
 
-            let remaining_count = remaining_runs.len() - fit_count;
-            if remaining_count < widows {
-                let needed = widows - remaining_count;
-                if fit_count > needed {
-                    fit_count -= needed;
-                } else {
-                    if ctx.cursor.1 > 0.0 {
-                        return Ok(LayoutResult::Partial(RenderNode::Paragraph(self.clone())));
+            if !forced_break_to_start {
+                let remaining_after = remaining_runs.len() - fit_count;
+                if remaining_after < widows {
+                    let needed_on_next = widows - remaining_after;
+                    if fit_count > needed_on_next {
+                        fit_count -= needed_on_next;
+                    } else {
+                        if !is_continuation && !is_at_top_of_container {
+                            forced_break_to_start = true;
+                        }
                     }
                 }
             }
+        }
 
-            if fit_count == 0 && ctx.cursor.1 == 0.0 && !remaining_runs.is_empty() {
-                fit_count = 1;
-            }
+        if forced_break_to_start {
+            return Ok(LayoutResult::Break(Box::new(ParagraphState { scroll_offset: 0.0 })));
+        }
 
-            for i in 0..fit_count {
-                runs_to_render.push(remaining_runs[i]);
+        if fit_count == 0 && !remaining_runs.is_empty() {
+            if !is_at_top_of_container {
+                return Ok(LayoutResult::Break(Box::new(ParagraphState { scroll_offset })));
             }
-
-            if fit_count < remaining_runs.len() {
-                let next_run = remaining_runs[fit_count];
-                next_page_start_y = Some(next_run.line_y - ascent_correction);
-            }
+            fit_count = 1;
         }
 
         let mut last_run_bottom = 0.0;
         let is_justified = self.style.text.text_align == TextAlign::Justify;
 
-        for run in runs_to_render {
+        for i in 0..fit_count {
+            let run = remaining_runs[i];
             let line_top = run.line_y - ascent_correction;
-            let local_y = line_top - self.scroll_offset;
+            let local_y = line_top - scroll_offset;
 
-            let mut group_glyphs: Vec<&cosmic_text::LayoutGlyph> = Vec::new();
+            let mut group_glyphs = Vec::new();
             let mut current_metadata = if let Some(first) = run.glyphs.first() { first.metadata } else { 0 };
 
             for glyph in run.glyphs.iter() {
@@ -296,103 +394,45 @@ impl LayoutNode for ParagraphNode {
                 let mut should_break = metadata_changed;
 
                 if !should_break && is_justified && !group_glyphs.is_empty() {
-                    let first_g = group_glyphs[0];
+                    let first_g: &cosmic_text::LayoutGlyph = group_glyphs[0];
                     let group_is_space = run.text[first_g.start..first_g.end].chars().all(char::is_whitespace);
                     let current_is_space = run.text[glyph.start..glyph.end].chars().all(char::is_whitespace);
-
                     if group_is_space != current_is_space {
                         should_break = true;
                     }
                 }
 
                 if should_break {
-                    flush_group(
-                        ctx,
-                        &group_glyphs,
-                        current_metadata,
-                        local_y,
-                        run.line_height,
-                        &self.style,
-                        &self.links,
-                        run.text
-                    );
+                    flush_group(ctx, &group_glyphs, current_metadata, local_y, run.line_height, &self.style, &self.links, run.text);
                     group_glyphs.clear();
                     current_metadata = glyph.metadata;
                 }
                 group_glyphs.push(glyph);
             }
-
             if !group_glyphs.is_empty() {
-                flush_group(
-                    ctx,
-                    &group_glyphs,
-                    current_metadata,
-                    local_y,
-                    run.line_height,
-                    &self.style,
-                    &self.links,
-                    run.text
-                );
+                flush_group(ctx, &group_glyphs, current_metadata, local_y, run.line_height, &self.style, &self.links, run.text);
             }
 
             last_run_bottom = local_y + run.line_height;
         }
 
-        if let Some(break_y) = next_page_start_y {
-            ctx.advance_cursor(last_run_bottom);
-            let mut remainder = self.clone();
-            remainder.scroll_offset = break_y;
-            return Ok(LayoutResult::Partial(RenderNode::Paragraph(remainder)));
+        ctx.advance_cursor(last_run_bottom);
+
+        if fit_count < remaining_runs.len() {
+            let next_run = remaining_runs[fit_count];
+            let next_offset = next_run.line_y - ascent_correction;
+            return Ok(LayoutResult::Break(Box::new(ParagraphState { scroll_offset: next_offset })));
         }
 
-        ctx.advance_cursor(last_run_bottom);
         ctx.last_v_margin = self.style.box_model.margin.bottom;
-
-        Ok(LayoutResult::Full)
+        Ok(LayoutResult::Finished)
     }
 }
 
-fn flush_group(
-    ctx: &mut LayoutContext,
-    glyphs: &[&cosmic_text::LayoutGlyph],
-    metadata: usize,
-    y: f32,
-    height: f32,
-    style: &Arc<ComputedStyle>,
-    links: &[String],
-    full_text: &str
-) {
-    if glyphs.is_empty() { return; }
-
-    let start_x = glyphs.first().unwrap().x;
-    let end_x = glyphs.last().unwrap().x + glyphs.last().unwrap().w;
-    let width = end_x - start_x;
-
-    let start_idx = glyphs.first().unwrap().start;
-    let end_idx = glyphs.last().unwrap().end;
-
-    let start_idx = start_idx.min(full_text.len());
-    let end_idx = end_idx.min(full_text.len());
-
-    let text_segment = &full_text[start_idx..end_idx];
-
-    let href = if metadata > 0 && metadata <= links.len() {
-        Some(links[metadata - 1].clone())
-    } else {
-        None
-    };
-
-    let element = PositionedElement {
-        x: start_x,
-        y,
-        width,
-        height,
-        element: crate::core::layout::LayoutElement::Text(TextElement {
-            content: text_segment.to_string(),
-            href,
-            text_decoration: style.text.text_decoration.clone(),
-        }),
-        style: style.clone(),
-    };
-    ctx.push_element(element);
+fn width_fuzzy_eq(a: Option<f32>, b: Option<f32>) -> bool {
+    match (a, b) {
+        (Some(va), Some(vb)) => (va - vb).abs() < 0.01,
+        (None, None) => true,
+        _ => false,
+    }
 }

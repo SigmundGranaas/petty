@@ -1,13 +1,14 @@
-use crate::core::idf::IRNode;
 use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
-    AnchorLocation, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, RenderNode,
+    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, RenderNode,
 };
 use crate::core::layout::nodes::paragraph::ParagraphNode;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{LayoutEngine, LayoutError};
 use std::sync::Arc;
+use std::any::Any;
+use crate::core::idf::IRNode;
 
 pub struct HeadingBuilder;
 
@@ -18,12 +19,11 @@ impl NodeBuilder for HeadingBuilder {
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
     ) -> Result<RenderNode, LayoutError> {
-        Ok(RenderNode::Heading(HeadingNode::new(node, engine, parent_style)?))
+        Ok(Box::new(HeadingNode::new(node, engine, parent_style)?))
     }
 }
 
-/// A `LayoutNode` for headings.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct HeadingNode {
     id: Option<String>,
     p_node: ParagraphNode,
@@ -31,12 +31,12 @@ pub struct HeadingNode {
 
 impl HeadingNode {
     pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Result<Self, LayoutError> {
-        let (meta, _level, children) = match node {
+        let (meta, children) = match node {
             IRNode::Heading {
                 meta,
-                level,
                 children,
-            } => (meta, level, children),
+                ..
+            } => (meta, children),
             _ => return Err(LayoutError::BuilderMismatch("Heading", node.kind())),
         };
 
@@ -59,21 +59,16 @@ impl LayoutNode for HeadingNode {
         self.p_node.style()
     }
 
-    fn measure(&mut self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
+    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
         self.p_node.measure(env, constraints)
     }
 
     fn layout(
-        &mut self,
+        &self,
         ctx: &mut LayoutContext,
+        constraints: BoxConstraints,
+        break_state: Option<Box<dyn Any + Send>>,
     ) -> Result<LayoutResult, LayoutError> {
-        if let Some(id) = &self.id {
-            let location = AnchorLocation {
-                local_page_index: ctx.local_page_index,
-                y_pos: ctx.cursor.1 + ctx.bounds.y,
-            };
-            ctx.defined_anchors.insert(id.clone(), location);
-        }
-        self.p_node.layout(ctx)
+        self.p_node.layout(ctx, constraints, break_state)
     }
 }

@@ -1,4 +1,3 @@
-#![cfg(test)]
 use crate::core::idf::{IRNode, NodeMetadata};
 use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
 use crate::core::style::dimension::{Dimension, Margins, PageSize};
@@ -241,31 +240,60 @@ fn test_flex_wrap_with_page_break() {
     let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     assert_eq!(pages.len(), 2);
     let page1 = &pages[0];
-    let _page2 = &pages[1];
+    let page2 = &pages[1];
 
     assert!(find_first_text_box_with_content(page1, "3").is_some());
 
-    // Update: With the relaxed splitting logic, Item 4 starts at y=40 (relative) + 10 (margin).
-    // Page height 60. Available 20.
-    // Item 4 height 40.
-    // It fits 20px.
-    // Since Item 4 is "4" (1 line ~14.4px), content fits in 20px.
-    // So Item 4 renders on Page 1.
-    // The test previously asserted it moved to Page 2.
-    // Since the engine now favors splitting over pushing, we update expectations.
-    // The item "4" text should appear on Page 1.
-    assert!(find_first_text_box_with_content(page1, "4").is_some());
+    // Item 4 overflows page 1 (available 20h, needs 40h).
+    // FlexNode pushes non-first items to next page.
+    // So Item 4 should be on Page 2.
+    assert!(find_first_text_box_with_content(page1, "4").is_none(), "Item 4 should be pushed to page 2");
+    assert!(find_first_text_box_with_content(page2, "4").is_some(), "Item 4 should be on page 2");
+}
 
-    // Since content fit on Page 1, Page 2 might be empty or contain the empty remainder of the block?
-    // Actually, if content fits, BlockNode renders fully.
-    // But BlockNode measure/layout doesn't perfectly respect fixed height for drawing content?
-    // If it did split, remainder would be on Page 2.
-    // Let's check if there's anything on Page 2.
-    // If Page 2 exists, it means something spilled over.
-    // Block fixed height 40. Content 14.4.
-    // If Block respects fixed height, it consumes 40px.
-    // 20px on Page 1. 20px on Page 2.
-    // So Page 2 should exist.
+#[test]
+fn test_block_split_resets_padding_and_border() {
+    let stylesheet = Stylesheet {
+        page_masters: HashMap::from([(
+            "master".to_string(),
+            PageLayout {
+                size: PageSize::Custom { width: 500.0, height: 100.0 }, // 100 height
+                margins: Some(Margins::all(10.0)), // Content height 80
+                ..Default::default()
+            },
+        )]),
+        default_page_master_name: Some("master".to_string()),
+        ..Default::default()
+    };
 
-    // Just verifying we have 2 pages is good enough to show break happened.
+    let block_style = ElementStyle {
+        padding: Some(Margins { top: 20.0, ..Default::default() }),
+        border_top: Some(crate::core::style::border::Border {
+            width: 10.0,
+            style: crate::core::style::border::BorderStyle::Solid,
+            color: Default::default(),
+        }),
+        ..Default::default()
+    };
+
+    let nodes = vec![IRNode::Block {
+        meta: NodeMetadata {
+            style_override: Some(block_style),
+            ..Default::default()
+        },
+        children: vec![
+            create_paragraph("Child 1"), // ~14.4px
+            create_paragraph("Child 2\nLine 2\nLine 3\nLine 4"), // Taller to force push/split
+        ],
+    }];
+
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
+    assert_eq!(pages.len(), 2);
+
+    let page2 = &pages[1];
+    let text_on_p2 = find_first_text_box_with_content(page2, "Line").unwrap();
+
+    // If bug exists, y will be > 10.0 (e.g. 10 + 10 + 20 = 40).
+    // If fixed, y should be 10.0 (plus maybe small margin if paragraph has one, default is 0).
+    assert!((text_on_p2.y - 10.0).abs() < 1.0, "Content on page 2 should start at top margin, got {}", text_on_p2.y);
 }

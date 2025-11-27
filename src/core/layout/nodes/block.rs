@@ -1,18 +1,17 @@
-use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::elements::RectElement;
 use crate::core::layout::geom::{self, BoxConstraints, Size};
 use crate::core::layout::node::{
     AnchorLocation, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, RenderNode,
 };
 use crate::core::layout::style::ComputedStyle;
-use crate::core::layout::util::VerticalStacker;
 use crate::core::layout::{LayoutElement, LayoutEngine, LayoutError, PositionedElement};
 use crate::core::style::border::Border;
 use crate::core::style::dimension::Dimension;
 use std::sync::Arc;
+use std::any::Any;
 use crate::core::idf::IRNode;
+use crate::core::layout::builder::NodeBuilder;
 
-/// A builder for `BlockNode`s.
 pub struct BlockBuilder;
 
 impl NodeBuilder for BlockBuilder {
@@ -29,11 +28,10 @@ impl NodeBuilder for BlockBuilder {
             _ => return Err(LayoutError::BuilderMismatch("Block", node.kind())),
         };
         let children = engine.build_layout_node_children(ir_children, style.clone())?;
-        Ok(RenderNode::Block(BlockNode::new_from_children(id, children, style)))
+        Ok(Box::new(BlockNode::new_from_children(id, children, style)))
     }
 }
 
-/// A builder specifically for the Root node, which resets style inheritance.
 pub struct RootBuilder;
 
 impl NodeBuilder for RootBuilder {
@@ -49,20 +47,24 @@ impl NodeBuilder for RootBuilder {
             _ => return Err(LayoutError::BuilderMismatch("Root", node.kind())),
         };
         let children_nodes = engine.build_layout_node_children(children, style.clone())?;
-        Ok(RenderNode::Block(BlockNode::new_from_children(None, children_nodes, style)))
+        Ok(Box::new(BlockNode::new_from_children(None, children_nodes, style)))
     }
 }
 
-/// A `LayoutNode` for block-level containers like `<div>`.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct BlockNode {
     id: Option<String>,
     children: Vec<RenderNode>,
     style: Arc<ComputedStyle>,
 }
 
+#[derive(Debug)]
+struct BlockState {
+    child_index: usize,
+    child_state: Option<Box<dyn Any + Send>>,
+}
+
 impl BlockNode {
-    // Internal constructor
     pub fn new_from_children(
         id: Option<String>,
         children: Vec<RenderNode>,
@@ -81,23 +83,19 @@ impl LayoutNode for BlockNode {
         &self.style
     }
 
-    fn measure(&mut self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
-        // 1. Determine horizontal space availability
-        // Use abstraction for arithmetic
+    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
         let h_deduction = self.style.padding_x() + self.style.border_x();
         let child_constraints = self.style.content_constraints(constraints);
 
-        // 2. Measure children
         let mut max_child_width: f32 = 0.0;
         let mut total_content_height: f32 = 0.0;
 
-        for child in &mut self.children {
+        for child in &self.children {
             let child_size = child.measure(env, child_constraints);
             max_child_width = max_child_width.max(child_size.width);
             total_content_height += child_size.height;
         }
 
-        // 3. Calculate own dimensions
         let padding_y = self.style.padding_y();
         let border_y = self.style.border_y();
         let margin_y = self.style.box_model.margin.top + self.style.box_model.margin.bottom;
@@ -120,8 +118,10 @@ impl LayoutNode for BlockNode {
     }
 
     fn layout(
-        &mut self,
+        &self,
         ctx: &mut LayoutContext,
+        constraints: BoxConstraints,
+        break_state: Option<Box<dyn Any + Send>>,
     ) -> Result<LayoutResult, LayoutError> {
         if let Some(id) = &self.id {
             let location = AnchorLocation {
@@ -131,180 +131,121 @@ impl LayoutNode for BlockNode {
             ctx.defined_anchors.insert(id.clone(), location);
         }
 
-        // --- Vertical Margin Collapsing ---
-        let margin_to_add = self.style.box_model.margin.top.max(ctx.last_v_margin);
+        let (start_index, child_break_state) = if let Some(state) = break_state {
+            let s = *state.downcast::<BlockState>().map_err(|_| LayoutError::Generic("Invalid state for BlockNode".into()))?;
+            (s.child_index, s.child_state)
+        } else {
+            (0, None)
+        };
 
-        if ctx.cursor.1 > 0.0 && margin_to_add > ctx.available_height() {
-            return Ok(LayoutResult::Partial(RenderNode::Block(self.clone())));
+        let is_continuation = start_index > 0 || child_break_state.is_some();
+
+        // Margins only apply at start of block (not continuation)
+        if !is_continuation {
+            let margin_to_add = self.style.box_model.margin.top.max(ctx.last_v_margin);
+            // If margin pushes us over and we aren't at top, partial
+            if ctx.cursor.1 > 0.0 && margin_to_add > ctx.available_height() {
+                return Ok(LayoutResult::Break(Box::new(BlockState { child_index: 0, child_state: None })));
+            }
+            ctx.advance_cursor(margin_to_add);
         }
-        ctx.advance_cursor(margin_to_add);
         ctx.last_v_margin = 0.0;
 
         let border_top = self.style.border_top_width();
         let border_bottom = self.style.border_bottom_width();
         let border_left = self.style.border_left_width();
-        let _border_right = self.style.border_right_width();
+
+        // Borders/Padding only on start/end
+        let top_spacing = if !is_continuation { border_top + self.style.box_model.padding.top } else { 0.0 };
 
         let block_start_y_in_ctx = ctx.cursor.1;
-        ctx.advance_cursor(border_top + self.style.box_model.padding.top);
+        ctx.advance_cursor(top_spacing);
         let content_start_y_in_ctx = ctx.cursor.1;
 
-        // Capture the index where content starts so we can insert background *before* it later.
-        let content_start_index = ctx.elements.len();
+        let child_constraints = self.style.content_constraints(constraints);
 
-        let (content_height, child_last_v_margin, partial_children) = {
-            let child_bounds = geom::Rect {
-                x: ctx.bounds.x + border_left + self.style.box_model.padding.left,
-                y: ctx.bounds.y + content_start_y_in_ctx,
-                width: ctx.bounds.width
-                    - self.style.padding_x()
-                    - self.style.border_x(),
-                height: ctx.available_height(),
-            };
-
-            ctx.with_child_bounds(child_bounds, |child_ctx| {
-                // Use the abstracted pagination logic
-                let split_result = VerticalStacker::layout_children(child_ctx, &mut self.children)?;
-                Ok((child_ctx.cursor.1, child_ctx.last_v_margin, split_result))
-            })?
+        let child_bounds = geom::Rect {
+            x: ctx.bounds.x + border_left + self.style.box_model.padding.left,
+            y: ctx.bounds.y + content_start_y_in_ctx,
+            width: ctx.bounds.width - self.style.padding_x() - self.style.border_x(),
+            height: ctx.available_height(),
         };
 
-        // If children split, return partial.
-        if let Some(remaining_children) = partial_children {
-            let bg_elements = create_background_and_borders(
-                ctx.bounds,
-                &self.style,
-                block_start_y_in_ctx,
-                content_height,
-            );
+        let mut child_split_result = LayoutResult::Finished;
 
-            for el in bg_elements.into_iter().rev() {
-                ctx.elements.insert(content_start_index, el);
+        let used_height = ctx.with_child_bounds(child_bounds, |child_ctx| {
+            let mut current_child_state = child_break_state;
+
+            for (i, child) in self.children.iter().enumerate().skip(start_index) {
+                let res = child.layout(child_ctx, child_constraints, current_child_state.take())?;
+                match res {
+                    LayoutResult::Finished => {}
+                    LayoutResult::Break(next_state) => {
+                        child_split_result = LayoutResult::Break(Box::new(BlockState {
+                            child_index: i,
+                            child_state: Some(next_state),
+                        }));
+                        break;
+                    }
+                }
             }
-
-            ctx.cursor.1 = content_start_y_in_ctx
-                + content_height
-                + self.style.box_model.padding.bottom
-                + border_bottom;
-            ctx.last_v_margin = child_last_v_margin;
-
-            // Reset styles for next page
-            let mut next_style = (*self.style).clone();
-            next_style.box_model.margin.top = 0.0;
-            next_style.border.top = None;
-            next_style.box_model.padding.top = 0.0;
-            if next_style.box_model.height.is_some() {
-                next_style.box_model.height = None;
-            }
-
-            let mut next_page_block = BlockNode {
-                id: self.id.clone(),
-                children: remaining_children,
-                style: Arc::new(next_style),
-            };
-            // Measure partial block just in case it's needed for layout
-            next_page_block.measure(&LayoutEnvironment{ engine: ctx.engine, local_page_index: ctx.local_page_index }, BoxConstraints::tight_width(ctx.bounds.width));
-
-            return Ok(LayoutResult::Partial(RenderNode::Block(next_page_block)));
-        }
-
-        // Full fit logic
-        let fixed_height_opt = if let Some(Dimension::Pt(h)) = self.style.box_model.height { Some(h) } else { None };
-        let vertical_spacing = border_top + self.style.padding_y() + border_bottom;
-
-        let desired_border_box_height = if let Some(h) = fixed_height_opt {
-            content_height.max((h - vertical_spacing).max(0.0)) + vertical_spacing
-        } else {
-            content_height + vertical_spacing
-        };
-
-        let available = ctx.available_height();
-
-        if desired_border_box_height > available + 0.1 {
-            // Split due to fixed height overflow
-            let taken_height = available;
-
-            let bg_elements = create_background_and_borders(
-                ctx.bounds,
-                &self.style,
-                block_start_y_in_ctx,
-                (taken_height - vertical_spacing).max(0.0)
-            );
-            for el in bg_elements.into_iter().rev() {
-                ctx.elements.insert(content_start_index, el);
-            }
-
-            ctx.cursor.1 = block_start_y_in_ctx + taken_height;
-            let remaining_height = desired_border_box_height - taken_height;
-            let mut next_style = (*self.style).clone();
-            next_style.box_model.height = Some(Dimension::Pt(remaining_height));
-            next_style.box_model.margin.top = 0.0;
-            next_style.border.top = None;
-            next_style.box_model.padding.top = 0.0;
-
-            let remainder = BlockNode {
-                id: self.id.clone(),
-                children: vec![],
-                style: Arc::new(next_style)
-            };
-            return Ok(LayoutResult::Partial(RenderNode::Block(remainder)));
-        }
-
-        // Full fit
-        let final_content_height = if let Some(h) = fixed_height_opt {
-            (h - vertical_spacing).max(0.0).max(content_height)
-        } else {
-            content_height
-        };
+            Ok(child_ctx.cursor.1)
+        })?;
 
         let bg_elements = create_background_and_borders(
             ctx.bounds,
             &self.style,
             block_start_y_in_ctx,
-            final_content_height,
+            used_height,
+            !is_continuation,
+            matches!(child_split_result, LayoutResult::Finished)
         );
-        for el in bg_elements.into_iter().rev() {
-            ctx.elements.insert(content_start_index, el);
+
+        ctx.elements.extend(bg_elements);
+
+        match child_split_result {
+            LayoutResult::Finished => {
+                let bottom_spacing = self.style.box_model.padding.bottom + border_bottom;
+                ctx.cursor.1 = content_start_y_in_ctx + used_height + bottom_spacing;
+                ctx.last_v_margin = self.style.box_model.margin.bottom;
+                Ok(LayoutResult::Finished)
+            }
+            LayoutResult::Break(state) => {
+                ctx.cursor.1 = content_start_y_in_ctx + used_height;
+                Ok(LayoutResult::Break(state))
+            }
         }
-
-        ctx.cursor.1 = content_start_y_in_ctx
-            + final_content_height
-            + self.style.box_model.padding.bottom
-            + border_bottom;
-        ctx.last_v_margin = self.style.box_model.margin.bottom.max(child_last_v_margin);
-
-        Ok(LayoutResult::Full)
     }
 
-    fn check_for_page_break(&mut self) -> Option<Option<String>> {
-        if let Some(first_child) = self.children.first_mut() {
-            if first_child.is_page_break() {
-                let page_break_node = self.children.remove(0);
-                // We know it is a page break, extract safely
-                if let RenderNode::PageBreak(node) = page_break_node {
-                    return Some(node.master_name);
-                }
+    fn check_for_page_break(&self) -> Option<Option<String>> {
+        if let Some(first_child) = self.children.first() {
+            if first_child.check_for_page_break().is_some() {
+                return first_child.check_for_page_break();
             }
         }
         None
     }
 }
 
-pub(super) fn create_background_and_borders(
+pub fn create_background_and_borders(
     bounds: geom::Rect,
     style: &Arc<ComputedStyle>,
     start_y: f32,
     content_height: f32,
+    draw_top: bool,
+    draw_bottom: bool,
 ) -> Vec<PositionedElement> {
     let mut elements = Vec::new();
 
-    let border_top = style.border_top_width();
-    let border_bottom = style.border_bottom_width();
+    let border_top = if draw_top { style.border_top_width() } else { 0.0 };
+    let border_bottom = if draw_bottom { style.border_bottom_width() } else { 0.0 };
     let border_left = style.border_left_width();
     let border_right = style.border_right_width();
 
-    let inner_height = style.padding_y() + content_height;
-    let total_height = border_top + inner_height + border_bottom;
+    let padding_top = if draw_top { style.box_model.padding.top } else { 0.0 };
+    let padding_bottom = if draw_bottom { style.box_model.padding.bottom } else { 0.0 };
+
+    let total_height = border_top + padding_top + content_height + padding_bottom + border_bottom;
 
     if total_height <= 0.0 {
         return elements;
@@ -324,7 +265,7 @@ pub(super) fn create_background_and_borders(
             x: border_left,
             y: border_top,
             width: bounds.width - border_left - border_right,
-            height: inner_height,
+            height: total_height - border_top - border_bottom,
         };
         let bg = PositionedElement {
             element: LayoutElement::Rectangle(RectElement),
@@ -334,12 +275,13 @@ pub(super) fn create_background_and_borders(
         push(bg, 0.0, start_y);
     }
 
+    let bounds_width = bounds.width;
+
     let mut draw_border = |b: &Option<Border>, rect: geom::Rect| {
         if let Some(border) = b {
             if border.width > 0.0 {
                 let mut border_style = ComputedStyle::default();
                 border_style.misc.background_color = Some(border.color.clone());
-
                 let positioned_rect = PositionedElement {
                     element: LayoutElement::Rectangle(RectElement),
                     style: Arc::new(border_style),
@@ -350,54 +292,15 @@ pub(super) fn create_background_and_borders(
         }
     };
 
-    let bounds_width = bounds.width;
-    draw_border(
-        &style.border.top,
-        geom::Rect {
-            x: 0.0,
-            y: 0.0,
-            width: bounds_width,
-            height: border_top,
-        },
-    );
-    draw_border(
-        &style.border.bottom,
-        geom::Rect {
-            x: 0.0,
-            y: total_height - border_bottom,
-            width: bounds_width,
-            height: border_bottom,
-        },
-    );
-    draw_border(
-        &style.border.left,
-        geom::Rect {
-            x: 0.0,
-            y: 0.0,
-            width: border_left,
-            height: total_height,
-        },
-    );
-    draw_border(
-        &style.border.right,
-        geom::Rect {
-            x: bounds_width - border_right,
-            y: 0.0,
-            width: border_right,
-            height: total_height,
-        },
-    );
+    if draw_top {
+        draw_border(&style.border.top, geom::Rect { x: 0.0, y: 0.0, width: bounds_width, height: border_top });
+    }
+    if draw_bottom {
+        draw_border(&style.border.bottom, geom::Rect { x: 0.0, y: total_height - border_bottom, width: bounds_width, height: border_bottom });
+    }
+
+    draw_border(&style.border.left, geom::Rect { x: 0.0, y: 0.0, width: border_left, height: total_height });
+    draw_border(&style.border.right, geom::Rect { x: bounds_width - border_right, y: 0.0, width: border_right, height: total_height });
 
     elements
-}
-
-pub(super) fn draw_background_and_borders(
-    elements: &mut Vec<PositionedElement>,
-    bounds: geom::Rect,
-    style: &Arc<ComputedStyle>,
-    start_y: f32,
-    content_height: f32,
-) {
-    let new_els = create_background_and_borders(bounds, style, start_y, content_height);
-    elements.extend(new_els);
 }

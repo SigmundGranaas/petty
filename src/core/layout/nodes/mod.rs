@@ -1,4 +1,4 @@
-//! Contains the implementations of the `LayoutNode` trait for each document element type.
+//! Contains the implementations of the LayoutNode trait for each document element type.
 
 pub mod block;
 pub mod flex;
@@ -7,9 +7,12 @@ pub mod image;
 pub mod index_marker;
 pub mod list;
 pub mod list_item;
+pub mod list_utils;
 pub mod page_break;
 pub mod paragraph;
+pub mod paragraph_utils;
 pub mod table;
+pub mod taffy_utils;
 
 #[cfg(test)]
 mod block_test;
@@ -23,3 +26,5 @@ mod image_test;
 mod index_marker_test;
 #[cfg(test)]
 mod table_test;
+#[cfg(test)]
+mod list_test;
