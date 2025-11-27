@@ -1,3 +1,4 @@
+// src/core/layout/geom.rs
 /// A rectangle with position and dimensions.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Rect {
@@ -20,7 +21,10 @@ impl Size {
     }
 
     pub fn zero() -> Self {
-        Self { width: 0.0, height: 0.0 }
+        Self {
+            width: 0.0,
+            height: 0.0,
+        }
     }
 }
 
@@ -36,11 +40,12 @@ pub struct BoxConstraints {
 
 impl PartialEq for BoxConstraints {
     fn eq(&self, other: &Self) -> bool {
-        let eps = 0.001;
-        (self.min_width - other.min_width).abs() < eps
-            && (self.max_width - other.max_width).abs() < eps
-            && (self.min_height - other.min_height).abs() < eps
-            && (self.max_height - other.max_height).abs() < eps
+        // Aligned with util::floats_fuzzy_eq epsilon
+        const EPSILON: f32 = 0.01;
+        (self.min_width - other.min_width).abs() < EPSILON
+            && (self.max_width - other.max_width).abs() < EPSILON
+            && (self.min_height - other.min_height).abs() < EPSILON
+            && (self.max_height - other.max_height).abs() < EPSILON
     }
 }
 

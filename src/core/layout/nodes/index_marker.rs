@@ -1,26 +1,13 @@
-use crate::core::layout::builder::NodeBuilder;
+// src/core/layout/nodes/index_marker.rs
+
+use crate::core::idf::IRNode;
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
-    IndexEntry, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, RenderNode,
+    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode,
 };
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{LayoutEngine, LayoutError};
 use std::sync::Arc;
-use std::any::Any;
-use crate::core::idf::IRNode;
-
-pub struct IndexMarkerBuilder;
-
-impl NodeBuilder for IndexMarkerBuilder {
-    fn build(
-        &self,
-        node: &IRNode,
-        _engine: &LayoutEngine,
-        _parent_style: Arc<ComputedStyle>,
-    ) -> Result<RenderNode, LayoutError> {
-        Ok(Box::new(IndexMarkerNode::new(node)?))
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct IndexMarkerNode {
@@ -29,13 +16,20 @@ pub struct IndexMarkerNode {
 }
 
 impl IndexMarkerNode {
+    pub fn build(
+        node: &IRNode,
+        _engine: &LayoutEngine,
+        _parent_style: Arc<ComputedStyle>,
+    ) -> Result<RenderNode, LayoutError> {
+        Ok(RenderNode::IndexMarker(Box::new(Self::new(node)?)))
+    }
+
     pub fn new(node: &IRNode) -> Result<Self, LayoutError> {
-        let term = match node {
-            IRNode::IndexMarker { term, .. } => term.clone(),
-            _ => return Err(LayoutError::BuilderMismatch("IndexMarker", node.kind())),
+        let IRNode::IndexMarker { term, .. } = node else {
+            return Err(LayoutError::BuilderMismatch("IndexMarker", node.kind()));
         };
         Ok(Self {
-            term,
+            term: term.clone(),
             style: Arc::new(ComputedStyle::default()),
         })
     }
@@ -54,17 +48,9 @@ impl LayoutNode for IndexMarkerNode {
         &self,
         ctx: &mut LayoutContext,
         _constraints: BoxConstraints,
-        _break_state: Option<Box<dyn Any + Send>>,
+        _break_state: Option<NodeState>,
     ) -> Result<LayoutResult, LayoutError> {
-        let entry = IndexEntry {
-            local_page_index: ctx.local_page_index,
-            y_pos: ctx.cursor.1 + ctx.bounds.y,
-        };
-        ctx.index_entries
-            .entry(self.term.clone())
-            .or_default()
-            .push(entry);
-
+        ctx.register_index_entry(&self.term);
         Ok(LayoutResult::Finished)
     }
 }

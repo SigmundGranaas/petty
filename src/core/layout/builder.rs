@@ -1,9 +1,11 @@
+// src/core/layout/builder.rs
 //! Defines the trait and registry for constructing `LayoutNode`s from `IRNode`s.
 //! This decoupling allows new node types to be registered without modifying the core engine.
 
 use crate::core::idf::IRNode;
 use crate::core::layout::engine::LayoutEngine;
 use crate::core::layout::node::RenderNode;
+use crate::core::layout::node_kind::NodeKind;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::LayoutError;
 use std::collections::HashMap;
@@ -19,9 +21,9 @@ pub trait NodeBuilder: Send + Sync {
     ) -> Result<RenderNode, LayoutError>;
 }
 
-/// A registry for mapping `IRNode` types (via `kind()`) to `NodeBuilder`s.
+/// A registry for mapping `NodeKind` to `NodeBuilder`s.
 pub struct NodeRegistry {
-    builders: HashMap<String, Box<dyn NodeBuilder>>,
+    builders: HashMap<NodeKind, Box<dyn NodeBuilder>>,
 }
 
 impl NodeRegistry {
@@ -31,12 +33,12 @@ impl NodeRegistry {
         }
     }
 
-    pub fn register(&mut self, kind: &str, builder: Box<dyn NodeBuilder>) {
-        self.builders.insert(kind.to_string(), builder);
+    pub fn register(&mut self, kind: NodeKind, builder: Box<dyn NodeBuilder>) {
+        self.builders.insert(kind, builder);
     }
 
-    pub fn get(&self, kind: &str) -> Option<&dyn NodeBuilder> {
-        self.builders.get(kind).map(|b| b.as_ref())
+    pub fn get(&self, kind: NodeKind) -> Option<&dyn NodeBuilder> {
+        self.builders.get(&kind).map(|b| b.as_ref())
     }
 }
 

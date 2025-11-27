@@ -1,28 +1,15 @@
-use crate::core::layout::builder::NodeBuilder;
+// src/core/layout/nodes/list.rs
+
+use crate::core::idf::IRNode;
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
-    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, RenderNode,
+    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode,
 };
 use crate::core::layout::nodes::block::BlockNode;
 use crate::core::layout::nodes::list_item::ListItemNode;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{LayoutEngine, LayoutError};
 use std::sync::Arc;
-use std::any::Any;
-use crate::core::idf::IRNode;
-
-pub struct ListBuilder;
-
-impl NodeBuilder for ListBuilder {
-    fn build(
-        &self,
-        node: &IRNode,
-        engine: &LayoutEngine,
-        parent_style: Arc<ComputedStyle>,
-    ) -> Result<RenderNode, LayoutError> {
-        Ok(Box::new(ListNode::new(node, engine, parent_style)?))
-    }
-}
 
 #[derive(Debug)]
 pub struct ListNode {
@@ -30,7 +17,23 @@ pub struct ListNode {
 }
 
 impl ListNode {
-    pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Result<Self, LayoutError> {
+    pub fn build(
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+    ) -> Result<RenderNode, LayoutError> {
+        Ok(RenderNode::List(Box::new(Self::new(
+            node,
+            engine,
+            parent_style,
+        )?)))
+    }
+
+    pub fn new(
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+    ) -> Result<Self, LayoutError> {
         Self::new_with_depth(node, engine, parent_style, 0)
     }
 
@@ -41,14 +44,15 @@ impl ListNode {
         depth: usize,
     ) -> Result<Self, LayoutError> {
         let style = engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
-        let (meta, ir_children, start) = match node {
-            IRNode::List {
-                meta,
-                children,
-                start,
-                ..
-            } => (meta, children, *start),
-            _ => return Err(LayoutError::BuilderMismatch("List", node.kind())),
+
+        let IRNode::List {
+            meta,
+            children: ir_children,
+            start,
+            ..
+        } = node
+        else {
+            return Err(LayoutError::BuilderMismatch("List", node.kind()));
         };
 
         let start_index = start.unwrap_or(1);
@@ -56,29 +60,27 @@ impl ListNode {
         let mut children: Vec<RenderNode> = Vec::new();
         for (i, child_ir) in ir_children.iter().enumerate() {
             if let IRNode::List { .. } = child_ir {
-                children.push(Box::new(ListNode::new_with_depth(
+                children.push(RenderNode::List(Box::new(ListNode::new_with_depth(
                     child_ir,
                     engine,
                     style.clone(),
                     depth + 1,
-                )?));
+                )?)));
             } else if let IRNode::ListItem { .. } = child_ir {
-                children.push(Box::new(ListItemNode::new(
+                children.push(RenderNode::ListItem(Box::new(ListItemNode::new(
                     child_ir,
                     engine,
                     style.clone(),
                     i + start_index,
                     depth,
-                )?));
+                )?)));
             } else {
                 children.push(engine.build_layout_node_tree(child_ir, style.clone())?);
             }
         }
 
         let block = BlockNode::new_from_children(meta.id.clone(), children, style);
-        Ok(Self {
-            block,
-        })
+        Ok(Self { block })
     }
 }
 
@@ -95,7 +97,7 @@ impl LayoutNode for ListNode {
         &self,
         ctx: &mut LayoutContext,
         constraints: BoxConstraints,
-        break_state: Option<Box<dyn Any + Send>>,
+        break_state: Option<NodeState>,
     ) -> Result<LayoutResult, LayoutError> {
         self.block.layout(ctx, constraints, break_state)
     }

@@ -1,3 +1,4 @@
+// src/core/layout/test_utils.rs
 #![cfg(test)]
 
 use crate::core::idf::{IRNode, InlineNode, NodeMetadata};
@@ -14,6 +15,7 @@ use std::sync::Arc;
 pub fn create_test_engine() -> LayoutEngine {
     let font_manager = FontManager::new();
     font_manager.load_fallback_font();
+    // Updated: No scratch buffer or profiler arguments needed
     LayoutEngine::new(Arc::new(font_manager))
 }
 
@@ -40,6 +42,8 @@ pub fn create_paragraph(text: &str) -> IRNode {
         if i > 0 {
             children.push(InlineNode::LineBreak);
         }
+        // Don't skip empty lines entirely if they are explicitly part of split,
+        // but for simple text paragraphs, empty strings usually mean consecutive delimiters.
         if !line.is_empty() {
             children.push(InlineNode::Text(line.to_string()));
         }

@@ -1,8 +1,7 @@
-// src/core/idf.rs
+// src/core/idf/mod.rs
 //! Intermediate Document Format (IDF)
 //! This module defines the core, in-memory representation of a document's
-//! structure and content after parsing but before layout. It is a tree-like
-//! structure composed of `IRNode` and `InlineNode` enums.
+//! structure and content after parsing but before layout.
 
 use crate::core::style::stylesheet::ElementStyle;
 use std::sync::Arc;
@@ -62,33 +61,35 @@ pub enum IRNode {
 }
 
 impl IRNode {
+    /// Returns a reference to the metadata if the node type supports it.
     pub fn meta(&self) -> Option<&NodeMetadata> {
         match self {
-            IRNode::Block { meta, .. }
-            | IRNode::Paragraph { meta, .. }
-            | IRNode::Heading { meta, .. }
-            | IRNode::Image { meta, .. }
-            | IRNode::FlexContainer { meta, .. }
-            | IRNode::List { meta, .. }
-            | IRNode::ListItem { meta, .. }
-            | IRNode::Table { meta, .. }
-            | IRNode::IndexMarker { meta, .. } => Some(meta),
-            _ => None,
+            IRNode::Block { meta, .. } => Some(meta),
+            IRNode::Paragraph { meta, .. } => Some(meta),
+            IRNode::Heading { meta, .. } => Some(meta),
+            IRNode::Image { meta, .. } => Some(meta),
+            IRNode::FlexContainer { meta, .. } => Some(meta),
+            IRNode::List { meta, .. } => Some(meta),
+            IRNode::ListItem { meta, .. } => Some(meta),
+            IRNode::Table { meta, .. } => Some(meta),
+            IRNode::IndexMarker { meta, .. } => Some(meta),
+            IRNode::Root(_) | IRNode::PageBreak { .. } => None,
         }
     }
 
+    /// Returns a mutable reference to the metadata if the node type supports it.
     pub fn meta_mut(&mut self) -> Option<&mut NodeMetadata> {
         match self {
-            IRNode::Block { meta, .. }
-            | IRNode::Paragraph { meta, .. }
-            | IRNode::Heading { meta, .. }
-            | IRNode::Image { meta, .. }
-            | IRNode::FlexContainer { meta, .. }
-            | IRNode::List { meta, .. }
-            | IRNode::ListItem { meta, .. }
-            | IRNode::Table { meta, .. }
-            | IRNode::IndexMarker { meta, .. } => Some(meta),
-            _ => None,
+            IRNode::Block { meta, .. } => Some(meta),
+            IRNode::Paragraph { meta, .. } => Some(meta),
+            IRNode::Heading { meta, .. } => Some(meta),
+            IRNode::Image { meta, .. } => Some(meta),
+            IRNode::FlexContainer { meta, .. } => Some(meta),
+            IRNode::List { meta, .. } => Some(meta),
+            IRNode::ListItem { meta, .. } => Some(meta),
+            IRNode::Table { meta, .. } => Some(meta),
+            IRNode::IndexMarker { meta, .. } => Some(meta),
+            IRNode::Root(_) | IRNode::PageBreak { .. } => None,
         }
     }
 

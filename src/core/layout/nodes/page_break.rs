@@ -1,28 +1,13 @@
-use crate::core::layout::builder::NodeBuilder;
+// src/core/layout/nodes/page_break.rs
+
+use crate::core::idf::IRNode;
 use crate::core::layout::geom::{BoxConstraints, Size};
-use crate::core::layout::node::{LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, RenderNode};
+use crate::core::layout::node::{
+    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode,
+};
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{LayoutEngine, LayoutError};
 use std::sync::Arc;
-use std::any::Any;
-use crate::core::idf::IRNode;
-
-pub struct PageBreakBuilder;
-
-impl NodeBuilder for PageBreakBuilder {
-    fn build(
-        &self,
-        node: &IRNode,
-        _engine: &LayoutEngine,
-        _parent_style: Arc<ComputedStyle>,
-    ) -> Result<RenderNode, LayoutError> {
-        let master_name = match node {
-            IRNode::PageBreak { master_name } => master_name.clone(),
-            _ => return Err(LayoutError::BuilderMismatch("PageBreak", node.kind())),
-        };
-        Ok(Box::new(PageBreakNode::new(master_name)))
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct PageBreakNode {
@@ -31,6 +16,20 @@ pub struct PageBreakNode {
 }
 
 impl PageBreakNode {
+    pub fn build(
+        node: &IRNode,
+        _engine: &LayoutEngine,
+        _parent_style: Arc<ComputedStyle>,
+    ) -> Result<RenderNode, LayoutError> {
+        let master_name = match node {
+            IRNode::PageBreak { master_name } => master_name.clone(),
+            _ => return Err(LayoutError::BuilderMismatch("PageBreak", node.kind())),
+        };
+        Ok(RenderNode::PageBreak(Box::new(PageBreakNode::new(
+            master_name,
+        ))))
+    }
+
     pub fn new(master_name: Option<String>) -> Self {
         Self {
             master_name,
@@ -52,14 +51,16 @@ impl LayoutNode for PageBreakNode {
         &self,
         ctx: &mut LayoutContext,
         _constraints: BoxConstraints,
-        break_state: Option<Box<dyn Any + Send>>,
+        break_state: Option<NodeState>,
     ) -> Result<LayoutResult, LayoutError> {
         if break_state.is_some() {
             return Ok(LayoutResult::Finished);
         }
 
-        if !ctx.is_empty() || ctx.cursor.1 > 0.0 {
-            Ok(LayoutResult::Break(Box::new(())))
+        // Force break if we have written content, or if we are not at the very top.
+        // ctx.is_empty() checks if any elements have been pushed to THIS context page.
+        if !ctx.is_empty() || ctx.cursor_y() > 0.0 {
+            Ok(LayoutResult::Break(NodeState::Atomic))
         } else {
             Ok(LayoutResult::Finished)
         }

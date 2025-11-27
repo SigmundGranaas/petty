@@ -1,9 +1,11 @@
-use crate::core::layout::engine::LayoutEngine;
-use crate::core::layout::style::ComputedStyle;
-use crate::core::layout::nodes::image::ImageNode;
-use cosmic_text::{AttrsList};
-use std::sync::Arc;
+// src/core/layout/text.rs
+
 use crate::core::idf::InlineNode;
+use crate::core::layout::engine::LayoutEngine;
+use crate::core::layout::nodes::image::ImageNode;
+use crate::core::layout::style::ComputedStyle;
+use cosmic_text::AttrsList;
+use std::sync::Arc;
 
 pub struct TextBuilder<'a> {
     engine: &'a LayoutEngine,
@@ -33,7 +35,7 @@ impl<'a> TextBuilder<'a> {
         &mut self,
         inlines: &[InlineNode],
         parent_style: &Arc<ComputedStyle>,
-        current_link_idx: usize
+        current_link_idx: usize,
     ) {
         for node in inlines {
             match node {
@@ -50,14 +52,18 @@ impl<'a> TextBuilder<'a> {
                     let style = self.resolve_meta_style(meta, parent_style);
                     self.process_inlines_recursive(children, &style, current_link_idx);
                 }
-                InlineNode::Hyperlink { meta, children, href } => {
+                InlineNode::Hyperlink {
+                    meta,
+                    children,
+                    href,
+                } => {
                     let style = self.resolve_meta_style(meta, parent_style);
                     self.links.push(href.clone());
-                    let new_link_idx = self.links.len(); // 1-based index
+                    let new_link_idx = self.links.len(); // 1-based index to distinguish from 0 (no link)
                     self.process_inlines_recursive(children, &style, new_link_idx);
                 }
                 InlineNode::PageReference { meta, children, .. } => {
-                    // .. same as text ..
+                    // Page references behave like styled spans in text construction
                     let style = self.resolve_meta_style(meta, parent_style);
                     self.process_inlines_recursive(children, &style, current_link_idx);
                 }
@@ -70,22 +76,20 @@ impl<'a> TextBuilder<'a> {
                     self.attrs_list.add_span(start..end, &attrs);
                 }
                 InlineNode::Image { meta, src } => {
-                    // Inline Image Support (Issue F)
-                    // Insert placeholder char
+                    // Inline Image Support
                     let start = self.content.len();
+                    // Object Replacement Character
                     self.content.push_str("\u{FFFC}");
                     let end = self.content.len();
 
-                    let node = ImageNode::new_inline(meta, src.clone(), self.engine, parent_style).ok();
+                    // Create the image node. If creation fails (e.g. builder error), we skip it safely.
+                    if let Ok(node) =
+                        ImageNode::new_inline(meta, src.clone(), self.engine, parent_style)
+                    {
+                        self.inline_images.push((start, node));
 
-                    if let Some(n) = node {
-                        // Store mapping
-                        self.inline_images.push((start, n));
-
-                        // Set metadata to indicate image (High bit)
                         let mut attrs = self.engine.font_manager.attrs_from_style(parent_style);
-                        // Using a simple flag in metadata.
-                        // Real implementation would index into inline_images.
+                        // Store a flag in metadata to indicate image (High bit set) + index
                         attrs.metadata = 1 << 31 | self.inline_images.len();
                         self.attrs_list.add_span(start..end, &attrs);
                     }
@@ -99,6 +103,7 @@ impl<'a> TextBuilder<'a> {
         meta: &crate::core::idf::InlineMetadata,
         parent_style: &Arc<ComputedStyle>,
     ) -> Arc<ComputedStyle> {
-        self.engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), parent_style)
+        self.engine
+            .compute_style(&meta.style_sets, meta.style_override.as_ref(), parent_style)
     }
 }

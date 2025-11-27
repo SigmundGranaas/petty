@@ -1,39 +1,34 @@
-use crate::core::layout::{LayoutContext, LayoutError};
-use std::any::Any;
-use crate::core::layout::node::{LayoutResult, RenderNode};
+// src/core/layout/util.rs
 
-pub struct VerticalStacker;
+use crate::core::layout::node::{BlockState, NodeState};
 
-impl VerticalStacker {
-    /// Lays out children vertically.
-    /// Returns `Ok(LayoutResult::Finished)` if all children fit.
-    /// Returns `Ok(LayoutResult::Break(state))` if a break occurred.
-    pub fn layout_children(
-        ctx: &mut LayoutContext,
-        children: &[RenderNode],
-        constraints: crate::core::layout::geom::BoxConstraints,
-        start_index: usize,
-        mut child_resume_state: Option<Box<dyn Any + Send>>,
-        wrap_state: impl Fn(usize, Box<dyn Any + Send>) -> Box<dyn Any + Send>,
-    ) -> Result<LayoutResult, LayoutError> {
+/// Wraps a generic child state into a BlockState for block-like containers.
+pub fn wrap_in_block_state(
+    child_index: usize,
+    child_state: NodeState,
+) -> NodeState {
+    NodeState::Block(BlockState {
+        child_index,
+        child_state: Some(Box::new(child_state)),
+    })
+}
 
-        for (i, child) in children.iter().enumerate().skip(start_index) {
-            let res = child.layout(ctx, constraints, child_resume_state.take())?;
-
-            match res {
-                LayoutResult::Finished => {
-                    // Continue to next child
-                }
-                LayoutResult::Break(child_next_state) => {
-                    // Wrap this state and return break
-                    let state_to_return = Box::new(child_next_state); // Just wrap the child state directly? No, caller wraps it.
-                    // Actually, the caller passed `wrap_state`.
-                    // The caller typically wraps (index, child_state).
-                    return Ok(LayoutResult::Break(wrap_state(i, state_to_return)));
-                }
-            }
-        }
-
-        Ok(LayoutResult::Finished)
+/// Robust floating point comparison for layout calculations.
+/// Handles `Option<f32>` to support `None` representing unbounded/infinite constraints.
+pub fn floats_fuzzy_eq(a: Option<f32>, b: Option<f32>) -> bool {
+    const EPSILON: f32 = 0.01;
+    match (a, b) {
+        (Some(va), Some(vb)) => (va - vb).abs() < EPSILON,
+        (None, None) => true,
+        _ => false,
     }
+}
+
+/// Helper for comparing slices of floats (e.g., column widths).
+pub fn float_slices_fuzzy_eq(a: &[f32], b: &[f32]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    const EPSILON: f32 = 0.01;
+    a.iter().zip(b.iter()).all(|(x, y)| (x - y).abs() < EPSILON)
 }

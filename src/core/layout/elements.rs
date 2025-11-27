@@ -1,4 +1,4 @@
-//! Defines the concrete, drawable elements that are the output of the layout engine.
+// src/core/layout/elements.rs
 
 use crate::core::layout::geom;
 use crate::core::layout::ComputedStyle;

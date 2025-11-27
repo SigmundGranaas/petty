@@ -1,3 +1,5 @@
+// src/core/layout/nodes/paragraph_utils.rs
+
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{LayoutContext, LayoutElement, PositionedElement, TextElement};
 use std::sync::Arc;
@@ -12,10 +14,16 @@ pub fn flush_group(
     links: &[String],
     text: &str,
 ) {
-    if glyphs.is_empty() { return; }
+    if glyphs.is_empty() {
+        return;
+    }
 
-    let start_x = glyphs.first().unwrap().x;
-    let end_x = glyphs.last().unwrap().x + glyphs.last().unwrap().w;
+    let first_glyph = glyphs.first().unwrap();
+    let start_x = first_glyph.x;
+
+    // Calculate width safely
+    let last_glyph = glyphs.last().unwrap();
+    let end_x = last_glyph.x + last_glyph.w;
     let width = end_x - start_x;
 
     let is_image = (metadata & (1 << 31)) != 0;
@@ -29,8 +37,8 @@ pub fn flush_group(
         None
     };
 
-    let start_byte = glyphs.first().unwrap().start;
-    let end_byte = glyphs.last().unwrap().end;
+    let start_byte = first_glyph.start;
+    let end_byte = last_glyph.end;
     let content = text[start_byte..end_byte].to_string();
 
     let element = PositionedElement {
@@ -45,5 +53,7 @@ pub fn flush_group(
         }),
         style: style.clone(),
     };
+
+    // Use the context's public API to push (relative to current cursor)
     ctx.push_element(element);
 }

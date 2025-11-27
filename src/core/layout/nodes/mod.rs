@@ -1,3 +1,4 @@
+// src/core/layout/nodes/mod.rs
 //! Contains the implementations of the LayoutNode trait for each document element type.
 
 pub mod block;

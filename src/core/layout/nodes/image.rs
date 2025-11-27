@@ -1,7 +1,9 @@
-use crate::core::layout::builder::NodeBuilder;
+// src/core/layout/nodes/image.rs
+
+use crate::core::idf::{IRNode, InlineMetadata};
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
-    AnchorLocation, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, RenderNode,
+    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode,
 };
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{
@@ -9,47 +11,56 @@ use crate::core::layout::{
 };
 use crate::core::style::dimension::Dimension;
 use std::sync::Arc;
-use std::any::Any;
-use crate::core::idf::{IRNode, InlineMetadata};
-
-pub struct ImageBuilder;
-
-impl NodeBuilder for ImageBuilder {
-    fn build(
-        &self,
-        node: &IRNode,
-        engine: &LayoutEngine,
-        parent_style: Arc<ComputedStyle>,
-    ) -> Result<RenderNode, LayoutError> {
-        Ok(Box::new(ImageNode::new(node, engine, parent_style)?))
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct ImageNode {
     id: Option<String>,
     src: String,
     style: Arc<ComputedStyle>,
-    // Removed cached width/height, recompute in measure
 }
 
 impl ImageNode {
-    pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Result<Self, LayoutError> {
-        let (meta, src) = match node {
-            IRNode::Image { meta, src } => (meta, src.clone()),
-            _ => return Err(LayoutError::BuilderMismatch("Image", node.kind())),
+    pub fn build(
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+    ) -> Result<RenderNode, LayoutError> {
+        Ok(RenderNode::Image(Box::new(Self::new(
+            node,
+            engine,
+            parent_style,
+        )?)))
+    }
+
+    pub fn new(
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+    ) -> Result<Self, LayoutError> {
+        let IRNode::Image { meta, src } = node else {
+            return Err(LayoutError::BuilderMismatch("Image", node.kind()));
         };
-        let style = engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), &parent_style);
+        let style = engine.compute_style(
+            &meta.style_sets,
+            meta.style_override.as_ref(),
+            &parent_style,
+        );
 
         Ok(Self {
             id: meta.id.clone(),
-            src,
+            src: src.clone(),
             style,
         })
     }
 
-    pub fn new_inline(meta: &InlineMetadata, src: String, engine: &LayoutEngine, parent_style: &Arc<ComputedStyle>) -> Result<Self, LayoutError> {
-        let style = engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), parent_style);
+    pub fn new_inline(
+        meta: &InlineMetadata,
+        src: String,
+        engine: &LayoutEngine,
+        parent_style: &Arc<ComputedStyle>,
+    ) -> Result<Self, LayoutError> {
+        let style =
+            engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), parent_style);
         Ok(Self {
             id: None,
             src,
@@ -83,7 +94,7 @@ impl ImageNode {
         };
         let height = match &self.style.box_model.height {
             Some(Dimension::Pt(h)) => *h,
-            Some(Dimension::Percent(_)) | _ => width, // Aspect ratio preservation placeholder
+            Some(Dimension::Percent(_)) | _ => width, // Simple aspect ratio assumption if mostly square/undefined
         };
 
         Size::new(width, height)
@@ -97,7 +108,9 @@ impl LayoutNode for ImageNode {
 
     fn measure(&self, _env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
         let content_size = self.resolve_sizes(constraints);
-        let total_height = self.style.box_model.margin.top + content_size.height + self.style.box_model.margin.bottom;
+        let total_height = self.style.box_model.margin.top
+            + content_size.height
+            + self.style.box_model.margin.bottom;
         Size::new(content_size.width, total_height)
     }
 
@@ -105,32 +118,32 @@ impl LayoutNode for ImageNode {
         &self,
         ctx: &mut LayoutContext,
         constraints: BoxConstraints,
-        break_state: Option<Box<dyn Any + Send>>,
+        break_state: Option<NodeState>,
     ) -> Result<LayoutResult, LayoutError> {
+        // If we have a break state for an atomic image, it usually means we pushed it to the next page previously.
+        // We just proceed to render it now.
         if break_state.is_some() {
-            // Image was already rendered or skipped?
-            // Simplification: Image is atomic. If it's in break state, we assume it didn't fit previously and now we render it.
+            // No specific state resumption logic for atomic image needed
         }
 
         if let Some(id) = &self.id {
-            let location = AnchorLocation {
-                local_page_index: ctx.local_page_index,
-                y_pos: ctx.cursor.1 + ctx.bounds.y,
-            };
-            ctx.defined_anchors.insert(id.clone(), location);
+            ctx.register_anchor(id);
         }
 
         let size = self.resolve_sizes(constraints);
-        let total_height = self.style.box_model.margin.top + size.height + self.style.box_model.margin.bottom;
+        let total_height = self.style.box_model.margin.top
+            + size.height
+            + self.style.box_model.margin.bottom;
 
-        if total_height > ctx.bounds.height {
-            // Exceeds page height. Skip it to avoid infinite loops and match test expectation.
+        if total_height > ctx.bounds().height {
+            // Image is taller than the entire page.
+            // In a real engine we might clip or scale, here we skip/finish to avoid infinite loops.
             return Ok(LayoutResult::Finished);
         }
 
         if total_height > ctx.available_height() && !ctx.is_empty() {
-            // Push to next page
-            return Ok(LayoutResult::Break(Box::new(())));
+            // Not enough space left, push to next page
+            return Ok(LayoutResult::Break(NodeState::Atomic));
         }
 
         ctx.advance_cursor(self.style.box_model.margin.top);

@@ -1,4 +1,6 @@
-use cosmic_text::{FontSystem};
+// src/core/layout/fonts.rs
+
+use cosmic_text::FontSystem;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
@@ -19,10 +21,13 @@ impl FontManager {
     pub fn load_fallback_font(&self) {
         let mut system = self.system.lock().unwrap();
         let db = system.db_mut();
-        let regular = include_bytes!("../../../assets/fonts/Helvetica.ttf").to_vec();
-        let bold = include_bytes!("../../../assets/fonts/helvetica-bold.ttf").to_vec();
-        db.load_font_data(regular);
-        db.load_font_data(bold);
+        // Assuming assets are located relative to crate root
+        if let Ok(regular) = std::fs::read("assets/fonts/Helvetica.ttf") {
+            db.load_font_data(regular);
+        }
+        if let Ok(bold) = std::fs::read("assets/fonts/helvetica-bold.ttf") {
+            db.load_font_data(bold);
+        }
     }
 
     pub fn load_system_fonts(&self) {
@@ -33,7 +38,10 @@ impl FontManager {
         self.system.lock().unwrap().db_mut().load_fonts_dir(path);
     }
 
-    pub fn attrs_from_style<'a>(&self, style: &'a crate::core::layout::ComputedStyle) -> cosmic_text::Attrs<'a> {
+    pub fn attrs_from_style<'a>(
+        &self,
+        style: &'a crate::core::layout::ComputedStyle,
+    ) -> cosmic_text::Attrs<'a> {
         use crate::core::style::font::{FontStyle, FontWeight};
         use cosmic_text::{Attrs, Family, Style, Weight};
 
