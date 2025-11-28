@@ -17,9 +17,10 @@ use super::nodes::paragraph::ParagraphNode;
 use super::nodes::table::TableNode;
 use super::style::{self, ComputedStyle};
 use super::{FontManager, PipelineError, PositionedElement};
-use crate::core::idf::IRNode;
+use crate::core::idf::{IRNode, TextStr};
 use crate::core::layout::LayoutError;
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
+use bumpalo::Bump;
 use cosmic_text::{Buffer, Metrics};
 use std::any::Any;
 use std::collections::HashMap;
@@ -36,33 +37,40 @@ impl LayoutEngine {
     }
 
     pub fn paginate(
-        &self,
+        &mut self,
         stylesheet: &Stylesheet,
         ir_nodes: Vec<IRNode>,
     ) -> Result<
         (
             Vec<Vec<PositionedElement>>,
-            HashMap<String, AnchorLocation>,
-            HashMap<String, Vec<IndexEntry>>,
+            HashMap<TextStr, AnchorLocation>,
+            HashMap<TextStr, Vec<IndexEntry>>,
         ),
         PipelineError,
     > {
         let mut pages = Vec::new();
 
-        let root_node =
-            self.build_layout_node_tree(&IRNode::Root(ir_nodes), self.get_default_style())?;
+        // Lock the font system once per pagination task to provide exclusive access
+        // to the underlying FontSystem for the layout pass.
+        let mut font_system_guard = self.font_manager.system.lock().map_err(|_| {
+            PipelineError::Layout("Failed to lock font system".to_string())
+        })?;
+        let font_system = &mut *font_system_guard;
 
         let mut current_master_name = stylesheet.default_page_master_name.clone().ok_or_else(
             || PipelineError::Layout("No default page master defined".to_string()),
         )?;
 
-        let mut defined_anchors = HashMap::<String, AnchorLocation>::new();
-        let mut index_entries = HashMap::<String, Vec<IndexEntry>>::new();
+        let mut defined_anchors = HashMap::<TextStr, AnchorLocation>::new();
+        let mut index_entries = HashMap::<TextStr, Vec<IndexEntry>>::new();
         let mut layout_cache = HashMap::<u64, Box<dyn Any + Send>>::new();
         let mut current_state: Option<NodeState> = None;
 
         let mut page_count = 0;
         const MAX_PAGES: usize = 200;
+
+        // Arena for transient layout nodes. Reset per page.
+        let mut arena = Bump::new();
 
         loop {
             page_count += 1;
@@ -73,16 +81,18 @@ impl LayoutEngine {
                 )));
             }
 
-            let page_layout =
-                stylesheet
-                    .page_masters
-                    .get(&current_master_name)
-                    .ok_or_else(|| {
-                        PipelineError::Layout(format!(
-                            "Page master '{}' not found in stylesheet",
-                            current_master_name
-                        ))
-                    })?;
+            // Reset arena to free memory from the previous page's layout tree
+            arena.reset();
+
+            let page_layout = stylesheet
+                .page_masters
+                .get(&current_master_name)
+                .ok_or_else(|| {
+                    PipelineError::Layout(format!(
+                        "Page master '{}' not found in stylesheet",
+                        current_master_name
+                    ))
+                })?;
 
             let (page_width, page_height) = page_layout.size.dimensions_pt();
             let margins = page_layout.margins.clone().unwrap_or_default();
@@ -99,15 +109,23 @@ impl LayoutEngine {
 
             let env = LayoutEnvironment {
                 engine: self,
+                font_system,
                 local_page_index: pages.len(),
             };
 
             let constraints = BoxConstraints::tight_width(content_width);
 
-            // Construct Context with new API
+            let root_node = self.build_layout_node_tree(
+                &IRNode::Root(ir_nodes.clone()),
+                self.get_default_style(),
+                &arena
+            )?;
+
+            // Construct Context
             let mut ctx = LayoutContext::new(
                 env,
                 bounds,
+                &arena,
                 &mut page_elements,
                 &mut defined_anchors,
                 &mut index_entries,
@@ -126,7 +144,7 @@ impl LayoutEngine {
                 }
                 LayoutResult::Break(next_state) => {
                     if let Some(Some(new_master)) = root_node.check_for_page_break() {
-                        current_master_name = new_master;
+                        current_master_name = new_master.to_string();
                     }
                     current_state = Some(next_state);
                 }
@@ -136,35 +154,37 @@ impl LayoutEngine {
         Ok((pages, defined_anchors, index_entries))
     }
 
-    pub(crate) fn build_layout_node_children(
+    pub(crate) fn build_layout_node_children<'a>(
         &self,
         ir_children: &[IRNode],
         parent_style: Arc<ComputedStyle>,
-    ) -> Result<Vec<RenderNode>, LayoutError> {
-        ir_children
-            .iter()
-            .map(|child_ir| self.build_layout_node_tree(child_ir, parent_style.clone()))
-            .collect()
+        arena: &'a Bump,
+    ) -> Result<Vec<RenderNode<'a>>, LayoutError> {
+        let mut nodes = Vec::with_capacity(ir_children.len());
+        for child_ir in ir_children {
+            nodes.push(self.build_layout_node_tree(child_ir, parent_style.clone(), arena)?);
+        }
+        Ok(nodes)
     }
 
-    /// Constructs the appropriate `RenderNode` variant based on the `IRNode`.
-    pub(crate) fn build_layout_node_tree(
+    pub(crate) fn build_layout_node_tree<'a>(
         &self,
         node: &IRNode,
         parent_style: Arc<ComputedStyle>,
-    ) -> Result<RenderNode, LayoutError> {
+        arena: &'a Bump,
+    ) -> Result<RenderNode<'a>, LayoutError> {
         match node {
-            IRNode::Root(_) => BlockNode::build(node, self, parent_style),
-            IRNode::Block { .. } => BlockNode::build(node, self, parent_style),
-            IRNode::ListItem { .. } => BlockNode::build(node, self, parent_style),
-            IRNode::Paragraph { .. } => ParagraphNode::build(node, self, parent_style),
-            IRNode::Heading { .. } => HeadingNode::build(node, self, parent_style),
-            IRNode::Image { .. } => ImageNode::build(node, self, parent_style),
-            IRNode::FlexContainer { .. } => FlexNode::build(node, self, parent_style),
-            IRNode::List { .. } => ListNode::build(node, self, parent_style),
-            IRNode::Table { .. } => TableNode::build(node, self, parent_style),
-            IRNode::PageBreak { .. } => PageBreakNode::build(node, self, parent_style),
-            IRNode::IndexMarker { .. } => IndexMarkerNode::build(node, self, parent_style),
+            IRNode::Root(_) => BlockNode::build(node, self, parent_style, arena),
+            IRNode::Block { .. } => BlockNode::build(node, self, parent_style, arena),
+            IRNode::ListItem { .. } => ListItemNode::build(node, self, parent_style, arena),
+            IRNode::Paragraph { .. } => ParagraphNode::build(node, self, parent_style, arena),
+            IRNode::Heading { .. } => HeadingNode::build(node, self, parent_style, arena),
+            IRNode::Image { .. } => ImageNode::build(node, self, parent_style, arena),
+            IRNode::FlexContainer { .. } => FlexNode::build(node, self, parent_style, arena),
+            IRNode::List { .. } => ListNode::build(node, self, parent_style, arena),
+            IRNode::Table { .. } => TableNode::build(node, self, parent_style, arena),
+            IRNode::PageBreak { .. } => PageBreakNode::build(node, self, parent_style, arena),
+            IRNode::IndexMarker { .. } => IndexMarkerNode::build(node, self, parent_style, arena),
         }
     }
 
@@ -184,14 +204,13 @@ impl LayoutEngine {
     pub fn measure_text_width(&self, text: &str, style: &Arc<ComputedStyle>) -> f32 {
         let mut system = self.font_manager.system.lock().unwrap();
 
-        // No caching: create fresh buffer
         let metrics = Metrics::new(style.text.font_size, style.text.line_height);
-        let mut buffer = Buffer::new(&mut system, metrics);
+        let mut buffer = Buffer::new(&mut *system, metrics);
 
         let attrs = self.font_manager.attrs_from_style(style);
-        buffer.set_text(&mut system, text, &attrs, cosmic_text::Shaping::Advanced);
+        buffer.set_text(&mut *system, text, &attrs, cosmic_text::Shaping::Advanced);
 
-        buffer.shape_until_scroll(&mut system, false);
+        buffer.shape_until_scroll(&mut *system, false);
 
         let mut max_w: f32 = 0.0;
         for run in buffer.layout_runs() {

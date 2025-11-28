@@ -8,13 +8,17 @@ use std::sync::Arc;
 
 // --- Shared Types ---
 
+/// A string type for the document.
+/// Note: Switched to String to match parser output.
+pub type TextStr = String;
+
 /// A reference-counted container for shared, immutable data like images.
 pub type SharedData = Arc<Vec<u8>>;
 
 /// A common metadata structure for all block-level `IRNode`s.
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct NodeMetadata {
-    pub id: Option<String>,
+    pub id: Option<TextStr>,
     pub style_sets: Vec<Arc<ElementStyle>>,
     pub style_override: Option<ElementStyle>,
 }
@@ -40,7 +44,7 @@ pub enum IRNode {
     /// A heading, with a level and inline content.
     Heading { meta: NodeMetadata, level: u8, children: Vec<InlineNode> },
     /// An image.
-    Image { meta: NodeMetadata, src: String },
+    Image { meta: NodeMetadata, src: TextStr },
     /// A container for flexible box layout.
     FlexContainer { meta: NodeMetadata, children: Vec<IRNode> },
     /// An ordered or unordered list.
@@ -55,9 +59,9 @@ pub enum IRNode {
         body: Box<TableBody>,
     },
     /// A hard page break.
-    PageBreak { master_name: Option<String> },
+    PageBreak { master_name: Option<TextStr> },
     /// A marker for generating an index entry, with no visual output.
-    IndexMarker { meta: NodeMetadata, term: String },
+    IndexMarker { meta: NodeMetadata, term: TextStr },
 }
 
 impl IRNode {
@@ -126,15 +130,15 @@ impl IRNode {
 #[derive(Debug, Clone, PartialEq)]
 pub enum InlineNode {
     /// A run of plain text.
-    Text(String),
+    Text(TextStr),
     /// A styled `<span>`.
     StyledSpan { meta: InlineMetadata, children: Vec<InlineNode> },
     /// A hyperlink `<a>`.
-    Hyperlink { meta: InlineMetadata, href: String, children: Vec<InlineNode> },
+    Hyperlink { meta: InlineMetadata, href: TextStr, children: Vec<InlineNode> },
     /// A cross-reference to another page.
-    PageReference { meta: InlineMetadata, target_id: String, children: Vec<InlineNode> },
+    PageReference { meta: InlineMetadata, target_id: TextStr, children: Vec<InlineNode> },
     /// An inline image.
-    Image { meta: InlineMetadata, src: String },
+    Image { meta: InlineMetadata, src: TextStr },
     /// A soft line break.
     LineBreak,
 }

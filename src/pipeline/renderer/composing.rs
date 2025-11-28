@@ -165,7 +165,8 @@ impl RenderingStrategy for ComposingRenderer {
         for (role, template) in context.role_templates.iter() {
             if overlay_roles.contains(&role.as_str()) {
                 info!("[COMPOSER] Executing overlay role template: '{}'", role);
-                let layout_engine = LayoutEngine::new(context.font_manager.clone());
+                // CHANGE: Declare as mut so paginate can be called
+                let mut layout_engine = LayoutEngine::new(context.font_manager.clone());
 
                 for (i, page_id) in page_ids.iter().enumerate() {
                     let page_number = i + 1;
@@ -176,6 +177,7 @@ impl RenderingStrategy for ComposingRenderer {
                     let exec_config = ExecutionConfig { format: DataSourceFormat::Json, strict: false };
                     let ir_nodes = template.execute(&overlay_context_str, exec_config)?;
 
+                    // CHANGE: Now calling paginate on a mutable engine
                     let (mut overlay_pages, _, _) = layout_engine.paginate(&stylesheet, ir_nodes)?;
                     if let Some(elements) = overlay_pages.pop() {
                         if !overlay_pages.is_empty() {

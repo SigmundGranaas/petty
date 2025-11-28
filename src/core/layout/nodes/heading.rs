@@ -1,6 +1,6 @@
 // src/core/layout/nodes/heading.rs
 
-use crate::core::idf::IRNode;
+use crate::core::idf::{IRNode, TextStr};
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
     LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode,
@@ -8,32 +8,22 @@ use crate::core::layout::node::{
 use crate::core::layout::nodes::paragraph::ParagraphNode;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{LayoutEngine, LayoutError};
+use bumpalo::Bump;
 use std::sync::Arc;
 
 #[derive(Debug)]
-pub struct HeadingNode {
-    id: Option<String>,
-    p_node: ParagraphNode,
+pub struct HeadingNode<'a> {
+    id: Option<TextStr>,
+    p_node: &'a ParagraphNode<'a>,
 }
 
-impl HeadingNode {
+impl<'a> HeadingNode<'a> {
     pub fn build(
         node: &IRNode,
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
-    ) -> Result<RenderNode, LayoutError> {
-        Ok(RenderNode::Heading(Box::new(Self::new(
-            node,
-            engine,
-            parent_style,
-        )?)))
-    }
-
-    pub fn new(
-        node: &IRNode,
-        engine: &LayoutEngine,
-        parent_style: Arc<ComputedStyle>,
-    ) -> Result<Self, LayoutError> {
+        arena: &'a Bump,
+    ) -> Result<RenderNode<'a>, LayoutError> {
         let IRNode::Heading {
             meta,
             children,
@@ -43,26 +33,35 @@ impl HeadingNode {
             return Err(LayoutError::BuilderMismatch("Heading", node.kind()));
         };
 
+        // Create a temporary IRNode to build the ParagraphNode
+        // We reuse the existing metadata and children
         let p_ir = IRNode::Paragraph {
             meta: meta.clone(),
             children: children.clone(),
         };
 
-        let p_node = ParagraphNode::new(&p_ir, engine, parent_style)?;
+        let p_render_node = ParagraphNode::build(&p_ir, engine, parent_style, arena)?;
 
-        Ok(Self {
+        let p_node_ref = match p_render_node {
+            RenderNode::Paragraph(p) => p,
+            _ => panic!("Paragraph build failed"),
+        };
+
+        let node = arena.alloc(Self {
             id: meta.id.clone(),
-            p_node,
-        })
+            p_node: p_node_ref,
+        });
+
+        Ok(RenderNode::Heading(node))
     }
 }
 
-impl LayoutNode for HeadingNode {
+impl<'a> LayoutNode for HeadingNode<'a> {
     fn style(&self) -> &Arc<ComputedStyle> {
         self.p_node.style()
     }
 
-    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
+    fn measure(&self, env: &mut LayoutEnvironment, constraints: BoxConstraints) -> Size {
         self.p_node.measure(env, constraints)
     }
 

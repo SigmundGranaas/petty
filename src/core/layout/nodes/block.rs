@@ -1,6 +1,6 @@
 // src/core/layout/nodes/block.rs
 
-use crate::core::idf::IRNode;
+use crate::core::idf::{IRNode, TextStr};
 use crate::core::layout::elements::RectElement;
 use crate::core::layout::geom::{self, BoxConstraints, Size};
 use crate::core::layout::node::{
@@ -10,21 +10,24 @@ use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{LayoutElement, LayoutEngine, LayoutError, PositionedElement};
 use crate::core::style::border::Border;
 use crate::core::style::dimension::Dimension;
+use bumpalo::Bump;
 use std::sync::Arc;
 
 #[derive(Debug)]
-pub struct BlockNode {
-    id: Option<String>,
-    children: Vec<RenderNode>,
-    style: Arc<ComputedStyle>,
+pub struct BlockNode<'a> {
+    pub id: Option<TextStr>,
+    // Arena-allocated slice of children
+    pub children: &'a [RenderNode<'a>],
+    pub style: Arc<ComputedStyle>,
 }
 
-impl BlockNode {
+impl<'a> BlockNode<'a> {
     pub fn build(
         node: &IRNode,
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
-    ) -> Result<RenderNode, LayoutError> {
+        arena: &'a Bump,
+    ) -> Result<RenderNode<'a>, LayoutError> {
         let (id, children_ir, style) = match node {
             IRNode::Block { meta, children } => {
                 let style = engine.compute_style(
@@ -49,40 +52,46 @@ impl BlockNode {
             _ => return Err(LayoutError::BuilderMismatch("Block", node.kind())),
         };
 
-        let children_nodes = engine.build_layout_node_children(children_ir, style.clone())?;
-        Ok(RenderNode::Block(Box::new(Self {
+        // Recursively build children into a Vec, then move to Arena slice
+        let child_vec = engine.build_layout_node_children(children_ir, style.clone(), arena)?;
+        let children = arena.alloc_slice_copy(&child_vec);
+
+        let node = arena.alloc(Self {
             id,
-            children: children_nodes,
+            children,
             style,
-        })))
+        });
+
+        Ok(RenderNode::Block(node))
     }
 
     pub fn new_from_children(
-        id: Option<String>,
-        children: Vec<RenderNode>,
+        id: Option<TextStr>,
+        children_vec: Vec<RenderNode<'a>>,
         style: Arc<ComputedStyle>,
+        arena: &'a Bump,
     ) -> Self {
         Self {
             id,
-            children,
+            children: arena.alloc_slice_copy(&children_vec),
             style,
         }
     }
 }
 
-impl LayoutNode for BlockNode {
+impl<'a> LayoutNode for BlockNode<'a> {
     fn style(&self) -> &Arc<ComputedStyle> {
         &self.style
     }
 
-    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
+    fn measure(&self, env: &mut LayoutEnvironment, constraints: BoxConstraints) -> Size {
         let h_deduction = self.style.padding_x() + self.style.border_x();
         let child_constraints = self.style.content_constraints(constraints);
 
         let mut max_child_width: f32 = 0.0;
         let mut total_content_height: f32 = 0.0;
 
-        for child in &self.children {
+        for child in self.children {
             let child_size = child.measure(env, child_constraints);
             max_child_width = max_child_width.max(child_size.width);
             total_content_height += child_size.height;
@@ -119,7 +128,6 @@ impl LayoutNode for BlockNode {
             ctx.register_anchor(id);
         }
 
-        // 1. Resolve State using type-safe enum
         let (start_index, mut child_resume_state) = if let Some(state) = break_state {
             let block_state = state.as_block()?;
             (
@@ -132,10 +140,8 @@ impl LayoutNode for BlockNode {
 
         let is_continuation = start_index > 0 || child_resume_state.is_some();
 
-        // 2. Margins
         if !is_continuation {
             let margin_to_add = self.style.box_model.margin.top.max(ctx.last_v_margin);
-            // If margin pushes us over and we aren't at top, partial
             if ctx.cursor_y() > 0.0 && margin_to_add > ctx.available_height() {
                 return Ok(LayoutResult::Break(NodeState::Block(BlockState {
                     child_index: 0,
@@ -147,10 +153,8 @@ impl LayoutNode for BlockNode {
         ctx.last_v_margin = 0.0;
 
         let border_top = self.style.border_top_width();
-        let border_bottom = self.style.border_bottom_width();
         let border_left = self.style.border_left_width();
 
-        // Borders/Padding only on start/end
         let top_spacing = if !is_continuation {
             border_top + self.style.box_model.padding.top
         } else {
@@ -173,22 +177,15 @@ impl LayoutNode for BlockNode {
 
         let mut child_split_result = LayoutResult::Finished;
 
-        // 3. Child Iteration
-        let used_height = ctx.with_child_bounds(child_bounds, |child_ctx| {
+        let _ = ctx.with_child_bounds(child_bounds, |child_ctx| {
             for (i, child) in self.children.iter().enumerate().skip(start_index) {
-                // Take resume state if it belongs to this child
                 let resume = if i == start_index {
                     child_resume_state.take()
                 } else {
                     None
                 };
 
-                let Ok(res) = child.layout(child_ctx, child_constraints, resume) else {
-                    return Err(LayoutError::Generic(format!(
-                        "Layout failed for child index {}",
-                        i
-                    )));
-                };
+                let res = child.layout(child_ctx, child_constraints, resume)?;
 
                 match res {
                     LayoutResult::Finished => {}
@@ -197,18 +194,24 @@ impl LayoutNode for BlockNode {
                             child_index: i,
                             child_state: Some(Box::new(next_state)),
                         }));
-                        break;
+                        return Ok(()); // Break loop
                     }
                 }
             }
-            Ok(child_ctx.cursor_y())
+            Ok(())
         })?;
+
+        let actual_used_height = if matches!(child_split_result, LayoutResult::Finished) {
+            ctx.cursor_y() - content_start_y_in_ctx
+        } else {
+            ctx.available_height()
+        };
 
         let bg_elements = create_background_and_borders(
             ctx.bounds(),
             &self.style,
             block_start_y_in_ctx,
-            used_height,
+            actual_used_height,
             !is_continuation,
             matches!(child_split_result, LayoutResult::Finished),
         );
@@ -219,25 +222,31 @@ impl LayoutNode for BlockNode {
 
         match child_split_result {
             LayoutResult::Finished => {
+                let border_bottom = self.style.border_bottom_width();
                 let bottom_spacing = self.style.box_model.padding.bottom + border_bottom;
-                ctx.set_cursor_y(content_start_y_in_ctx + used_height + bottom_spacing);
+                ctx.set_cursor_y(content_start_y_in_ctx + actual_used_height + bottom_spacing);
                 ctx.last_v_margin = self.style.box_model.margin.bottom;
                 Ok(LayoutResult::Finished)
             }
             LayoutResult::Break(state) => {
-                ctx.set_cursor_y(content_start_y_in_ctx + used_height);
+                ctx.set_cursor_y(content_start_y_in_ctx + actual_used_height);
                 Ok(LayoutResult::Break(state))
             }
         }
     }
 
-    fn check_for_page_break(&self) -> Option<Option<String>> {
+    fn check_for_page_break(&self) -> Option<Option<TextStr>> {
         if let Some(first_child) = self.children.first() {
-            if let Some(res) = first_child.check_for_page_break() {
-                return Some(res);
-            }
+            first_child.check_for_page_break()
+        } else {
+            None
         }
-        None
+    }
+}
+
+impl LayoutResult {
+    fn is_break(&self) -> bool {
+        matches!(self, LayoutResult::Break(_))
     }
 }
 
@@ -251,29 +260,13 @@ pub fn create_background_and_borders(
 ) -> Vec<PositionedElement> {
     let mut elements = Vec::new();
 
-    let border_top = if draw_top {
-        style.border_top_width()
-    } else {
-        0.0
-    };
-    let border_bottom = if draw_bottom {
-        style.border_bottom_width()
-    } else {
-        0.0
-    };
+    let border_top = if draw_top { style.border_top_width() } else { 0.0 };
+    let border_bottom = if draw_bottom { style.border_bottom_width() } else { 0.0 };
     let border_left = style.border_left_width();
     let border_right = style.border_right_width();
 
-    let padding_top = if draw_top {
-        style.box_model.padding.top
-    } else {
-        0.0
-    };
-    let padding_bottom = if draw_bottom {
-        style.box_model.padding.bottom
-    } else {
-        0.0
-    };
+    let padding_top = if draw_top { style.box_model.padding.top } else { 0.0 };
+    let padding_bottom = if draw_bottom { style.box_model.padding.bottom } else { 0.0 };
 
     let total_height = border_top + padding_top + content_height + padding_bottom + border_bottom;
 
@@ -281,7 +274,6 @@ pub fn create_background_and_borders(
         return elements;
     }
 
-    // Helper to push elements relative to the bounds origin
     let mut push = |mut element: PositionedElement, x: f32, y: f32| {
         element.x += x;
         element.y += y;

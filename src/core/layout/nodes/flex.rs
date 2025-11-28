@@ -1,6 +1,6 @@
 // src/core/layout/nodes/flex.rs
 
-use crate::core::idf::IRNode;
+use crate::core::idf::{IRNode, TextStr};
 use crate::core::layout::geom::{self, BoxConstraints};
 use crate::core::layout::node::{
     FlexState, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode,
@@ -9,6 +9,7 @@ use crate::core::layout::nodes::block::create_background_and_borders;
 use crate::core::layout::nodes::taffy_utils::computed_style_to_taffy;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{LayoutEngine, LayoutError};
+use bumpalo::Bump;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -21,21 +22,20 @@ struct FlexLayoutOutput {
 }
 
 #[derive(Debug)]
-pub struct FlexNode {
-    id: Option<String>,
-    // We generate a stable hash for caching if an ID isn't provided,
-    // or we can use the pointer address in a real DOM.
-    // For this implementation, we rely on the ID or skip caching.
-    children: Vec<RenderNode>,
+pub struct FlexNode<'a> {
+    id: Option<TextStr>,
+    // Children in arena
+    children: &'a [RenderNode<'a>],
     style: Arc<ComputedStyle>,
 }
 
-impl FlexNode {
+impl<'a> FlexNode<'a> {
     pub fn build(
         node: &IRNode,
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
-    ) -> Result<RenderNode, LayoutError> {
+        arena: &'a Bump,
+    ) -> Result<RenderNode<'a>, LayoutError> {
         let style = engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
 
         let IRNode::FlexContainer {
@@ -46,27 +46,19 @@ impl FlexNode {
             return Err(LayoutError::BuilderMismatch("FlexContainer", node.kind()));
         };
 
-        let mut children = engine.build_layout_node_children(ir_children, style.clone())?;
-        // Stable sort ensures items with same order stay in DOM order.
-        children.sort_by_key(|c| c.style().flex.order);
+        let mut children_vec = engine.build_layout_node_children(ir_children, style.clone(), arena)?;
+        children_vec.sort_by_key(|c| c.style().flex.order);
+        let children = arena.alloc_slice_copy(&children_vec);
 
-        Ok(RenderNode::Flex(Box::new(FlexNode::new(
-            meta.id.clone(),
+        let node = arena.alloc(Self {
+            id: meta.id.clone(),
             children,
             style,
-        ))))
+        });
+
+        Ok(RenderNode::Flex(node))
     }
 
-    pub fn new(id: Option<String>, children: Vec<RenderNode>, style: Arc<ComputedStyle>) -> Self {
-        Self {
-            id,
-            children,
-            style,
-        }
-    }
-
-    /// Generates a cache key. Ideally, this would use a stable Node ID.
-    /// Here we hash the string ID if present.
     fn get_cache_key(&self) -> Option<u64> {
         self.id.as_ref().map(|id| {
             let mut s = DefaultHasher::new();
@@ -75,10 +67,10 @@ impl FlexNode {
         })
     }
 
-    /// Computes the flex layout using a transient Taffy tree.
+    // Note: compute_flex_layout_data needs mutable env for measure callbacks
     fn compute_flex_layout_data(
         &self,
-        env: &LayoutEnvironment,
+        env: &mut LayoutEnvironment,
         constraints: BoxConstraints,
     ) -> FlexLayoutOutput {
         let mut taffy = TaffyTree::<usize>::new();
@@ -86,14 +78,12 @@ impl FlexNode {
 
         for (i, child) in self.children.iter().enumerate() {
             let child_style = computed_style_to_taffy(child.style());
-            // Safe to unwrap as Taffy operations in memory are reliable
             let node = taffy.new_leaf_with_context(child_style, i).unwrap();
             child_nodes.push(node);
         }
 
         let mut root_style = computed_style_to_taffy(&self.style);
 
-        // Apply constraints
         if constraints.has_bounded_width() && self.style.box_model.width.is_none() {
             root_style.size.width = taffy::style::Dimension::length(constraints.max_width);
         }
@@ -116,9 +106,7 @@ impl FlexNode {
             },
         };
 
-        // Capture for closure
-        let engine = env.engine;
-        let page_index = env.local_page_index;
+        let env_ptr = env as *mut LayoutEnvironment;
 
         taffy
             .compute_layout_with_measure(
@@ -129,6 +117,9 @@ impl FlexNode {
                         return taffy::geometry::Size::ZERO;
                     };
 
+                    // SAFETY: We are in a single-threaded layout pass. Taffy invokes this immediately.
+                    let env = unsafe { &mut *env_ptr };
+
                     let child = &self.children[*index];
 
                     let min_w = known_dims.width.unwrap_or(0.0);
@@ -138,16 +129,9 @@ impl FlexNode {
                         taffy::style::AvailableSpace::MinContent => 0.0,
                     };
 
-                    // We don't constrain height during measure to allow content to grow
                     let child_constraints = BoxConstraints::new(min_w, max_w, 0.0, f32::INFINITY);
 
-                    let size = child.measure(
-                        &LayoutEnvironment {
-                            engine,
-                            local_page_index: page_index,
-                        },
-                        child_constraints,
-                    );
+                    let size = child.measure(env, child_constraints);
 
                     taffy::geometry::Size {
                         width: size.width,
@@ -172,14 +156,12 @@ impl FlexNode {
     }
 }
 
-impl LayoutNode for FlexNode {
+impl<'a> LayoutNode for FlexNode<'a> {
     fn style(&self) -> &Arc<ComputedStyle> {
         &self.style
     }
 
-    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> geom::Size {
-        // We do not cache during measurement as it might happen with different constraints
-        // often (speculative layout).
+    fn measure(&self, env: &mut LayoutEnvironment, constraints: BoxConstraints) -> geom::Size {
         self.compute_flex_layout_data(env, constraints).size
     }
 
@@ -213,40 +195,39 @@ impl LayoutNode for FlexNode {
 
         let start_y = ctx.cursor_y();
 
-        // --- Caching Logic Implementation ---
         let cache_key = self.get_cache_key();
         let layout_output = if let Some(key) = cache_key {
             if let Some(cached) = ctx.layout_cache.get(&key) {
                 if let Some(output) = cached.downcast_ref::<FlexLayoutOutput>() {
                     output.clone()
                 } else {
-                    // Cache invalid or type mismatch, recompute
-                    let env = LayoutEnvironment {
+                    let mut env = LayoutEnvironment {
                         engine: ctx.engine,
+                        font_system: ctx.font_system,
                         local_page_index: ctx.local_page_index,
                     };
-                    let output = self.compute_flex_layout_data(&env, constraints);
+                    let output = self.compute_flex_layout_data(&mut env, constraints);
                     ctx.layout_cache.insert(key, Box::new(output.clone()));
                     output
                 }
             } else {
-                let env = LayoutEnvironment {
+                let mut env = LayoutEnvironment {
                     engine: ctx.engine,
+                    font_system: ctx.font_system,
                     local_page_index: ctx.local_page_index,
                 };
-                let output = self.compute_flex_layout_data(&env, constraints);
+                let output = self.compute_flex_layout_data(&mut env, constraints);
                 ctx.layout_cache.insert(key, Box::new(output.clone()));
                 output
             }
         } else {
-            // No ID, no cache
-            let env = LayoutEnvironment {
+            let mut env = LayoutEnvironment {
                 engine: ctx.engine,
+                font_system: ctx.font_system,
                 local_page_index: ctx.local_page_index,
             };
-            self.compute_flex_layout_data(&env, constraints)
+            self.compute_flex_layout_data(&mut env, constraints)
         };
-        // -------------------------------------
 
         let content_height = layout_output.size.height;
 
@@ -261,7 +242,7 @@ impl LayoutNode for FlexNode {
             start_y,
             content_height,
             !is_continuation,
-            true, // Optimistic: assumes it fits, will be clipped visually if split
+            true,
         );
         for el in bg_elements {
             ctx.push_element(el);
@@ -284,14 +265,12 @@ impl LayoutNode for FlexNode {
             let abs_y = start_y + effective_y;
             let child_h = layout.size.height;
 
-            // Check if start of item is off-page
             if abs_y > ctx_bounds.height + EPSILON {
                 break_occurred = true;
                 next_state_index = i;
                 break;
             }
 
-            // Check if item ends off-page.
             if abs_y + child_h > ctx_bounds.height + EPSILON && i != start_index {
                 break_occurred = true;
                 next_state_index = i;
@@ -326,11 +305,10 @@ impl LayoutNode for FlexNode {
                 None
             };
 
-            let Ok(res) = ctx.with_child_bounds(child_rect, |child_ctx| {
+            // Fix: propagate error using ? and match on the result
+            let res = ctx.with_child_bounds(child_rect, |child_ctx| {
                 self.children[i].layout(child_ctx, child_constraints, child_resume)
-            }) else {
-                return Err(LayoutError::Generic(format!("Flex child {} layout failed", i)));
-            };
+            })?;
 
             if let LayoutResult::Break(s) = res {
                 break_occurred = true;

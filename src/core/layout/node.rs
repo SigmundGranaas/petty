@@ -1,7 +1,10 @@
 // src/core/layout/node.rs
 
-use crate::core::layout::geom::{BoxConstraints, Size};
-use crate::core::layout::{geom, ComputedStyle, LayoutEngine, LayoutError, PositionedElement};
+use crate::core::idf::TextStr;
+use crate::core::layout::geom::{self, BoxConstraints, Size};
+use crate::core::layout::{ComputedStyle, LayoutEngine, LayoutError, PositionedElement};
+use bumpalo::Bump;
+use cosmic_text::FontSystem;
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -50,7 +53,6 @@ pub struct TableState {
 }
 
 /// Represents the resumption state for any node type.
-/// Replaces `Box<dyn Any>` with a strictly typed enum for safety and clarity.
 #[derive(Debug, Clone)]
 pub enum NodeState {
     Block(BlockState),
@@ -112,14 +114,12 @@ impl NodeState {
 
 // --- Context and Environment ---
 
-/// Stores the resolved location of an anchor target.
 #[derive(Debug, Clone)]
 pub struct AnchorLocation {
     pub local_page_index: usize,
     pub y_pos: f32,
 }
 
-/// Stores the resolved location of an index term.
 #[derive(Debug, Clone)]
 pub struct IndexEntry {
     pub local_page_index: usize,
@@ -127,15 +127,18 @@ pub struct IndexEntry {
 }
 
 /// Read-only environment data shared across the layout pass.
-#[derive(Clone, Copy)]
-pub struct LayoutEnvironment<'a> {
+pub struct LayoutEnvironment<'a, 'b> {
     pub engine: &'a LayoutEngine,
+    pub font_system: &'b mut FontSystem,
     pub local_page_index: usize,
 }
 
 /// The mutable context passed down the tree during layout.
-pub struct LayoutContext<'a> {
+pub struct LayoutContext<'a, 'b> {
     pub engine: &'a LayoutEngine,
+    pub font_system: &'b mut FontSystem,
+    /// The Arena allocator for creating transient layout nodes/data.
+    pub arena: &'a Bump,
     pub local_page_index: usize,
 
     // Geometry
@@ -144,30 +147,32 @@ pub struct LayoutContext<'a> {
 
     // Outputs
     elements: &'a mut Vec<PositionedElement>,
-    defined_anchors: &'a mut HashMap<String, AnchorLocation>,
-    index_entries: &'a mut HashMap<String, Vec<IndexEntry>>,
+    defined_anchors: &'a mut HashMap<TextStr, AnchorLocation>,
+    index_entries: &'a mut HashMap<TextStr, Vec<IndexEntry>>,
 
     /// Tracks margin collapsing context between blocks
     pub last_v_margin: f32,
 
     /// A cache for transient layout data (e.g. Taffy trees for Flex nodes)
-    /// This allows nodes to store expensive computation results within a layout pass.
-    /// Key: Arbitrary ID (typically a pointer hash or generated ID)
     pub layout_cache: &'a mut HashMap<u64, Box<dyn Any + Send>>,
 }
 
-impl<'a> LayoutContext<'a> {
+impl<'a, 'b> LayoutContext<'a, 'b> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        env: LayoutEnvironment<'a>,
+        env: LayoutEnvironment<'a, 'b>,
         bounds: geom::Rect,
+        arena: &'a Bump,
         elements: &'a mut Vec<PositionedElement>,
-        defined_anchors: &'a mut HashMap<String, AnchorLocation>,
-        index_entries: &'a mut HashMap<String, Vec<IndexEntry>>,
+        defined_anchors: &'a mut HashMap<TextStr, AnchorLocation>,
+        index_entries: &'a mut HashMap<TextStr, Vec<IndexEntry>>,
         layout_cache: &'a mut HashMap<u64, Box<dyn Any + Send>>,
     ) -> Self {
         Self {
             engine: env.engine,
+            font_system: env.font_system,
             local_page_index: env.local_page_index,
+            arena,
             bounds,
             cursor: (0.0, 0.0),
             elements,
@@ -203,7 +208,7 @@ impl<'a> LayoutContext<'a> {
             local_page_index: self.local_page_index,
             y_pos: self.cursor.1 + self.bounds.y,
         };
-        self.defined_anchors.insert(id.to_string(), location);
+        self.defined_anchors.insert(id.into(), location);
     }
 
     pub fn register_index_entry(&mut self, term: &str) {
@@ -212,7 +217,7 @@ impl<'a> LayoutContext<'a> {
             y_pos: self.cursor.1 + self.bounds.y,
         };
         self.index_entries
-            .entry(term.to_string())
+            .entry(term.into())
             .or_default()
             .push(entry);
     }
@@ -238,9 +243,15 @@ impl<'a> LayoutContext<'a> {
         child_bounds: geom::Rect,
         f: impl FnOnce(&mut LayoutContext) -> R,
     ) -> R {
+        // Temporarily re-borrow font_system
+        // Note: we must reconstruct context carefully.
+        // Rust cannot reborrow mutable reference if it is already moved?
+        // LayoutContext owns mutable references. We can reborrow fields.
         let mut child_ctx = LayoutContext {
             engine: self.engine,
+            font_system: self.font_system,
             local_page_index: self.local_page_index,
+            arena: self.arena,
             bounds: child_bounds,
             cursor: (0.0, 0.0),
             elements: self.elements,
@@ -259,23 +270,23 @@ pub enum LayoutResult {
 }
 
 /// The core enum wrapping all possible layout nodes.
-/// Static dispatch via enum is preferred over trait objects for internal node storage.
-#[derive(Debug)]
-pub enum RenderNode {
-    Block(Box<BlockNode>),
-    Flex(Box<FlexNode>),
-    Heading(Box<HeadingNode>),
-    Image(Box<ImageNode>),
-    IndexMarker(Box<IndexMarkerNode>),
-    List(Box<ListNode>),
-    ListItem(Box<ListItemNode>),
-    PageBreak(Box<PageBreakNode>),
-    Paragraph(Box<ParagraphNode>),
-    Table(Box<TableNode>),
+/// Uses references allocated in a bump arena (`&'a Node`) for performance.
+#[derive(Debug, Clone, Copy)]
+pub enum RenderNode<'a> {
+    Block(&'a BlockNode<'a>),
+    Flex(&'a FlexNode<'a>),
+    Heading(&'a HeadingNode<'a>),
+    Image(&'a ImageNode),
+    IndexMarker(&'a IndexMarkerNode),
+    List(&'a ListNode<'a>),
+    ListItem(&'a ListItemNode<'a>),
+    PageBreak(&'a PageBreakNode),
+    Paragraph(&'a ParagraphNode<'a>), // Added lifetime here
+    Table(&'a TableNode<'a>),
 }
 
-impl LayoutNode for RenderNode {
-    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
+impl<'a> LayoutNode for RenderNode<'a> {
+    fn measure(&self, env: &mut LayoutEnvironment, constraints: BoxConstraints) -> Size {
         match self {
             Self::Block(n) => n.measure(env, constraints),
             Self::Flex(n) => n.measure(env, constraints),
@@ -325,7 +336,7 @@ impl LayoutNode for RenderNode {
         }
     }
 
-    fn check_for_page_break(&self) -> Option<Option<String>> {
+    fn check_for_page_break(&self) -> Option<Option<TextStr>> {
         match self {
             Self::Block(n) => n.check_for_page_break(),
             Self::Flex(n) => n.check_for_page_break(),
@@ -341,8 +352,8 @@ impl LayoutNode for RenderNode {
     }
 }
 
-pub trait LayoutNode: Debug + Send + Sync {
-    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Size;
+pub trait LayoutNode: Debug + Sync {
+    fn measure(&self, env: &mut LayoutEnvironment, constraints: BoxConstraints) -> Size;
 
     fn layout(
         &self,
@@ -353,7 +364,7 @@ pub trait LayoutNode: Debug + Send + Sync {
 
     fn style(&self) -> &Arc<ComputedStyle>;
 
-    fn check_for_page_break(&self) -> Option<Option<String>> {
+    fn check_for_page_break(&self) -> Option<Option<TextStr>> {
         None
     }
 }

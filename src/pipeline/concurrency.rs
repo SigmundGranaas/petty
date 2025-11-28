@@ -51,7 +51,8 @@ pub(crate) fn spawn_workers(
     for worker_id in 0..num_threads {
         let rx_clone = rx.clone();
         let tx_clone = tx.clone();
-        let layout_engine_clone = layout_engine.clone();
+        // CHANGE: Mutable clone for each worker
+        let mut layout_engine_clone = layout_engine.clone();
         let template_clone = Arc::clone(&context.compiled_template);
         let worker_handle = task::spawn_blocking(move || {
             info!("[WORKER-{}] Started.", worker_id);
@@ -71,7 +72,8 @@ pub(crate) fn spawn_workers(
                                     ir_nodes,
                                     context_arc.clone(),
                                     template_clone.resource_base_path(),
-                                    &layout_engine_clone,
+                                    // CHANGE: Pass mutable reference
+                                    &mut layout_engine_clone,
                                     &template_clone.stylesheet(),
                                     false,
                                 )

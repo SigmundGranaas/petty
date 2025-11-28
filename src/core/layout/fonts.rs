@@ -1,20 +1,20 @@
 // src/core/layout/fonts.rs
-
 use cosmic_text::FontSystem;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 /// Manages the font system.
-#[derive(Clone)]
 pub struct FontManager {
-    pub system: Arc<Mutex<FontSystem>>,
+    // Wrapped in Mutex to allow shared access (via Arc) with interior mutability
+    // required by cosmic_text's FontSystem.
+    pub system: Mutex<FontSystem>,
 }
 
 impl FontManager {
     pub fn new() -> Self {
         let system = FontSystem::new();
         Self {
-            system: Arc::new(Mutex::new(system)),
+            system: Mutex::new(system),
         }
     }
 
@@ -31,11 +31,13 @@ impl FontManager {
     }
 
     pub fn load_system_fonts(&self) {
-        self.system.lock().unwrap().db_mut().load_system_fonts();
+        let mut system = self.system.lock().unwrap();
+        system.db_mut().load_system_fonts();
     }
 
     pub fn load_fonts_from_dir<P: AsRef<Path>>(&self, path: P) {
-        self.system.lock().unwrap().db_mut().load_fonts_dir(path);
+        let mut system = self.system.lock().unwrap();
+        system.db_mut().load_fonts_dir(path);
     }
 
     pub fn attrs_from_style<'a>(

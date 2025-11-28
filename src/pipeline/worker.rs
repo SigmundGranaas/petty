@@ -1,5 +1,4 @@
 // src/pipeline/worker.rs
-// src/pipeline/worker.rs
 use crate::core::idf::{IRNode, InlineNode, SharedData};
 use crate::core::layout::{AnchorLocation, IndexEntry, LayoutEngine, PositionedElement};
 use crate::core::style::stylesheet::Stylesheet;
@@ -39,7 +38,8 @@ pub(super) fn finish_layout_and_resource_loading(
     ir_nodes: Vec<IRNode>,
     context_arc: Arc<Value>,
     resource_base_path: &Path,
-    layout_engine: &LayoutEngine,
+    // CHANGE: Accepts mutable reference
+    layout_engine: &mut LayoutEngine,
     stylesheet: &Stylesheet,
     debug_mode: bool,
 ) -> Result<LaidOutSequence, PipelineError> {
@@ -47,11 +47,6 @@ pub(super) fn finish_layout_and_resource_loading(
     let mut ir_nodes_with_ids = ir_nodes;
     ensure_heading_ids(&mut ir_nodes_with_ids);
 
-    // The pre-processing step to remove ToC placeholders has been removed.
-    // It was a flawed workaround that prevented correct layout of pages containing a ToC.
-    // The layout engine is now responsible for handling the `IRNode::TableOfContents`
-    // placeholder, which is necessary for strategies like `TwoPass` (for content generation)
-    // and `Hybrid` (for correct layout and fixups).
     let final_ir_nodes = ir_nodes_with_ids;
 
     debug!("[WORKER-{}] IR tree passed to layout engine:\n{:#?}", worker_id, &IRNode::Root(final_ir_nodes.clone()));

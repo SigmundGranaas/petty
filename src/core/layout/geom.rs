@@ -1,4 +1,7 @@
 // src/core/layout/geom.rs
+// Optimization: Key geometry primitives derive Copy to allow pass-by-value,
+// avoiding pointer indirection for small structs (2-4 floats).
+
 /// A rectangle with position and dimensions.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Rect {
@@ -90,22 +93,22 @@ impl BoxConstraints {
     }
 
     /// Returns true if the width constraint is finite.
-    pub fn has_bounded_width(&self) -> bool {
+    pub fn has_bounded_width(self) -> bool {
         self.max_width.is_finite()
     }
 
     /// Returns true if the height constraint is finite.
-    pub fn has_bounded_height(&self) -> bool {
+    pub fn has_bounded_height(self) -> bool {
         self.max_height.is_finite()
     }
 
     /// Returns true if the constraints require a specific size.
-    pub fn is_tight(&self) -> bool {
+    pub fn is_tight(self) -> bool {
         self.min_width >= self.max_width && self.min_height >= self.max_height
     }
 
     /// Constrains a size to fit within these constraints.
-    pub fn constrain(&self, size: Size) -> Size {
+    pub fn constrain(self, size: Size) -> Size {
         Size {
             width: size.width.clamp(self.min_width, self.max_width),
             height: size.height.clamp(self.min_height, self.max_height),
@@ -113,12 +116,12 @@ impl BoxConstraints {
     }
 
     /// Constrains a width to fit within these constraints.
-    pub fn constrain_width(&self, width: f32) -> f32 {
+    pub fn constrain_width(self, width: f32) -> f32 {
         width.clamp(self.min_width, self.max_width)
     }
 
     /// Constrains a height to fit within these constraints.
-    pub fn constrain_height(&self, height: f32) -> f32 {
+    pub fn constrain_height(self, height: f32) -> f32 {
         height.clamp(self.min_height, self.max_height)
     }
 }

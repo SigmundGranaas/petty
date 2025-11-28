@@ -9,32 +9,24 @@ use crate::core::layout::nodes::block::BlockNode;
 use crate::core::layout::nodes::list_item::ListItemNode;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{LayoutEngine, LayoutError};
+use bumpalo::Bump;
 use std::sync::Arc;
 
 #[derive(Debug)]
-pub struct ListNode {
-    block: BlockNode,
+pub struct ListNode<'a> {
+    // Composed of a block node
+    block: BlockNode<'a>,
 }
 
-impl ListNode {
+impl<'a> ListNode<'a> {
     pub fn build(
         node: &IRNode,
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
-    ) -> Result<RenderNode, LayoutError> {
-        Ok(RenderNode::List(Box::new(Self::new(
-            node,
-            engine,
-            parent_style,
-        )?)))
-    }
-
-    pub fn new(
-        node: &IRNode,
-        engine: &LayoutEngine,
-        parent_style: Arc<ComputedStyle>,
-    ) -> Result<Self, LayoutError> {
-        Self::new_with_depth(node, engine, parent_style, 0)
+        arena: &'a Bump,
+    ) -> Result<RenderNode<'a>, LayoutError> {
+        let node = arena.alloc(Self::new_with_depth(node, engine, parent_style, 0, arena)?);
+        Ok(RenderNode::List(node))
     }
 
     pub fn new_with_depth(
@@ -42,6 +34,7 @@ impl ListNode {
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
         depth: usize,
+        arena: &'a Bump,
     ) -> Result<Self, LayoutError> {
         let style = engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
 
@@ -57,39 +50,30 @@ impl ListNode {
 
         let start_index = start.unwrap_or(1);
 
-        let mut children: Vec<RenderNode> = Vec::new();
+        let mut children_vec = Vec::new();
         for (i, child_ir) in ir_children.iter().enumerate() {
             if let IRNode::List { .. } = child_ir {
-                children.push(RenderNode::List(Box::new(ListNode::new_with_depth(
-                    child_ir,
-                    engine,
-                    style.clone(),
-                    depth + 1,
-                )?)));
+                let child_node = Self::new_with_depth(child_ir, engine, style.clone(), depth + 1, arena)?;
+                children_vec.push(RenderNode::List(arena.alloc(child_node)));
             } else if let IRNode::ListItem { .. } = child_ir {
-                children.push(RenderNode::ListItem(Box::new(ListItemNode::new(
-                    child_ir,
-                    engine,
-                    style.clone(),
-                    i + start_index,
-                    depth,
-                )?)));
+                let child_node = ListItemNode::new(child_ir, engine, style.clone(), i + start_index, depth, arena)?;
+                children_vec.push(RenderNode::ListItem(arena.alloc(child_node)));
             } else {
-                children.push(engine.build_layout_node_tree(child_ir, style.clone())?);
+                children_vec.push(engine.build_layout_node_tree(child_ir, style.clone(), arena)?);
             }
         }
 
-        let block = BlockNode::new_from_children(meta.id.clone(), children, style);
+        let block = BlockNode::new_from_children(meta.id.clone(), children_vec, style, arena);
         Ok(Self { block })
     }
 }
 
-impl LayoutNode for ListNode {
+impl<'a> LayoutNode for ListNode<'a> {
     fn style(&self) -> &Arc<ComputedStyle> {
         self.block.style()
     }
 
-    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
+    fn measure(&self, env: &mut LayoutEnvironment, constraints: BoxConstraints) -> Size {
         self.block.measure(env, constraints)
     }
 

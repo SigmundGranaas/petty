@@ -1,6 +1,6 @@
 // src/core/layout/nodes/image.rs
 
-use crate::core::idf::{IRNode, InlineMetadata};
+use crate::core::idf::{IRNode, InlineMetadata, TextStr};
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
     LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode,
@@ -10,26 +10,25 @@ use crate::core::layout::{
     ImageElement, LayoutElement, LayoutEngine, LayoutError, PositionedElement,
 };
 use crate::core::style::dimension::Dimension;
+use bumpalo::Bump;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct ImageNode {
-    id: Option<String>,
-    src: String,
+    id: Option<TextStr>,
+    src: TextStr,
     style: Arc<ComputedStyle>,
 }
 
 impl ImageNode {
-    pub fn build(
+    pub fn build<'a>(
         node: &IRNode,
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
-    ) -> Result<RenderNode, LayoutError> {
-        Ok(RenderNode::Image(Box::new(Self::new(
-            node,
-            engine,
-            parent_style,
-        )?)))
+        arena: &'a Bump,
+    ) -> Result<RenderNode<'a>, LayoutError> {
+        let item = arena.alloc(Self::new(node, engine, parent_style)?);
+        Ok(RenderNode::Image(item))
     }
 
     pub fn new(
@@ -55,12 +54,12 @@ impl ImageNode {
 
     pub fn new_inline(
         meta: &InlineMetadata,
-        src: String,
+        src: TextStr,
         engine: &LayoutEngine,
         parent_style: &Arc<ComputedStyle>,
+        _arena: &Bump,
     ) -> Result<Self, LayoutError> {
-        let style =
-            engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), parent_style);
+        let style = engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), parent_style);
         Ok(Self {
             id: None,
             src,
@@ -94,7 +93,7 @@ impl ImageNode {
         };
         let height = match &self.style.box_model.height {
             Some(Dimension::Pt(h)) => *h,
-            Some(Dimension::Percent(_)) | _ => width, // Simple aspect ratio assumption if mostly square/undefined
+            Some(Dimension::Percent(_)) | _ => width,
         };
 
         Size::new(width, height)
@@ -106,7 +105,7 @@ impl LayoutNode for ImageNode {
         &self.style
     }
 
-    fn measure(&self, _env: &LayoutEnvironment, constraints: BoxConstraints) -> Size {
+    fn measure(&self, _env: &mut LayoutEnvironment, constraints: BoxConstraints) -> Size {
         let content_size = self.resolve_sizes(constraints);
         let total_height = self.style.box_model.margin.top
             + content_size.height
@@ -120,10 +119,8 @@ impl LayoutNode for ImageNode {
         constraints: BoxConstraints,
         break_state: Option<NodeState>,
     ) -> Result<LayoutResult, LayoutError> {
-        // If we have a break state for an atomic image, it usually means we pushed it to the next page previously.
-        // We just proceed to render it now.
         if break_state.is_some() {
-            // No specific state resumption logic for atomic image needed
+            // resume logic...
         }
 
         if let Some(id) = &self.id {
@@ -136,13 +133,10 @@ impl LayoutNode for ImageNode {
             + self.style.box_model.margin.bottom;
 
         if total_height > ctx.bounds().height {
-            // Image is taller than the entire page.
-            // In a real engine we might clip or scale, here we skip/finish to avoid infinite loops.
             return Ok(LayoutResult::Finished);
         }
 
         if total_height > ctx.available_height() && !ctx.is_empty() {
-            // Not enough space left, push to next page
             return Ok(LayoutResult::Break(NodeState::Atomic));
         }
 
@@ -154,7 +148,7 @@ impl LayoutNode for ImageNode {
             width: size.width,
             height: size.height,
             element: LayoutElement::Image(ImageElement {
-                src: self.src.clone(),
+                src: self.src.to_string(),
             }),
             style: self.style.clone(),
         };

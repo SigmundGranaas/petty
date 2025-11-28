@@ -11,22 +11,16 @@ tempfile = "3.19.1"
 nom = "7.1"
 cosmic-text="0.14.2"
 taffy="0.8.1"
-enum_dispatch="0.3.1"
+bumpalo = "3.17.0"
 roxmltree = "0.20.0"
 # Data processing
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 image = { version = "0.25.1", features = ["png", "jpeg", "gif"] }
-fontdb = "0.23.0"
 
 # Template engines
 handlebars = "6.3.2"
 quick-xml = { version = "0.37.5", features = ["serialize"] }
-
-# Font handling
-fontdue = "0.9.0"
-lru = "0.12.3"
-
 # Utilities & Async
 thiserror = "2.0.12"
 rand = "0.9.1"
@@ -44,7 +38,6 @@ chrono = "0.4.42"
 [dev-dependencies]
 dhat = { version = "0.3"}
 tempfile = "3.10.1"
-fontdb = "0.23.0"
 
 [features]
 dhat-heap = []

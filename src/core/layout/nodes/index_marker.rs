@@ -1,37 +1,36 @@
 // src/core/layout/nodes/index_marker.rs
 
-use crate::core::idf::IRNode;
+use crate::core::idf::{IRNode, TextStr};
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
     LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode,
 };
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{LayoutEngine, LayoutError};
+use bumpalo::Bump;
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct IndexMarkerNode {
-    term: String,
+    term: TextStr,
     style: Arc<ComputedStyle>,
 }
 
 impl IndexMarkerNode {
-    pub fn build(
+    pub fn build<'a>(
         node: &IRNode,
         _engine: &LayoutEngine,
         _parent_style: Arc<ComputedStyle>,
-    ) -> Result<RenderNode, LayoutError> {
-        Ok(RenderNode::IndexMarker(Box::new(Self::new(node)?)))
-    }
-
-    pub fn new(node: &IRNode) -> Result<Self, LayoutError> {
+        arena: &'a Bump,
+    ) -> Result<RenderNode<'a>, LayoutError> {
         let IRNode::IndexMarker { term, .. } = node else {
             return Err(LayoutError::BuilderMismatch("IndexMarker", node.kind()));
         };
-        Ok(Self {
+        let node = arena.alloc(Self {
             term: term.clone(),
             style: Arc::new(ComputedStyle::default()),
-        })
+        });
+        Ok(RenderNode::IndexMarker(node))
     }
 }
 
@@ -40,7 +39,7 @@ impl LayoutNode for IndexMarkerNode {
         &self.style
     }
 
-    fn measure(&self, _env: &LayoutEnvironment, _constraints: BoxConstraints) -> Size {
+    fn measure(&self, _env: &mut LayoutEnvironment, _constraints: BoxConstraints) -> Size {
         Size::zero()
     }
 

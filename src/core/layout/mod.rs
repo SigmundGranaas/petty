@@ -1,4 +1,3 @@
-
 use thiserror::Error;
 
 /// Errors that can occur during the layout process.
@@ -20,12 +19,13 @@ pub enum LayoutError {
 /// The tree-based, multi-pass layout engine.
 
 // Re-export the main entry point and key types for external use.
+// Ensure engine is defined before re-exporting
+mod engine;
 pub use self::engine::LayoutEngine;
 pub use self::node::{AnchorLocation, IndexEntry, LayoutContext, LayoutEnvironment, NodeState};
 
 // Declare the modules that make up the layout engine.
 mod elements;
-mod engine;
 pub mod fonts;
 pub mod geom;
 pub mod node;
