@@ -1,9 +1,10 @@
 // src/core/layout/nodes/table.rs
 
 use crate::core::idf::{IRNode, TableColumnDefinition, TableRow, TextStr};
+use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
-    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode,
+    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode, TableState,
 };
 use crate::core::layout::nodes::block::BlockNode;
 use crate::core::layout::style::ComputedStyle;
@@ -11,6 +12,20 @@ use crate::core::layout::{LayoutEngine, LayoutError};
 use crate::core::style::dimension::Dimension;
 use bumpalo::Bump;
 use std::sync::Arc;
+
+pub struct TableBuilder;
+
+impl NodeBuilder for TableBuilder {
+    fn build<'a>(
+        &self,
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+        arena: &'a Bump,
+    ) -> Result<RenderNode<'a>, LayoutError> {
+        TableNode::build(node, engine, parent_style, arena)
+    }
+}
 
 #[derive(Debug)]
 pub struct TableNode<'a> {
@@ -165,6 +180,111 @@ impl<'a> TableNode<'a> {
 
         widths
     }
+
+    // Helper to calculate height of all rows ahead of time
+    fn calculate_all_row_heights(
+        &self,
+        env: &mut LayoutEnvironment,
+        col_widths: &[f32]
+    ) -> Vec<f32> {
+        let mut row_heights = Vec::with_capacity(self.header_rows.len() + self.body_rows.len());
+
+        // Measure header rows first
+        for row in &self.header_rows {
+            row_heights.push(row.measure_height(env, col_widths));
+        }
+
+        // Measure body rows
+        for row in &self.body_rows {
+            row_heights.push(row.measure_height(env, col_widths));
+        }
+        row_heights
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_row(
+        &self,
+        ctx: &mut LayoutContext,
+        row: &TableRowNode,
+        widths: &[f32],
+        y: f32,
+        height: f32,
+        x_start: f32,
+        occupied_until_row_idx: &mut Vec<usize>,
+        current_row_idx: usize,
+        future_heights: &[f32],
+    ) -> Result<(), LayoutError> {
+        let mut x_offset = 0.0;
+        let mut col_cursor = 0;
+
+        let mut cell_iter = row.cells.iter();
+
+        while col_cursor < widths.len() {
+            // Check if current slot is occupied by a previous rowspan
+            // If the slot is blocked UNTIL row X, and we are currently at row Y,
+            // we are blocked if X > Y.
+            if col_cursor < occupied_until_row_idx.len() && occupied_until_row_idx[col_cursor] > current_row_idx {
+                // Skip occupied slot
+                x_offset += widths[col_cursor];
+                col_cursor += 1;
+                continue;
+            }
+
+            // Get next cell
+            if let Some(cell) = cell_iter.next() {
+                let colspan = cell.colspan;
+                let rowspan = cell.rowspan;
+
+                // Calculate width
+                let end_col = (col_cursor + colspan).min(widths.len());
+                let cell_width: f32 = widths[col_cursor..end_col].iter().sum();
+
+                // Calculate height (handle rowspan)
+                let mut cell_height = height;
+                if rowspan > 1 {
+                    // Sum heights of next (rowspan-1) rows
+                    // future_heights[0] is current row height
+                    // future_heights[1] is next row, etc.
+                    let limit = rowspan.min(future_heights.len());
+                    cell_height = future_heights[0..limit].iter().sum();
+
+                    // Mark slots as occupied for future rows.
+                    // If current row is 5 and rowspan is 2, it occupies 5 and 6.
+                    // So it is occupied UNTIL row 7 (index 5 + 2).
+                    let free_at_index = current_row_idx + rowspan;
+
+                    for k in 0..colspan {
+                        if col_cursor + k < occupied_until_row_idx.len() {
+                            occupied_until_row_idx[col_cursor + k] = free_at_index;
+                        }
+                    }
+                }
+
+                // Layout Cell Content
+                ctx.with_child_bounds(
+                    crate::core::layout::geom::Rect {
+                        x: ctx.bounds().x + x_start + x_offset,
+                        y: ctx.bounds().y + y,
+                        width: cell_width,
+                        height: cell_height
+                    },
+                    |cell_ctx| {
+                        cell.content.layout(
+                            cell_ctx,
+                            BoxConstraints::tight(crate::core::layout::geom::Size::new(cell_width, cell_height)),
+                            None
+                        )
+                    }
+                )?;
+
+                x_offset += cell_width;
+                col_cursor += colspan;
+            } else {
+                break; // No more cells in this row definition
+            }
+        }
+        Ok(())
+    }
 }
 
 impl<'a> LayoutNode for TableNode<'a> {
@@ -204,10 +324,116 @@ impl<'a> LayoutNode for TableNode<'a> {
 
     fn layout(
         &self,
-        _ctx: &mut LayoutContext,
-        _constraints: BoxConstraints,
-        _break_state: Option<NodeState>,
+        ctx: &mut LayoutContext,
+        constraints: BoxConstraints,
+        break_state: Option<NodeState>,
     ) -> Result<LayoutResult, LayoutError> {
+        if let Some(id) = &self.id {
+            ctx.register_anchor(id);
+        }
+
+        let start_row_index = if let Some(state) = break_state {
+            state.as_table()?.row_index
+        } else {
+            0
+        };
+
+        // 1. Calculate Widths
+        let available_width = if constraints.has_bounded_width() {
+            Some((constraints.max_width - self.style.padding_x() - self.style.border_x()).max(0.0))
+        } else {
+            None
+        };
+
+        // Reconstruct a temporary env for measurement
+        let mut env = LayoutEnvironment {
+            engine: ctx.engine,
+            font_system: ctx.font_system,
+            local_page_index: ctx.local_page_index,
+        };
+        let col_widths = self.calculate_column_widths(&mut env, available_width);
+
+        // Pre-calculate heights for all rows to handle layout
+        // Note: Indices in row_heights cover [header_rows..., body_rows...]
+        let all_row_heights = self.calculate_all_row_heights(&mut env, &col_widths);
+
+        let header_count = self.header_rows.len();
+
+        if start_row_index == 0 {
+            let margin_to_add = self.style.box_model.margin.top.max(ctx.last_v_margin);
+            ctx.advance_cursor(margin_to_add);
+        }
+        ctx.last_v_margin = 0.0;
+
+        let start_y = ctx.cursor_y();
+        let border_left = self.style.border_left_width();
+        let padding_left = self.style.box_model.padding.left;
+        let table_x_start = border_left + padding_left; // Relative to ctx bounds
+
+        let mut current_y_offset = 0.0; // Relative to content box
+
+        // FIX: Track occupied slots using absolute row indices.
+        // `occupied_until_row_idx[col]` means column `col` is occupied until `row_idx` (exclusive).
+        // e.g. if row 0 has rowspan 2, it occupies 0 and 1. It is free at 2.
+        let mut occupied_until_row_idx = vec![0usize; self.columns.len().max(1)];
+
+        // 2. Draw Header
+        // Headers are typically an independent grid from the body.
+        // We render headers first.
+        if !self.header_rows.is_empty() {
+            for (i, row) in self.header_rows.iter().enumerate() {
+                let height = all_row_heights[i];
+
+                // Headers have their own rowspan context
+                let mut header_occupied = vec![0usize; self.columns.len().max(1)];
+
+                self.render_row(
+                    ctx,
+                    row,
+                    &col_widths,
+                    start_y + current_y_offset,
+                    height,
+                    table_x_start,
+                    &mut header_occupied,
+                    i, // Current row index within header context
+                    &all_row_heights // Pass all heights
+                )?;
+                current_y_offset += height;
+            }
+        }
+
+        // 3. Body Rows
+        // Note: If we resumed from a page break, `occupied_until_row_idx` would be lost.
+        // Recovering exact rowspan state across page breaks is complex. 
+        // For now, we assume clean breaks or simple layouts.
+
+        for (i, row) in self.body_rows.iter().enumerate().skip(start_row_index) {
+            // Index in all_row_heights includes headers
+            let height_idx = header_count + i;
+            let row_height = all_row_heights[height_idx];
+
+            if start_y + current_y_offset + row_height > ctx.bounds().height {
+                // Break here
+                return Ok(LayoutResult::Break(NodeState::Table(TableState { row_index: i })));
+            }
+
+            self.render_row(
+                ctx,
+                row,
+                &col_widths,
+                start_y + current_y_offset,
+                row_height,
+                table_x_start,
+                &mut occupied_until_row_idx,
+                i, // Current body row index
+                &all_row_heights[height_idx..] // pass slice starting from current row for height lookahead
+            )?;
+            current_y_offset += row_height;
+        }
+
+        ctx.set_cursor_y(start_y + current_y_offset + self.style.box_model.padding.bottom + self.style.border_bottom_width());
+        ctx.last_v_margin = self.style.box_model.margin.bottom;
+
         Ok(LayoutResult::Finished)
     }
 }
@@ -237,7 +463,9 @@ impl<'a> TableRowNode<'a> {
         let mut col_cursor = 0;
 
         for cell in &self.cells {
-            if col_cursor >= col_widths.len() { break; }
+            if col_cursor >= col_widths.len() {
+                break;
+            }
             let end_col = (col_cursor + cell.colspan).min(col_widths.len());
             let cell_width: f32 = col_widths[col_cursor..end_col].iter().sum();
 

@@ -5,19 +5,11 @@ use super::node::{
     AnchorLocation, IndexEntry, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult,
     NodeState, RenderNode,
 };
-use super::nodes::block::BlockNode;
-use super::nodes::flex::FlexNode;
-use super::nodes::heading::HeadingNode;
-use super::nodes::image::ImageNode;
-use super::nodes::index_marker::IndexMarkerNode;
-use super::nodes::list::ListNode;
-use super::nodes::list_item::ListItemNode;
-use super::nodes::page_break::PageBreakNode;
-use super::nodes::paragraph::ParagraphNode;
-use super::nodes::table::TableNode;
+use super::node_kind::NodeKind;
 use super::style::{self, ComputedStyle};
 use super::{FontManager, PipelineError, PositionedElement};
 use crate::core::idf::{IRNode, TextStr};
+use crate::core::layout::builder::NodeRegistry;
 use crate::core::layout::LayoutError;
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
 use bumpalo::Bump;
@@ -26,14 +18,40 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+// Import builders for registration
+use super::nodes::{
+    block::BlockBuilder, flex::FlexBuilder, heading::HeadingBuilder, image::ImageBuilder,
+    index_marker::IndexMarkerBuilder, list::ListBuilder, list_item::ListItemBuilder,
+    page_break::PageBreakBuilder, paragraph::ParagraphBuilder, table::TableBuilder,
+};
+
 #[derive(Clone)]
 pub struct LayoutEngine {
     pub(crate) font_manager: Arc<FontManager>,
+    registry: Arc<NodeRegistry>,
 }
 
 impl LayoutEngine {
     pub fn new(font_manager: Arc<FontManager>) -> Self {
-        LayoutEngine { font_manager }
+        let mut registry = NodeRegistry::new();
+
+        // Register default node builders
+        registry.register(NodeKind::Root, Box::new(BlockBuilder));
+        registry.register(NodeKind::Block, Box::new(BlockBuilder));
+        registry.register(NodeKind::Paragraph, Box::new(ParagraphBuilder));
+        registry.register(NodeKind::Heading, Box::new(HeadingBuilder));
+        registry.register(NodeKind::Image, Box::new(ImageBuilder));
+        registry.register(NodeKind::FlexContainer, Box::new(FlexBuilder));
+        registry.register(NodeKind::List, Box::new(ListBuilder));
+        registry.register(NodeKind::ListItem, Box::new(ListItemBuilder));
+        registry.register(NodeKind::Table, Box::new(TableBuilder));
+        registry.register(NodeKind::PageBreak, Box::new(PageBreakBuilder));
+        registry.register(NodeKind::IndexMarker, Box::new(IndexMarkerBuilder));
+
+        LayoutEngine {
+            font_manager,
+            registry: Arc::new(registry),
+        }
     }
 
     pub fn paginate(
@@ -173,19 +191,11 @@ impl LayoutEngine {
         parent_style: Arc<ComputedStyle>,
         arena: &'a Bump,
     ) -> Result<RenderNode<'a>, LayoutError> {
-        match node {
-            IRNode::Root(_) => BlockNode::build(node, self, parent_style, arena),
-            IRNode::Block { .. } => BlockNode::build(node, self, parent_style, arena),
-            IRNode::ListItem { .. } => ListItemNode::build(node, self, parent_style, arena),
-            IRNode::Paragraph { .. } => ParagraphNode::build(node, self, parent_style, arena),
-            IRNode::Heading { .. } => HeadingNode::build(node, self, parent_style, arena),
-            IRNode::Image { .. } => ImageNode::build(node, self, parent_style, arena),
-            IRNode::FlexContainer { .. } => FlexNode::build(node, self, parent_style, arena),
-            IRNode::List { .. } => ListNode::build(node, self, parent_style, arena),
-            IRNode::Table { .. } => TableNode::build(node, self, parent_style, arena),
-            IRNode::PageBreak { .. } => PageBreakNode::build(node, self, parent_style, arena),
-            IRNode::IndexMarker { .. } => IndexMarkerNode::build(node, self, parent_style, arena),
-        }
+        let kind = NodeKind::from_ir(node);
+        let builder = self.registry.get(kind)
+            .ok_or_else(|| LayoutError::BuilderMismatch("Known Node", kind.as_str()))?;
+
+        builder.build(node, self, parent_style, arena)
     }
 
     pub fn compute_style(

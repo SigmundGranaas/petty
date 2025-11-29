@@ -1,6 +1,7 @@
 // src/core/layout/nodes/block.rs
 
 use crate::core::idf::{IRNode, TextStr};
+use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::elements::RectElement;
 use crate::core::layout::geom::{self, BoxConstraints, Size};
 use crate::core::layout::node::{
@@ -12,6 +13,20 @@ use crate::core::style::border::Border;
 use crate::core::style::dimension::Dimension;
 use bumpalo::Bump;
 use std::sync::Arc;
+
+pub struct BlockBuilder;
+
+impl NodeBuilder for BlockBuilder {
+    fn build<'a>(
+        &self,
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+        arena: &'a Bump,
+    ) -> Result<RenderNode<'a>, LayoutError> {
+        BlockNode::build(node, engine, parent_style, arena)
+    }
+}
 
 #[derive(Debug)]
 pub struct BlockNode<'a> {
@@ -30,14 +45,6 @@ impl<'a> BlockNode<'a> {
     ) -> Result<RenderNode<'a>, LayoutError> {
         let (id, children_ir, style) = match node {
             IRNode::Block { meta, children } => {
-                let style = engine.compute_style(
-                    &meta.style_sets,
-                    meta.style_override.as_ref(),
-                    &parent_style,
-                );
-                (meta.id.clone(), children, style)
-            }
-            IRNode::ListItem { meta, children } => {
                 let style = engine.compute_style(
                     &meta.style_sets,
                     meta.style_override.as_ref(),
@@ -175,9 +182,10 @@ impl<'a> LayoutNode for BlockNode<'a> {
             height: ctx.available_height(),
         };
 
-        let mut child_split_result = LayoutResult::Finished;
-
-        let _ = ctx.with_child_bounds(child_bounds, |child_ctx| {
+        // Layout children in a sub-context.
+        // Capture the child_cursor_y to know the exact used height of content.
+        let (child_cursor_y, child_split_result) = ctx.with_child_bounds(child_bounds, |child_ctx| {
+            let mut split_res = LayoutResult::Finished;
             for (i, child) in self.children.iter().enumerate().skip(start_index) {
                 let resume = if i == start_index {
                     child_resume_state.take()
@@ -190,22 +198,21 @@ impl<'a> LayoutNode for BlockNode<'a> {
                 match res {
                     LayoutResult::Finished => {}
                     LayoutResult::Break(next_state) => {
-                        child_split_result = LayoutResult::Break(NodeState::Block(BlockState {
+                        split_res = LayoutResult::Break(NodeState::Block(BlockState {
                             child_index: i,
                             child_state: Some(Box::new(next_state)),
                         }));
-                        return Ok(()); // Break loop
+                        break;
                     }
                 }
             }
-            Ok(())
+            Ok((child_ctx.cursor_y(), split_res))
         })?;
 
-        let actual_used_height = if matches!(child_split_result, LayoutResult::Finished) {
-            ctx.cursor_y() - content_start_y_in_ctx
-        } else {
-            ctx.available_height()
-        };
+        // FIX: Always use the child_cursor_y (content height) for background calculation,
+        // even if a break occurred. This ensures the background tightly wraps the content
+        // that actually fit on this page.
+        let actual_used_height = child_cursor_y;
 
         let bg_elements = create_background_and_borders(
             ctx.bounds(),
@@ -224,6 +231,7 @@ impl<'a> LayoutNode for BlockNode<'a> {
             LayoutResult::Finished => {
                 let border_bottom = self.style.border_bottom_width();
                 let bottom_spacing = self.style.box_model.padding.bottom + border_bottom;
+                // Move parent cursor past the block
                 ctx.set_cursor_y(content_start_y_in_ctx + actual_used_height + bottom_spacing);
                 ctx.last_v_margin = self.style.box_model.margin.bottom;
                 Ok(LayoutResult::Finished)

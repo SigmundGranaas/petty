@@ -1,6 +1,7 @@
 // src/core/layout/nodes/list_item.rs
 
 use crate::core::idf::{IRNode, InlineNode, TextStr};
+use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::geom::{self, BoxConstraints, Size};
 use crate::core::layout::node::{
     LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, ListItemState, NodeState, RenderNode,
@@ -17,6 +18,22 @@ use crate::core::style::text::TextDecoration;
 use bumpalo::Bump;
 use std::sync::Arc;
 
+pub struct ListItemBuilder;
+
+impl NodeBuilder for ListItemBuilder {
+    fn build<'a>(
+        &self,
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+        arena: &'a Bump,
+    ) -> Result<RenderNode<'a>, LayoutError> {
+        // ListItems are usually built by ListNode, but for standalone cases:
+        let item = ListItemNode::new(node, engine, parent_style, 1, 0, arena)?;
+        Ok(RenderNode::ListItem(arena.alloc(item)))
+    }
+}
+
 #[derive(Debug)]
 pub struct ListItemNode<'a> {
     id: Option<TextStr>,
@@ -26,17 +43,6 @@ pub struct ListItemNode<'a> {
 }
 
 impl<'a> ListItemNode<'a> {
-    pub fn build(
-        node: &IRNode,
-        engine: &LayoutEngine,
-        parent_style: Arc<ComputedStyle>,
-        arena: &'a Bump,
-    ) -> Result<RenderNode<'a>, LayoutError> {
-        // ListItems are usually built by ListNode, but for standalone cases:
-        let item = Self::new(node, engine, parent_style, 1, 0, arena)?;
-        Ok(RenderNode::ListItem(arena.alloc(item)))
-    }
-
     pub fn new(
         node: &IRNode,
         engine: &LayoutEngine,
@@ -227,9 +233,8 @@ impl<'a> LayoutNode for ListItemNode<'a> {
             height: ctx.available_height(),
         };
 
-        let mut child_split_result = LayoutResult::Finished;
-
-        let _ = ctx.with_child_bounds(child_bounds, |child_ctx| {
+        let (child_cursor_y, child_split_result) = ctx.with_child_bounds(child_bounds, |child_ctx| {
+            let mut split_res = LayoutResult::Finished;
             for (i, child) in self.children.iter().enumerate().skip(start_index) {
                 let child_constraints = BoxConstraints::tight_width(child_bounds.width);
 
@@ -242,20 +247,20 @@ impl<'a> LayoutNode for ListItemNode<'a> {
                 match res {
                     LayoutResult::Finished => {}
                     LayoutResult::Break(next_state) => {
-                        child_split_result = LayoutResult::Break(NodeState::ListItem(ListItemState {
+                        split_res = LayoutResult::Break(NodeState::ListItem(ListItemState {
                             child_index: i,
                             child_state: Some(Box::new(next_state)),
                         }));
-                        return Ok(());
+                        break;
                     }
                 }
             }
-            Ok(())
+            Ok((child_ctx.cursor_y(), split_res))
         })?;
 
         // Recalculate used height based on split result
         let used_height = if matches!(child_split_result, LayoutResult::Finished) {
-            ctx.cursor_y() - content_start_y_in_ctx
+            child_cursor_y
         } else {
             ctx.available_height()
         };

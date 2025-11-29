@@ -1,6 +1,7 @@
 // src/core/layout/nodes/page_break.rs
 
 use crate::core::idf::{IRNode, TextStr};
+use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
     LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode,
@@ -9,6 +10,20 @@ use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{LayoutEngine, LayoutError};
 use bumpalo::Bump;
 use std::sync::Arc;
+
+pub struct PageBreakBuilder;
+
+impl NodeBuilder for PageBreakBuilder {
+    fn build<'a>(
+        &self,
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+        arena: &'a Bump,
+    ) -> Result<RenderNode<'a>, LayoutError> {
+        PageBreakNode::build(node, engine, parent_style, arena)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct PageBreakNode {

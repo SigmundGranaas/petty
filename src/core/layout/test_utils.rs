@@ -31,7 +31,7 @@ pub fn paginate_test_nodes(
     ),
     PipelineError,
 > {
-    let engine = create_test_engine();
+    let mut engine = create_test_engine();
     engine.paginate(&stylesheet, nodes)
 }
 

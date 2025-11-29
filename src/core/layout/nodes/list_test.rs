@@ -1,13 +1,14 @@
-// src/core/layout/list_test.rs
+// src/core/layout/nodes/list_test.rs
 #![cfg(test)]
 
+// Correct import path for test_utils which is in crate::core::layout
+use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
 use crate::core::idf::{IRNode, NodeMetadata};
 use crate::core::layout::{LayoutElement, TextElement};
 use crate::core::style::dimension::{Margins, PageSize};
 use crate::core::style::list::{ListStylePosition, ListStyleType};
 use crate::core::style::stylesheet::{ElementStyle, PageLayout, Stylesheet};
 use std::collections::HashMap;
-use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
 
 fn create_list_item(text: &str) -> IRNode {
     IRNode::ListItem {
@@ -182,12 +183,8 @@ fn test_list_style_position_inside() {
     let text_element = &page1[0];
     let content = get_text_content(&text_element.element);
 
-    // Note: Since text merging is not implemented yet, the content is just "Item 1".
-    // We remove the assertion checking for the bullet point.
-    // assert!(content.starts_with("• Item 1"));
-
-    // We still verify that indentation is 0.
-    assert_eq!(text_element.x, 0.0);
+    assert!(content.starts_with("• Item 1"));
+    assert_eq!(text_element.x, 0.0); // Starts at the beginning of the block
 }
 
 #[test]

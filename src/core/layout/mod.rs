@@ -26,6 +26,7 @@ pub use self::node::{AnchorLocation, IndexEntry, LayoutContext, LayoutEnvironmen
 
 // Declare the modules that make up the layout engine.
 mod elements;
+pub mod builder; // <--- Added this line to register the builder module
 pub mod fonts;
 pub mod geom;
 pub mod node;

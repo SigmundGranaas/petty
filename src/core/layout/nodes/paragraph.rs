@@ -1,6 +1,7 @@
 // src/core/layout/nodes/paragraph.rs
 
 use crate::core::idf::{IRNode, TextStr};
+use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
     LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, ParagraphState,
@@ -16,6 +17,20 @@ use crate::core::style::text::TextAlign;
 use bumpalo::Bump;
 use cosmic_text::{AttrsList, Buffer, LayoutRun, Metrics, Wrap, FontSystem};
 use std::sync::Arc;
+
+pub struct ParagraphBuilder;
+
+impl NodeBuilder for ParagraphBuilder {
+    fn build<'a>(
+        &self,
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+        arena: &'a Bump,
+    ) -> Result<RenderNode<'a>, LayoutError> {
+        ParagraphNode::build(node, engine, parent_style, arena)
+    }
+}
 
 #[derive(Debug)]
 pub struct ParagraphNode<'a> {

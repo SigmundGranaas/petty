@@ -1,6 +1,7 @@
 // src/core/layout/nodes/image.rs
 
 use crate::core::idf::{IRNode, InlineMetadata, TextStr};
+use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
     LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode,
@@ -12,6 +13,20 @@ use crate::core::layout::{
 use crate::core::style::dimension::Dimension;
 use bumpalo::Bump;
 use std::sync::Arc;
+
+pub struct ImageBuilder;
+
+impl NodeBuilder for ImageBuilder {
+    fn build<'a>(
+        &self,
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+        arena: &'a Bump,
+    ) -> Result<RenderNode<'a>, LayoutError> {
+        ImageNode::build(node, engine, parent_style, arena)
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct ImageNode {

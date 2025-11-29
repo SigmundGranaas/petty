@@ -1,6 +1,5 @@
 // src/core/layout/builder.rs
 //! Defines the trait and registry for constructing `LayoutNode`s from `IRNode`s.
-//! This decoupling allows new node types to be registered without modifying the core engine.
 
 use crate::core::idf::IRNode;
 use crate::core::layout::engine::LayoutEngine;
@@ -8,17 +7,19 @@ use crate::core::layout::node::RenderNode;
 use crate::core::layout::node_kind::NodeKind;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::LayoutError;
+use bumpalo::Bump;
 use std::collections::HashMap;
 use std::sync::Arc;
 
 /// A trait for types that can build a `RenderNode` from an `IRNode`.
 pub trait NodeBuilder: Send + Sync {
-    fn build(
+    fn build<'a>(
         &self,
         node: &IRNode,
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
-    ) -> Result<RenderNode, LayoutError>;
+        arena: &'a Bump,
+    ) -> Result<RenderNode<'a>, LayoutError>;
 }
 
 /// A registry for mapping `NodeKind` to `NodeBuilder`s.

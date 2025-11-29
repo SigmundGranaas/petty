@@ -1,6 +1,7 @@
 // src/core/layout/nodes/flex.rs
 
 use crate::core::idf::{IRNode, TextStr};
+use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::geom::{self, BoxConstraints};
 use crate::core::layout::node::{
     FlexState, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode,
@@ -14,6 +15,20 @@ use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use taffy::prelude::*;
+
+pub struct FlexBuilder;
+
+impl NodeBuilder for FlexBuilder {
+    fn build<'a>(
+        &self,
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+        arena: &'a Bump,
+    ) -> Result<RenderNode<'a>, LayoutError> {
+        FlexNode::build(node, engine, parent_style, arena)
+    }
+}
 
 #[derive(Debug, Clone)]
 struct FlexLayoutOutput {
@@ -305,7 +320,6 @@ impl<'a> LayoutNode for FlexNode<'a> {
                 None
             };
 
-            // Fix: propagate error using ? and match on the result
             let res = ctx.with_child_bounds(child_rect, |child_ctx| {
                 self.children[i].layout(child_ctx, child_constraints, child_resume)
             })?;
