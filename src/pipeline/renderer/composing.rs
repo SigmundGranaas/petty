@@ -10,7 +10,7 @@ use crate::render::DocumentRenderer as _;
 use log::{info, warn};
 use lopdf::{dictionary, Document as LopdfDocument, Object, ObjectId, StringFormat};
 use serde_json::json;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{HashMap};
 use std::io::{Cursor, Seek, Write};
 
 /// A rendering strategy that composes a final document from multiple sources.
@@ -69,10 +69,24 @@ impl RenderingStrategy for ComposingRenderer {
                 let exec_config = ExecutionConfig { format: DataSourceFormat::Json, strict: false };
                 let ir_nodes = template.execute(&doc_json_str, exec_config)?;
 
-                let layout_engine = LayoutEngine::new(context.font_manager.clone());
+                // Use SharedFontLibrary to create engine
+                let layout_engine = LayoutEngine::new(&context.font_library);
                 let mut temp_renderer = LopdfRenderer::new(layout_engine, stylesheet.clone())?;
                 temp_renderer.begin_document(Cursor::new(Vec::new()))?;
-                let (laid_out_pages, _, _) = temp_renderer.layout_engine.paginate(&stylesheet, ir_nodes)?;
+
+                // New layout strategy
+                let arena = bumpalo::Bump::new();
+                let ir_root = crate::core::idf::IRNode::Root(ir_nodes);
+                let root_node = temp_renderer.layout_engine.build_render_tree(&ir_root, &arena)
+                    .map_err(|e| PipelineError::Layout(e.to_string()))?;
+
+                let iterator = temp_renderer.layout_engine.paginate(&stylesheet, root_node, &arena)
+                    .map_err(|e| PipelineError::Layout(e.to_string()))?;
+
+                let mut laid_out_pages = Vec::new();
+                for page_res in iterator {
+                    laid_out_pages.push(page_res?.elements);
+                }
 
                 if !laid_out_pages.is_empty() {
                     let pending_links = collect_links_from_layout(&laid_out_pages);
@@ -80,7 +94,7 @@ impl RenderingStrategy for ComposingRenderer {
                     let mut new_page_ids = vec![];
                     let font_map: HashMap<String, String>;
                     {
-                        let system = temp_renderer.layout_engine.font_manager.system.lock().unwrap();
+                        let system = temp_renderer.layout_engine.font_system();
                         font_map = system.db().faces().enumerate().map(|(i, f)| (f.post_script_name.clone(), format!("F{}", i + 1))).collect();
                     }
 
@@ -129,16 +143,29 @@ impl RenderingStrategy for ComposingRenderer {
                 let exec_config = ExecutionConfig { format: DataSourceFormat::Json, strict: false };
                 let ir_nodes = template.execute(&doc_json_str, exec_config)?;
 
-                let layout_engine = LayoutEngine::new(context.font_manager.clone());
+                let layout_engine = LayoutEngine::new(&context.font_library);
                 let mut temp_renderer = LopdfRenderer::new(layout_engine, stylesheet.clone())?;
                 temp_renderer.begin_document(Cursor::new(Vec::new()))?;
-                let (laid_out_pages, _, _) = temp_renderer.layout_engine.paginate(&stylesheet, ir_nodes)?;
+
+                // New layout strategy
+                let arena = bumpalo::Bump::new();
+                let ir_root = crate::core::idf::IRNode::Root(ir_nodes);
+                let root_node = temp_renderer.layout_engine.build_render_tree(&ir_root, &arena)
+                    .map_err(|e| PipelineError::Layout(e.to_string()))?;
+
+                let iterator = temp_renderer.layout_engine.paginate(&stylesheet, root_node, &arena)
+                    .map_err(|e| PipelineError::Layout(e.to_string()))?;
+
+                let mut laid_out_pages = Vec::new();
+                for page_res in iterator {
+                    laid_out_pages.push(page_res?.elements);
+                }
 
                 if !laid_out_pages.is_empty() {
                     let mut new_page_ids = vec![];
                     let font_map: HashMap<String, String>;
                     {
-                        let system = temp_renderer.layout_engine.font_manager.system.lock().unwrap();
+                        let system = temp_renderer.layout_engine.font_system();
                         font_map = system.db().faces().enumerate().map(|(i, f)| (f.post_script_name.clone(), format!("F{}", i + 1))).collect();
                     }
 
@@ -165,8 +192,8 @@ impl RenderingStrategy for ComposingRenderer {
         for (role, template) in context.role_templates.iter() {
             if overlay_roles.contains(&role.as_str()) {
                 info!("[COMPOSER] Executing overlay role template: '{}'", role);
-                // CHANGE: Declare as mut so paginate can be called
-                let mut layout_engine = LayoutEngine::new(context.font_manager.clone());
+                // Create layout engine using shared library
+                let layout_engine = LayoutEngine::new(&context.font_library);
 
                 for (i, page_id) in page_ids.iter().enumerate() {
                     let page_number = i + 1;
@@ -177,15 +204,27 @@ impl RenderingStrategy for ComposingRenderer {
                     let exec_config = ExecutionConfig { format: DataSourceFormat::Json, strict: false };
                     let ir_nodes = template.execute(&overlay_context_str, exec_config)?;
 
-                    // CHANGE: Now calling paginate on a mutable engine
-                    let (mut overlay_pages, _, _) = layout_engine.paginate(&stylesheet, ir_nodes)?;
+                    // New layout strategy
+                    let arena = bumpalo::Bump::new();
+                    let ir_root = crate::core::idf::IRNode::Root(ir_nodes);
+                    let root_node = layout_engine.build_render_tree(&ir_root, &arena)
+                        .map_err(|e| PipelineError::Layout(e.to_string()))?;
+
+                    let iterator = layout_engine.paginate(&stylesheet, root_node, &arena)
+                        .map_err(|e| PipelineError::Layout(e.to_string()))?;
+
+                    let mut overlay_pages = Vec::new();
+                    for page_res in iterator {
+                        overlay_pages.push(page_res?.elements);
+                    }
+
                     if let Some(elements) = overlay_pages.pop() {
                         if !overlay_pages.is_empty() {
                             warn!("[COMPOSER] Overlay template for role '{}' generated more than one page of content. Only the first will be used.", role);
                         }
                         let font_map: HashMap<String, String>;
                         {
-                            let system = context.font_manager.system.lock().unwrap();
+                            let system = layout_engine.font_system();
                             font_map = system.db().faces().enumerate().map(|(i, f)| (f.post_script_name.clone(), format!("F{}", i + 1))).collect();
                         }
                         let content = crate::render::lopdf_helpers::render_elements_to_content(elements, &font_map, page_width, page_height)?;
@@ -356,7 +395,7 @@ fn build_outlines_for_doc(
     prepended_pages: usize,
 ) -> Result<Option<ObjectId>, PipelineError> {
     if doc_meta.headings.is_empty() { return Ok(None); }
-    let anchor_map: BTreeMap<String, &Anchor> = doc_meta.anchors.iter().map(|a| (a.id.clone(), a)).collect();
+    let anchor_map: std::collections::BTreeMap<String, &Anchor> = doc_meta.anchors.iter().map(|a| (a.id.clone(), a)).collect();
 
     struct FlatOutlineItem { id: ObjectId, parent_idx: Option<usize>, dict: lopdf::Dictionary }
     struct NodeOutlineItem { id: ObjectId, children: Vec<NodeOutlineItem>, dict: lopdf::Dictionary }

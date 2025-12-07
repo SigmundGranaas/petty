@@ -15,8 +15,11 @@ use crate::core::layout::{LayoutEngine, LayoutError};
 use crate::core::style::dimension::Dimension;
 use crate::core::style::text::TextAlign;
 use bumpalo::Bump;
-use cosmic_text::{AttrsList, Buffer, LayoutRun, Metrics, Wrap, FontSystem};
+use cosmic_text::{AttrsList, Buffer, LayoutRun, Metrics, Wrap};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::time::Instant;
 
 pub struct ParagraphBuilder;
 
@@ -75,15 +78,35 @@ impl<'a> ParagraphNode<'a> {
         Ok(RenderNode::Paragraph(node))
     }
 
+    /// Generates a cache key for the paragraph based on its pointer identity and constraints.
+    fn get_cache_key(&self, max_width: Option<f32>) -> u64 {
+        let mut s = DefaultHasher::new();
+        // Hash the pointer address to identify this specific paragraph instance
+        (self as *const Self).hash(&mut s);
+        // Add content length for extra safety against address reuse collisions
+        self.text_content.len().hash(&mut s);
+        // Hash the constraint to differentiate layouts at different widths
+        if let Some(w) = max_width {
+            ((w * 100.0) as i64).hash(&mut s);
+        } else {
+            (-1i64).hash(&mut s);
+        }
+        s.finish()
+    }
+
     /// Creates and shapes a buffer for the current content and constraints.
-    fn shape_text(&self, engine: &LayoutEngine, font_system: &mut FontSystem, max_width: Option<f32>) -> Buffer {
+    fn shape_text(&self, engine: &LayoutEngine, max_width: Option<f32>) -> Buffer {
+        let start = Instant::now();
+
+        let mut font_system = engine.font_system();
+
         let metrics = Metrics::new(self.style.text.font_size, self.style.text.line_height);
-        let mut buffer = Buffer::new(font_system, metrics);
+        let mut buffer = Buffer::new(&mut *font_system, metrics);
 
-        buffer.set_wrap(font_system, Wrap::Word);
-        buffer.set_size(font_system, max_width, None);
+        buffer.set_wrap(&mut *font_system, Wrap::Word);
+        buffer.set_size(&mut *font_system, max_width, None);
 
-        let default_attrs = engine.font_manager.attrs_from_style(&self.style);
+        let default_attrs = engine.attrs_from_style(&self.style);
         let spans = self
             .attrs_list
             .spans()
@@ -91,7 +114,7 @@ impl<'a> ParagraphNode<'a> {
             .map(|(range, attrs)| (&self.text_content[range.clone()], attrs.as_attrs()));
 
         buffer.set_rich_text(
-            font_system,
+            &mut *font_system,
             spans,
             &default_attrs,
             cosmic_text::Shaping::Advanced,
@@ -109,7 +132,11 @@ impl<'a> ParagraphNode<'a> {
             line.set_align(Some(align));
         }
 
-        buffer.shape_until_scroll(font_system, false);
+        buffer.shape_until_scroll(&mut *font_system, false);
+
+        let duration = start.elapsed();
+        engine.record_perf("Paragraph::shape_text", duration);
+
         buffer
     }
 }
@@ -126,7 +153,24 @@ impl<'a> LayoutNode for ParagraphNode<'a> {
             None
         };
 
-        let buffer = self.shape_text(env.engine, env.font_system, max_width);
+        // KEY OPTIMIZATION: Check cache in measure!
+        let cache_key = self.get_cache_key(max_width);
+
+        let buffer = if let Some(cached) = env.cache.get(&cache_key) {
+            // log::trace!("[PERF] Paragraph cache HIT in measure");
+            if let Some(b) = cached.downcast_ref::<Buffer>() {
+                b.clone()
+            } else {
+                let b = self.shape_text(env.engine, max_width);
+                env.cache.insert(cache_key, Box::new(b.clone()));
+                b
+            }
+        } else {
+            // log::trace!("[PERF] Paragraph cache MISS in measure");
+            let b = self.shape_text(env.engine, max_width);
+            env.cache.insert(cache_key, Box::new(b.clone()));
+            b
+        };
 
         let mut measured_width: f32 = 0.0;
         let mut height: f32 = 0.0;
@@ -188,7 +232,25 @@ impl<'a> LayoutNode for ParagraphNode<'a> {
             Some(ctx.bounds().width)
         };
 
-        let buffer = self.shape_text(ctx.engine, ctx.font_system, width);
+        // Check cache before shaping (cache is in ctx.env)
+        let cache_key = self.get_cache_key(width);
+
+        let buffer = if let Some(cached) = ctx.env.cache.get(&cache_key) {
+            // log::trace!("[PERF] Paragraph cache HIT in layout");
+            if let Some(b) = cached.downcast_ref::<Buffer>() {
+                b.clone()
+            } else {
+                let b = self.shape_text(ctx.env.engine, width);
+                ctx.env.cache.insert(cache_key, Box::new(b.clone()));
+                b
+            }
+        } else {
+            // log::trace!("[PERF] Paragraph cache MISS in layout");
+            let b = self.shape_text(ctx.env.engine, width);
+            ctx.env.cache.insert(cache_key, Box::new(b.clone()));
+            b
+        };
+
         let available_height = ctx.available_height();
 
         let all_runs: Vec<LayoutRun> = buffer.layout_runs().collect();

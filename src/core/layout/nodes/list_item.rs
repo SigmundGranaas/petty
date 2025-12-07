@@ -28,7 +28,6 @@ impl NodeBuilder for ListItemBuilder {
         parent_style: Arc<ComputedStyle>,
         arena: &'a Bump,
     ) -> Result<RenderNode<'a>, LayoutError> {
-        // ListItems are usually built by ListNode, but for standalone cases:
         let item = ListItemNode::new(node, engine, parent_style, 1, 0, arena)?;
         Ok(RenderNode::ListItem(arena.alloc(item)))
     }
@@ -102,7 +101,7 @@ impl<'a> LayoutNode for ListItemNode<'a> {
         const MARKER_SPACING_FACTOR: f32 = 0.4;
         let is_outside_marker = self.style.list.style_position == ListStylePosition::Outside;
         let indent = if is_outside_marker && !self.marker_text.is_empty() {
-            measure_text_using_env(env, &self.marker_text, &self.style)
+            measure_text_using_engine(env.engine, &self.marker_text, &self.style)
                 + self.style.text.font_size * MARKER_SPACING_FACTOR
         } else {
             0.0
@@ -179,8 +178,9 @@ impl<'a> LayoutNode for ListItemNode<'a> {
 
         let block_start_y_in_ctx = ctx.cursor_y();
 
-        // Measure marker using context's font system
-        let marker_width = measure_text_using_ctx(ctx, &self.marker_text, &self.style);
+        // Measure marker using engine
+        // Use ctx.env.engine
+        let marker_width = measure_text_using_engine(ctx.env.engine, &self.marker_text, &self.style);
 
         if !self.marker_text.is_empty() && !is_continuation {
             let should_draw = is_outside_marker;
@@ -233,33 +233,32 @@ impl<'a> LayoutNode for ListItemNode<'a> {
             height: ctx.available_height(),
         };
 
-        let (child_cursor_y, child_split_result) = ctx.with_child_bounds(child_bounds, |child_ctx| {
-            let mut split_res = LayoutResult::Finished;
-            for (i, child) in self.children.iter().enumerate().skip(start_index) {
-                let child_constraints = BoxConstraints::tight_width(child_bounds.width);
+        let mut child_ctx = ctx.child(child_bounds);
+        let mut split_res = LayoutResult::Finished;
+        for (i, child) in self.children.iter().enumerate().skip(start_index) {
+            let child_constraints = BoxConstraints::tight_width(child_bounds.width);
 
-                let res = child.layout(
-                    child_ctx,
-                    child_constraints,
-                    child_resume_state.take(),
-                )?;
+            let res = child.layout(
+                &mut child_ctx,
+                child_constraints,
+                child_resume_state.take(),
+            )?;
 
-                match res {
-                    LayoutResult::Finished => {}
-                    LayoutResult::Break(next_state) => {
-                        split_res = LayoutResult::Break(NodeState::ListItem(ListItemState {
-                            child_index: i,
-                            child_state: Some(Box::new(next_state)),
-                        }));
-                        break;
-                    }
+            match res {
+                LayoutResult::Finished => {}
+                LayoutResult::Break(next_state) => {
+                    split_res = LayoutResult::Break(NodeState::ListItem(ListItemState {
+                        child_index: i,
+                        child_state: Some(Box::new(next_state)),
+                    }));
+                    break;
                 }
             }
-            Ok((child_ctx.cursor_y(), split_res))
-        })?;
+        }
+        let child_cursor_y = child_ctx.cursor_y();
 
         // Recalculate used height based on split result
-        let used_height = if matches!(child_split_result, LayoutResult::Finished) {
+        let used_height = if matches!(split_res, LayoutResult::Finished) {
             child_cursor_y
         } else {
             ctx.available_height()
@@ -271,13 +270,13 @@ impl<'a> LayoutNode for ListItemNode<'a> {
             block_start_y_in_ctx,
             used_height,
             !is_continuation,
-            matches!(child_split_result, LayoutResult::Finished),
+            matches!(split_res, LayoutResult::Finished),
         );
         for el in bg_elements {
             ctx.push_element(el);
         }
 
-        match child_split_result {
+        match split_res {
             LayoutResult::Finished => {
                 ctx.set_cursor_y(
                     content_start_y_in_ctx
@@ -295,19 +294,15 @@ impl<'a> LayoutNode for ListItemNode<'a> {
     }
 }
 
-// Helpers to measure text using environment/context without borrowing engine
-fn measure_text_using_env(env: &mut LayoutEnvironment, text: &str, style: &Arc<ComputedStyle>) -> f32 {
-    let mut buffer = cosmic_text::Buffer::new(env.font_system, cosmic_text::Metrics::new(style.text.font_size, style.text.line_height));
-    let attrs = env.engine.font_manager.attrs_from_style(style);
-    buffer.set_text(env.font_system, text, &attrs, cosmic_text::Shaping::Advanced);
-    buffer.shape_until_scroll(env.font_system, false);
-    buffer.layout_runs().map(|r| r.line_w).fold(0.0, f32::max)
-}
-
-fn measure_text_using_ctx(ctx: &mut LayoutContext, text: &str, style: &Arc<ComputedStyle>) -> f32 {
-    let mut buffer = cosmic_text::Buffer::new(ctx.font_system, cosmic_text::Metrics::new(style.text.font_size, style.text.line_height));
-    let attrs = ctx.engine.font_manager.attrs_from_style(style);
-    buffer.set_text(ctx.font_system, text, &attrs, cosmic_text::Shaping::Advanced);
-    buffer.shape_until_scroll(ctx.font_system, false);
+// Helpers to measure text using engine (acquiring RefCell borrow)
+fn measure_text_using_engine(engine: &LayoutEngine, text: &str, style: &Arc<ComputedStyle>) -> f32 {
+    let mut system = engine.font_system();
+    let mut buffer = cosmic_text::Buffer::new(
+        &mut *system,
+        cosmic_text::Metrics::new(style.text.font_size, style.text.line_height),
+    );
+    let attrs = engine.attrs_from_style(style);
+    buffer.set_text(&mut *system, text, &attrs, cosmic_text::Shaping::Advanced);
+    buffer.shape_until_scroll(&mut *system, false);
     buffer.layout_runs().map(|r| r.line_w).fold(0.0, f32::max)
 }

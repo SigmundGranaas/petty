@@ -12,6 +12,7 @@ use crate::core::layout::{LayoutEngine, LayoutError};
 use crate::core::style::dimension::Dimension;
 use bumpalo::Bump;
 use std::sync::Arc;
+use std::time::Instant;
 
 pub struct TableBuilder;
 
@@ -99,6 +100,8 @@ impl<'a> TableNode<'a> {
         env: &mut LayoutEnvironment,
         available_width: Option<f32>,
     ) -> Vec<f32> {
+        let start = Instant::now();
+
         let mut widths = vec![0.0; self.columns.len()];
         let mut auto_indices = Vec::new();
         let table_width = available_width.unwrap_or(f32::INFINITY);
@@ -178,6 +181,9 @@ impl<'a> TableNode<'a> {
             }
         }
 
+        let duration = start.elapsed();
+        env.engine.record_perf("TableNode::calculate_column_widths", duration);
+
         widths
     }
 
@@ -185,8 +191,10 @@ impl<'a> TableNode<'a> {
     fn calculate_all_row_heights(
         &self,
         env: &mut LayoutEnvironment,
-        col_widths: &[f32]
+        col_widths: &[f32],
     ) -> Vec<f32> {
+        let start = Instant::now();
+
         let mut row_heights = Vec::with_capacity(self.header_rows.len() + self.body_rows.len());
 
         // Measure header rows first
@@ -198,6 +206,10 @@ impl<'a> TableNode<'a> {
         for row in &self.body_rows {
             row_heights.push(row.measure_height(env, col_widths));
         }
+
+        let duration = start.elapsed();
+        env.engine.record_perf("TableNode::calculate_all_row_heights", duration);
+
         row_heights
     }
 
@@ -223,7 +235,9 @@ impl<'a> TableNode<'a> {
             // Check if current slot is occupied by a previous rowspan
             // If the slot is blocked UNTIL row X, and we are currently at row Y,
             // we are blocked if X > Y.
-            if col_cursor < occupied_until_row_idx.len() && occupied_until_row_idx[col_cursor] > current_row_idx {
+            if col_cursor < occupied_until_row_idx.len()
+                && occupied_until_row_idx[col_cursor] > current_row_idx
+            {
                 // Skip occupied slot
                 x_offset += widths[col_cursor];
                 col_cursor += 1;
@@ -261,20 +275,21 @@ impl<'a> TableNode<'a> {
                 }
 
                 // Layout Cell Content
-                ctx.with_child_bounds(
-                    crate::core::layout::geom::Rect {
-                        x: ctx.bounds().x + x_start + x_offset,
-                        y: ctx.bounds().y + y,
-                        width: cell_width,
-                        height: cell_height
-                    },
-                    |cell_ctx| {
-                        cell.content.layout(
-                            cell_ctx,
-                            BoxConstraints::tight(crate::core::layout::geom::Size::new(cell_width, cell_height)),
-                            None
-                        )
-                    }
+                let cell_rect = crate::core::layout::geom::Rect {
+                    x: ctx.bounds().x + x_start + x_offset,
+                    y: ctx.bounds().y + y,
+                    width: cell_width,
+                    height: cell_height,
+                };
+
+                let mut cell_ctx = ctx.child(cell_rect);
+                cell.content.layout(
+                    &mut cell_ctx,
+                    BoxConstraints::tight(crate::core::layout::geom::Size::new(
+                        cell_width,
+                        cell_height,
+                    )),
+                    None,
                 )?;
 
                 x_offset += cell_width;
@@ -346,16 +361,12 @@ impl<'a> LayoutNode for TableNode<'a> {
         };
 
         // Reconstruct a temporary env for measurement
-        let mut env = LayoutEnvironment {
-            engine: ctx.engine,
-            font_system: ctx.font_system,
-            local_page_index: ctx.local_page_index,
-        };
-        let col_widths = self.calculate_column_widths(&mut env, available_width);
+        // Since we refactored ctx to hold env, we can just borrow it.
+        let col_widths = self.calculate_column_widths(&mut ctx.env, available_width);
 
         // Pre-calculate heights for all rows to handle layout
         // Note: Indices in row_heights cover [header_rows..., body_rows...]
-        let all_row_heights = self.calculate_all_row_heights(&mut env, &col_widths);
+        let all_row_heights = self.calculate_all_row_heights(&mut ctx.env, &col_widths);
 
         let header_count = self.header_rows.len();
 
@@ -381,11 +392,11 @@ impl<'a> LayoutNode for TableNode<'a> {
         // Headers are typically an independent grid from the body.
         // We render headers first.
         if !self.header_rows.is_empty() {
+            // FIX: Track header occupation separately and correctly
+            let mut header_occupied = vec![0usize; self.columns.len().max(1)];
+
             for (i, row) in self.header_rows.iter().enumerate() {
                 let height = all_row_heights[i];
-
-                // Headers have their own rowspan context
-                let mut header_occupied = vec![0usize; self.columns.len().max(1)];
 
                 self.render_row(
                     ctx,
@@ -395,8 +406,8 @@ impl<'a> LayoutNode for TableNode<'a> {
                     height,
                     table_x_start,
                     &mut header_occupied,
-                    i, // Current row index within header context
-                    &all_row_heights // Pass all heights
+                    i,
+                    &all_row_heights[i..], // FIX: pass slice starting from i
                 )?;
                 current_y_offset += height;
             }
@@ -404,7 +415,7 @@ impl<'a> LayoutNode for TableNode<'a> {
 
         // 3. Body Rows
         // Note: If we resumed from a page break, `occupied_until_row_idx` would be lost.
-        // Recovering exact rowspan state across page breaks is complex. 
+        // Recovering exact rowspan state across page breaks is complex.
         // For now, we assume clean breaks or simple layouts.
 
         for (i, row) in self.body_rows.iter().enumerate().skip(start_row_index) {
@@ -414,7 +425,9 @@ impl<'a> LayoutNode for TableNode<'a> {
 
             if start_y + current_y_offset + row_height > ctx.bounds().height {
                 // Break here
-                return Ok(LayoutResult::Break(NodeState::Table(TableState { row_index: i })));
+                return Ok(LayoutResult::Break(NodeState::Table(TableState {
+                    row_index: i,
+                })));
             }
 
             self.render_row(
@@ -426,12 +439,17 @@ impl<'a> LayoutNode for TableNode<'a> {
                 table_x_start,
                 &mut occupied_until_row_idx,
                 i, // Current body row index
-                &all_row_heights[height_idx..] // pass slice starting from current row for height lookahead
+                &all_row_heights[height_idx..], // pass slice starting from current row for height lookahead
             )?;
             current_y_offset += row_height;
         }
 
-        ctx.set_cursor_y(start_y + current_y_offset + self.style.box_model.padding.bottom + self.style.border_bottom_width());
+        ctx.set_cursor_y(
+            start_y
+                + current_y_offset
+                + self.style.box_model.padding.bottom
+                + self.style.border_bottom_width(),
+        );
         ctx.last_v_margin = self.style.box_model.margin.bottom;
 
         Ok(LayoutResult::Finished)
@@ -493,7 +511,8 @@ impl<'a> TableCellNode<'a> {
         engine: &LayoutEngine,
         arena: &'a Bump,
     ) -> Result<Self, LayoutError> {
-        let cell_style = engine.compute_style(&cell.style_sets, cell.style_override.as_ref(), style);
+        let cell_style =
+            engine.compute_style(&cell.style_sets, cell.style_override.as_ref(), style);
 
         let mut children = Vec::new();
         for c in &cell.children {
@@ -508,7 +527,9 @@ impl<'a> TableCellNode<'a> {
     }
 
     fn measure_height(&self, env: &mut LayoutEnvironment, width: f32) -> f32 {
-        self.content.measure(env, BoxConstraints::tight_width(width)).height
+        self.content
+            .measure(env, BoxConstraints::tight_width(width))
+            .height
     }
 
     fn measure_max_content(&self, env: &mut LayoutEnvironment) -> f32 {

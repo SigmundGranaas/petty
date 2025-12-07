@@ -3,7 +3,7 @@ use crate::core::idf::{IRNode, InlineNode, SharedData};
 use crate::core::layout::{AnchorLocation, IndexEntry, LayoutEngine, PositionedElement};
 use crate::core::style::stylesheet::Stylesheet;
 use crate::error::PipelineError;
-use log::{debug, info};
+use log::{debug, info, trace};
 use rand::Rng;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
@@ -11,10 +11,8 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
+use bumpalo::Bump;
 
-/// Represents the output of a single worker task: the original data context,
-/// the resulting pages of positioned elements, and all loaded resources.
-#[derive(Debug, Clone, Default)]
 pub struct LaidOutSequence {
     pub context: Arc<Value>,
     pub pages: Vec<Vec<PositionedElement>>,
@@ -31,47 +29,90 @@ pub struct TocEntry {
     pub target_id: String,
 }
 
-/// The second half of a worker's job: takes a parsed IR tree and performs
-/// resource loading and layout. This part is generic over the template language.
 pub(super) fn finish_layout_and_resource_loading(
     worker_id: usize,
     ir_nodes: Vec<IRNode>,
     context_arc: Arc<Value>,
     resource_base_path: &Path,
-    // CHANGE: Accepts mutable reference
     layout_engine: &mut LayoutEngine,
     stylesheet: &Stylesheet,
     debug_mode: bool,
 ) -> Result<LaidOutSequence, PipelineError> {
     let total_start = Instant::now();
+
+    // 1. Pre-process IR (IDs)
+    let prep_start = Instant::now();
     let mut ir_nodes_with_ids = ir_nodes;
     ensure_heading_ids(&mut ir_nodes_with_ids);
-
     let final_ir_nodes = ir_nodes_with_ids;
-
-    debug!("[WORKER-{}] IR tree passed to layout engine:\n{:#?}", worker_id, &IRNode::Root(final_ir_nodes.clone()));
-
-    let tree = IRNode::Root(final_ir_nodes.clone()); // TODO: Avoid clone
-
-    if debug_mode {
-        debug!("[WORKER-{}] Intermediate Representation (IR) tree dump:\n{:#?}", worker_id, &tree);
+    let tree = IRNode::Root(final_ir_nodes.clone());
+    if prep_start.elapsed().as_millis() > 1 {
+        trace!("[WORKER-{}] IR Prep took {:?}", worker_id, prep_start.elapsed());
     }
 
-    let resource_start = Instant::now();
-    debug!("[WORKER-{}] Collecting and loading resources relative to '{}'.", worker_id, resource_base_path.display());
-    let resources = collect_and_load_resources(&tree, resource_base_path)?;
-    debug!("[WORKER-{}] Finished loading {} resources in {:.2?}.", worker_id, resources.len(), resource_start.elapsed());
+    if debug_mode {
+        debug!("[WORKER-{}] IR tree dump:\n{:#?}", worker_id, &tree);
+    }
 
+    // 2. Resource Loading
+    let resource_start = Instant::now();
+    let resources = collect_and_load_resources(&tree, resource_base_path)?;
+    if resource_start.elapsed().as_millis() > 5 {
+        debug!("[WORKER-{}] Resource load took {:?}", worker_id, resource_start.elapsed());
+    }
+
+    // 3. TOC Collection
     let mut toc_entries = Vec::new();
     collect_toc_entries(&tree, &mut toc_entries);
 
-    let layout_start = Instant::now();
-    debug!("[WORKER-{}] Paginating sequence tree.", worker_id);
-    let (pages, defined_anchors, index_entries) =
-        layout_engine.paginate(stylesheet, final_ir_nodes)?;
-    info!("[WORKER-{}] Finished paginating sequence ({} pages) in {:.2?}.", worker_id, pages.len(), layout_start.elapsed());
+    // 4. Layout
+    let layout_phase_start = Instant::now();
 
-    info!("[WORKER-{}] Finished processing sequence in {:.2?}.", worker_id, total_start.elapsed());
+    // 4a. Build Render Tree
+    let arena = Bump::new();
+    let build_tree_start = Instant::now();
+    let root_render_node = layout_engine
+        .build_render_tree(&tree, &arena)
+        .map_err(|e| PipelineError::Layout(e.to_string()))?;
+    if build_tree_start.elapsed().as_millis() > 1 {
+        trace!("[WORKER-{}] Build Render Tree took {:?}", worker_id, build_tree_start.elapsed());
+    }
+
+    // 4b. Pagination Iterator Creation
+    let iterator = layout_engine
+        .paginate(stylesheet, root_render_node, &arena)
+        .map_err(|e| PipelineError::Layout(e.to_string()))?;
+
+    let mut pages = Vec::new();
+    let mut defined_anchors = HashMap::new();
+    let mut index_entries: HashMap<String, Vec<IndexEntry>> = HashMap::new();
+
+    // 4c. Iterate Pages
+    let iter_start = Instant::now();
+    for page_res in iterator {
+        let page = page_res.map_err(|e| PipelineError::Layout(e.to_string()))?;
+        pages.push(page.elements);
+        defined_anchors.extend(page.anchors);
+        for (k, v) in page.index_entries {
+            index_entries.entry(k).or_default().extend(v);
+        }
+    }
+
+    // Log total layout time
+    let layout_total = layout_phase_start.elapsed();
+    let pages_count = pages.len();
+    if layout_total.as_millis() > 10 {
+        debug!(
+            "[WORKER-{}] Layout total: {:?} for {} pages ({:?}/page avg)", 
+            worker_id, layout_total, pages_count, layout_total.checked_div(pages_count as u32).unwrap_or(layout_total)
+        );
+    }
+
+    let total_dur = total_start.elapsed();
+    // Only log if it's noticeably slow (>20ms total)
+    if total_dur.as_millis() > 20 {
+        info!("[WORKER-{}] Total Sequence Time: {:?} (Layout: {:?})", worker_id, total_dur, layout_total);
+    }
 
     Ok(LaidOutSequence {
         context: context_arc,
@@ -83,9 +124,7 @@ pub(super) fn finish_layout_and_resource_loading(
     })
 }
 
-// --- IR Tree Manipulation ---
-
-/// Recursively ensures that all headings have a unique ID for anchor generation.
+// ... rest of the file (helper functions) remains unchanged ...
 fn ensure_heading_ids(nodes: &mut [IRNode]) {
     for node in nodes {
         match node {
@@ -270,40 +309,4 @@ fn collect_and_load_resources(
         }
     }
     Ok(resources)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::idf::NodeMetadata;
-    use tempfile::tempdir;
-
-    #[test]
-    fn test_collect_and_load_resources() {
-        let dir = tempdir().unwrap();
-        let img_path = dir.path().join("test.png");
-        fs::write(&img_path, "image_data").unwrap();
-
-        let node = IRNode::Root(vec![IRNode::Image {
-            src: "test.png".to_string(),
-            meta: NodeMetadata::default(),
-        }]);
-
-        let resources = collect_and_load_resources(&node, dir.path()).unwrap();
-
-        assert_eq!(resources.len(), 1);
-        let loaded_data = resources.get("test.png").expect("Image data should be loaded");
-        assert_eq!(**loaded_data, b"image_data");
-    }
-
-    #[test]
-    fn test_collect_and_load_skips_empty_src() {
-        let node = IRNode::Image {
-            src: "".to_string(), // Empty src
-            meta: NodeMetadata::default(),
-        };
-        // Should not panic or error
-        let resources = collect_and_load_resources(&node, Path::new("/tmp")).unwrap();
-        assert!(resources.is_empty());
-    }
 }

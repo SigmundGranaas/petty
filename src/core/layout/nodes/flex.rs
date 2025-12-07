@@ -14,6 +14,7 @@ use bumpalo::Bump;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::time::Instant;
 use taffy::prelude::*;
 
 pub struct FlexBuilder;
@@ -88,6 +89,8 @@ impl<'a> FlexNode<'a> {
         env: &mut LayoutEnvironment,
         constraints: BoxConstraints,
     ) -> FlexLayoutOutput {
+        let start = Instant::now();
+
         let mut taffy = TaffyTree::<usize>::new();
         let mut child_nodes = Vec::with_capacity(self.children.len());
 
@@ -121,6 +124,7 @@ impl<'a> FlexNode<'a> {
             },
         };
 
+        // SAFETY: We need to pass the mutable environment reference into the closure.
         let env_ptr = env as *mut LayoutEnvironment;
 
         taffy
@@ -131,9 +135,6 @@ impl<'a> FlexNode<'a> {
                     let Some(index) = context else {
                         return taffy::geometry::Size::ZERO;
                     };
-
-                    // SAFETY: We are in a single-threaded layout pass. Taffy invokes this immediately.
-                    let env = unsafe { &mut *env_ptr };
 
                     let child = &self.children[*index];
 
@@ -146,9 +147,11 @@ impl<'a> FlexNode<'a> {
 
                     let child_constraints = BoxConstraints::new(min_w, max_w, 0.0, f32::INFINITY);
 
+                    // Dereference pointer safely - Taffy is single-threaded here
+                    let env = unsafe { &mut *env_ptr };
                     let size = child.measure(env, child_constraints);
 
-                    taffy::geometry::Size {
+                    Size {
                         width: size.width,
                         height: size.height,
                     }
@@ -163,6 +166,10 @@ impl<'a> FlexNode<'a> {
             .iter()
             .map(|&id| *taffy.layout(id).unwrap())
             .collect();
+
+        let duration = start.elapsed();
+        // Since we have mutable env, we can record stats
+        env.engine.record_perf("FlexNode::compute_flex_layout_data", duration);
 
         FlexLayoutOutput {
             size,
@@ -212,36 +219,21 @@ impl<'a> LayoutNode for FlexNode<'a> {
 
         let cache_key = self.get_cache_key();
         let layout_output = if let Some(key) = cache_key {
-            if let Some(cached) = ctx.layout_cache.get(&key) {
+            if let Some(cached) = ctx.env.cache.get(&key) {
                 if let Some(output) = cached.downcast_ref::<FlexLayoutOutput>() {
                     output.clone()
                 } else {
-                    let mut env = LayoutEnvironment {
-                        engine: ctx.engine,
-                        font_system: ctx.font_system,
-                        local_page_index: ctx.local_page_index,
-                    };
-                    let output = self.compute_flex_layout_data(&mut env, constraints);
-                    ctx.layout_cache.insert(key, Box::new(output.clone()));
+                    let output = self.compute_flex_layout_data(&mut ctx.env, constraints);
+                    ctx.env.cache.insert(key, Box::new(output.clone()));
                     output
                 }
             } else {
-                let mut env = LayoutEnvironment {
-                    engine: ctx.engine,
-                    font_system: ctx.font_system,
-                    local_page_index: ctx.local_page_index,
-                };
-                let output = self.compute_flex_layout_data(&mut env, constraints);
-                ctx.layout_cache.insert(key, Box::new(output.clone()));
+                let output = self.compute_flex_layout_data(&mut ctx.env, constraints);
+                ctx.env.cache.insert(key, Box::new(output.clone()));
                 output
             }
         } else {
-            let mut env = LayoutEnvironment {
-                engine: ctx.engine,
-                font_system: ctx.font_system,
-                local_page_index: ctx.local_page_index,
-            };
-            self.compute_flex_layout_data(&mut env, constraints)
+            self.compute_flex_layout_data(&mut ctx.env, constraints)
         };
 
         let content_height = layout_output.size.height;
@@ -320,9 +312,8 @@ impl<'a> LayoutNode for FlexNode<'a> {
                 None
             };
 
-            let res = ctx.with_child_bounds(child_rect, |child_ctx| {
-                self.children[i].layout(child_ctx, child_constraints, child_resume)
-            })?;
+            let mut child_ctx = ctx.child(child_rect);
+            let res = self.children[i].layout(&mut child_ctx, child_constraints, child_resume)?;
 
             if let LayoutResult::Break(s) = res {
                 break_occurred = true;

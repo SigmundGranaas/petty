@@ -22,7 +22,7 @@ pub struct TextBuilder<'a, 'b> {
 
 impl<'a, 'b> TextBuilder<'a, 'b> {
     pub fn new(engine: &'a LayoutEngine, arena: &'b Bump, base_style: &Arc<ComputedStyle>) -> Self {
-        let attrs = engine.font_manager.attrs_from_style(base_style);
+        let attrs = engine.attrs_from_style(base_style);
         Self {
             engine,
             arena,
@@ -50,7 +50,7 @@ impl<'a, 'b> TextBuilder<'a, 'b> {
                     self.content.push_str(text);
                     let end = self.content.len();
 
-                    let attrs = self.engine.font_manager.attrs_from_style(parent_style);
+                    let attrs = self.engine.attrs_from_style(parent_style);
                     let mut attrs_clone = attrs;
                     attrs_clone.metadata = current_link_idx;
                     self.attrs_list.add_span(start..end, &attrs_clone);
@@ -77,7 +77,7 @@ impl<'a, 'b> TextBuilder<'a, 'b> {
                     let start = self.content.len();
                     self.content.push('\n');
                     let end = self.content.len();
-                    let attrs = self.engine.font_manager.attrs_from_style(parent_style);
+                    let attrs = self.engine.attrs_from_style(parent_style);
                     let mut attrs_clone = attrs;
                     attrs_clone.metadata = current_link_idx;
                     self.attrs_list.add_span(start..end, &attrs_clone);
@@ -93,7 +93,7 @@ impl<'a, 'b> TextBuilder<'a, 'b> {
                         let node_ref = self.arena.alloc(node);
                         self.inline_images.push((start, node_ref));
 
-                        let attrs = self.engine.font_manager.attrs_from_style(parent_style);
+                        let attrs = self.engine.attrs_from_style(parent_style);
                         let mut attrs_clone = attrs;
                         attrs_clone.metadata = 1 << 31 | self.inline_images.len();
                         self.attrs_list.add_span(start..end, &attrs_clone);

@@ -21,11 +21,15 @@ pub struct LopdfRenderer<W: Write + Seek + Send> {
 }
 
 impl<W: Write + Seek + Send> LopdfRenderer<W> {
-    pub fn new(layout_engine: LayoutEngine, stylesheet: Arc<Stylesheet>) -> Result<Self, RenderError> {
+    pub fn new(
+        layout_engine: LayoutEngine,
+        stylesheet: Arc<Stylesheet>,
+    ) -> Result<Self, RenderError> {
         let mut font_map = HashMap::new();
 
-        // Lock system before accessing db
-        let system = layout_engine.font_manager.system.lock().unwrap();
+        // Lock/Borrow system before accessing db
+        // Use the new RefCell access method
+        let system = layout_engine.font_system();
         for (i, face) in system.db().faces().enumerate() {
             font_map.insert(face.post_script_name.clone(), format!("F{}", i + 1));
         }
@@ -52,7 +56,10 @@ impl<W: Write + Seek + Send> LopdfRenderer<W> {
         page_width: f32,
         page_height: f32,
     ) -> Result<(), RenderError> {
-        let writer = self.writer.as_mut().ok_or_else(|| RenderError::Other("Document not started".into()))?;
+        let writer = self
+            .writer
+            .as_mut()
+            .ok_or_else(|| RenderError::Other("Document not started".into()))?;
 
         let mut page_dict = dictionary! {
             "Type" => "Page",
@@ -62,7 +69,15 @@ impl<W: Write + Seek + Send> LopdfRenderer<W> {
             "Resources" => writer.resources_id,
         };
         if !annotations.is_empty() {
-            page_dict.set("Annots", Object::Array(annotations.into_iter().map(Object::Reference).collect()));
+            page_dict.set(
+                "Annots",
+                Object::Array(
+                    annotations
+                        .into_iter()
+                        .map(Object::Reference)
+                        .collect(),
+                ),
+            );
         }
 
         writer.buffer_object_at_id(page_id, page_dict.into());
@@ -78,32 +93,39 @@ impl LopdfRenderer<Cursor<Vec<u8>>> {
             let cursor = writer.finish()?;
             Ok(cursor.into_inner())
         } else {
-            Err(RenderError::Other("Document not started or already finished".into()))
+            Err(RenderError::Other(
+                "Document not started or already finished".into(),
+            ))
         }
     }
 }
-
 
 impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> {
     fn begin_document(&mut self, writer: W) -> Result<(), RenderError> {
         let mut font_dict = Dictionary::new();
 
-        // Lock system before accessing db
-        let system = self.layout_engine.font_manager.system.lock().unwrap();
+        // Use RefCell borrow
+        let system = self.layout_engine.font_system();
 
         for face in system.db().faces() {
             if let Some(internal_name) = self.font_map.get(&face.post_script_name) {
                 let single_font_dict = dictionary! {
                     "Type" => "Font", "Subtype" => "Type1", "BaseFont" => face.post_script_name.clone(), "Encoding" => "WinAnsiEncoding",
                 };
-                font_dict.set(internal_name.as_bytes(), Object::Dictionary(single_font_dict));
+                font_dict.set(
+                    internal_name.as_bytes(),
+                    Object::Dictionary(single_font_dict),
+                );
             }
         }
         self.writer = Some(StreamingPdfWriter::new(writer, "1.7", font_dict)?);
         Ok(())
     }
 
-    fn add_resources(&mut self, _resources: &HashMap<String, SharedData>) -> Result<(), RenderError> {
+    fn add_resources(
+        &mut self,
+        _resources: &HashMap<String, SharedData>,
+    ) -> Result<(), RenderError> {
         Ok(())
     }
 
@@ -114,7 +136,10 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> 
         page_width: f32,
         page_height: f32,
     ) -> Result<ObjectId, RenderError> {
-        let writer = self.writer.as_mut().ok_or_else(|| RenderError::Other("Document not started".into()))?;
+        let writer = self
+            .writer
+            .as_mut()
+            .ok_or_else(|| RenderError::Other("Document not started".into()))?;
         let content = lopdf_helpers::render_elements_to_content(
             elements,
             font_map,
@@ -132,7 +157,10 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> 
         page_width: f32,
         page_height: f32,
     ) -> Result<ObjectId, RenderError> {
-        let writer = self.writer.as_mut().ok_or_else(|| RenderError::Other("Document not started".into()))?;
+        let writer = self
+            .writer
+            .as_mut()
+            .ok_or_else(|| RenderError::Other("Document not started".into()))?;
 
         let mut page_dict = dictionary! {
             "Type" => "Page",
@@ -142,7 +170,15 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> 
             "Resources" => writer.resources_id,
         };
         if !annotations.is_empty() {
-            page_dict.set("Annots", Object::Array(annotations.into_iter().map(Object::Reference).collect()));
+            page_dict.set(
+                "Annots",
+                Object::Array(
+                    annotations
+                        .into_iter()
+                        .map(Object::Reference)
+                        .collect(),
+                ),
+            );
         }
 
         let page_id = writer.buffer_object(page_dict.into());
@@ -161,7 +197,9 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> 
             let writer = internal_writer.finish()?;
             Ok(writer)
         } else {
-            Err(renderer::RenderError::Other("Document was never started with begin_document".into()))
+            Err(renderer::RenderError::Other(
+                "Document was never started with begin_document".into(),
+            ))
         }
     }
 

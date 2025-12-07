@@ -1,5 +1,4 @@
-// src/pipeline/context.rs
-use crate::core::layout::FontManager;
+use crate::core::layout::fonts::SharedFontLibrary;
 use crate::parser::processor::CompiledTemplate;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -11,5 +10,5 @@ use std::sync::Arc;
 pub struct PipelineContext {
     pub compiled_template: Arc<dyn CompiledTemplate>,
     pub role_templates: Arc<HashMap<String, Arc<dyn CompiledTemplate>>>,
-    pub font_manager: Arc<FontManager>,
+    pub font_library: Arc<SharedFontLibrary>,
 }

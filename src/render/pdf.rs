@@ -1,4 +1,8 @@
 use super::{drawing, renderer};
+use crate::core::idf::SharedData;
+use crate::core::layout::{ComputedStyle, LayoutEngine, PositionedElement};
+use crate::core::style::font::FontWeight;
+use crate::core::style::stylesheet::{PageLayout, Stylesheet};
 use crate::render::DocumentRenderer;
 use handlebars::Handlebars;
 use lopdf::ObjectId;
@@ -7,8 +11,7 @@ use printpdf::image::RawImage;
 use printpdf::ops::Op;
 use printpdf::xobject::XObject;
 use printpdf::{
-    FontId, Layer, Mm, PdfConformance, PdfDocument, PdfPage, PdfSaveOptions, Pt,
-    XObjectId,
+    FontId, Layer, Mm, PdfConformance, PdfDocument, PdfPage, PdfSaveOptions, Pt, XObjectId,
 };
 use serde::Serialize;
 use serde_json::Value;
@@ -16,11 +19,6 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::io::{self, Seek, Write};
 use std::sync::Arc;
-use crate::core::idf::SharedData;
-use crate::core::layout::{ComputedStyle, LayoutEngine, PositionedElement};
-use crate::core::style::font::FontWeight;
-use crate::core::style::stylesheet::{PageLayout, Stylesheet};
-
 
 /// Manages the state of the entire PDF document, including pages, fonts, and global resources.
 pub struct PdfDocumentRenderer<W: io::Write + Send> {
@@ -36,7 +34,10 @@ pub struct PdfDocumentRenderer<W: io::Write + Send> {
 
 impl<W: io::Write + Send> PdfDocumentRenderer<W> {
     /// Creates a new document renderer.
-    pub fn new(layout_engine: LayoutEngine, stylesheet: Arc<Stylesheet>) -> Result<Self, renderer::RenderError> {
+    pub fn new(
+        layout_engine: LayoutEngine,
+        stylesheet: Arc<Stylesheet>,
+    ) -> Result<Self, renderer::RenderError> {
         let title = "Document";
         let mut doc = PdfDocument::new(title);
         doc.metadata.info.conformance = PdfConformance::X3_2002_PDF_1_3;
@@ -44,8 +45,8 @@ impl<W: io::Write + Send> PdfDocumentRenderer<W> {
         let mut fonts = HashMap::new();
         let mut default_font_id: Option<FontId> = None;
 
-        // Lock system before accessing db
-        let system = layout_engine.font_manager.system.lock().unwrap();
+        // Use RefCell borrow via accessor
+        let system = layout_engine.font_system();
 
         for face in system.db().faces() {
             let face_post_script_name = face.post_script_name.clone();
@@ -63,15 +64,22 @@ impl<W: io::Write + Send> PdfDocumentRenderer<W> {
                         }
                     }
                     None => {
-                        log::warn!("Failed to parse font for embedding: {}", face_post_script_name);
+                        log::warn!(
+                            "Failed to parse font for embedding: {}",
+                            face_post_script_name
+                        );
                     }
                 }
             });
         }
 
-        let default_font = default_font_id.or_else(|| fonts.values().next().cloned()).ok_or_else(|| {
-            renderer::RenderError::InternalPdfError("No fonts were loaded, cannot create PDF.".to_string())
-        })?;
+        let default_font = default_font_id
+            .or_else(|| fonts.values().next().cloned())
+            .ok_or_else(|| {
+                renderer::RenderError::InternalPdfError(
+                    "No fonts were loaded, cannot create PDF.".to_string(),
+                )
+            })?;
 
         drop(system);
 
@@ -94,12 +102,20 @@ impl<W: io::Write + Send> PdfDocumentRenderer<W> {
     ) -> Result<(XObjectId, (u32, u32)), renderer::RenderError> {
         let mut warnings = Vec::new();
         let raw_image = RawImage::decode_from_bytes(image_data, &mut warnings).map_err(|e| {
-            renderer::RenderError::InternalPdfError(format!("Failed to decode image data for {}: {}", src, e))
+            renderer::RenderError::InternalPdfError(format!(
+                "Failed to decode image data for {}: {}",
+                src, e
+            ))
         })?;
         let dims = (raw_image.width as u32, raw_image.height as u32);
         let xobj_id = XObjectId::new();
-        self.document.resources.xobjects.map.insert(xobj_id.clone(), XObject::Image(raw_image));
-        self.image_xobjects.insert(src.to_string(), (xobj_id.clone(), dims));
+        self.document
+            .resources
+            .xobjects
+            .map
+            .insert(xobj_id.clone(), XObject::Image(raw_image));
+        self.image_xobjects
+            .insert(src.to_string(), (xobj_id.clone(), dims));
         Ok((xobj_id, dims))
     }
 
@@ -115,7 +131,10 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for PdfDocumentRender
         Ok(())
     }
 
-    fn add_resources(&mut self, resources: &HashMap<String, SharedData>) -> Result<(), renderer::RenderError> {
+    fn add_resources(
+        &mut self,
+        resources: &HashMap<String, SharedData>,
+    ) -> Result<(), renderer::RenderError> {
         for (src, data) in resources {
             if !self.image_xobjects.contains_key(src) {
                 self.add_image_xobject(src, data)?;
@@ -175,21 +194,27 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for PdfDocumentRender
         Ok((page_id as u32, 0))
     }
 
-    fn set_outline_root(&mut self, _outline_root_id: ObjectId) {
-    }
+    fn set_outline_root(&mut self, _outline_root_id: ObjectId) {}
 
     fn finish(self: Box<Self>, _page_ids: Vec<ObjectId>) -> Result<W, renderer::RenderError> {
         let mut writer = self.writer.ok_or_else(|| {
-            renderer::RenderError::Other("Document was never started with begin_document".into())
+            renderer::RenderError::Other(
+                "Document was never started with begin_document".into(),
+            )
         })?;
 
         let save_options = PdfSaveOptions::default();
         let mut warnings = Vec::new();
 
-        self.document.save_writer(&mut writer, &save_options, &mut warnings);
+        self.document
+            .save_writer(&mut writer, &save_options, &mut warnings);
 
         if !warnings.is_empty() {
-            log::warn!("printpdf generated {} warnings during save: {:?}", warnings.len(), warnings);
+            log::warn!(
+                "printpdf generated {} warnings during save: {:?}",
+                warnings.len(),
+                warnings
+            );
         }
 
         Ok(writer)
@@ -199,7 +224,6 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for PdfDocumentRender
         self
     }
 }
-
 
 #[derive(Serialize)]
 struct FooterRenderContext<'a> {
@@ -226,10 +250,18 @@ pub(crate) struct PageRenderState {
 
 impl<'a, W: io::Write + Send> PageRenderer<'a, W> {
     fn new(doc_renderer: &'a mut PdfDocumentRenderer<W>, page_height_pt: f32) -> Self {
-        Self { doc_renderer, page_height_pt, ops: Vec::new(), state: PageRenderState::default(), }
+        Self {
+            doc_renderer,
+            page_height_pt,
+            ops: Vec::new(),
+            state: PageRenderState::default(),
+        }
     }
 
-    fn render_elements(&mut self, elements: Vec<PositionedElement>) -> Result<(), renderer::RenderError> {
+    fn render_elements(
+        &mut self,
+        elements: Vec<PositionedElement>,
+    ) -> Result<(), renderer::RenderError> {
         for element in elements {
             drawing::draw_element(self, &element)?;
         }
@@ -237,7 +269,9 @@ impl<'a, W: io::Write + Send> PageRenderer<'a, W> {
     }
 
     fn into_ops(mut self) -> Vec<Op> {
-        if self.state.is_text_section_open { self.ops.push(Op::EndTextSection); }
+        if self.state.is_text_section_open {
+            self.ops.push(Op::EndTextSection);
+        }
         self.ops
     }
 }
@@ -257,20 +291,40 @@ pub(crate) fn get_styled_font_name(style: &Arc<ComputedStyle>) -> String {
     }
 }
 
-pub(crate) fn render_page_to_ops( ctx: RenderContext, elements: Vec<PositionedElement>, ) -> Result<Vec<Op>, renderer::RenderError> {
+pub(crate) fn render_page_to_ops(
+    ctx: RenderContext,
+    elements: Vec<PositionedElement>,
+) -> Result<Vec<Op>, renderer::RenderError> {
     let mut ops = Vec::new();
     let mut state = PageRenderState::default();
     for element in elements {
         drawing::draw_element_stateless(&mut ops, &mut state, &ctx, &element)?;
     }
-    if state.is_text_section_open { ops.push(Op::EndTextSection); }
+    if state.is_text_section_open {
+        ops.push(Op::EndTextSection);
+    }
     Ok(ops)
 }
 
 pub(crate) fn render_footer_to_ops(
-    layout_engine: &LayoutEngine, stylesheet: &Stylesheet, fonts: &HashMap<String, FontId>, default_font: &FontId,
-    _context: &Value, page_layout: &PageLayout, page_num: usize, template_engine: &Handlebars,
+    layout_engine: &LayoutEngine,
+    stylesheet: &Stylesheet,
+    fonts: &HashMap<String, FontId>,
+    default_font: &FontId,
+    _context: &Value,
+    page_layout: &PageLayout,
+    page_num: usize,
+    template_engine: &Handlebars,
 ) -> Result<Option<Vec<Op>>, renderer::RenderError> {
-    let _ = (layout_engine, stylesheet, fonts, default_font, _context, page_layout, page_num, template_engine);
+    let _ = (
+        layout_engine,
+        stylesheet,
+        fonts,
+        default_font,
+        _context,
+        page_layout,
+        page_num,
+        template_engine,
+    );
     Ok(None)
 }

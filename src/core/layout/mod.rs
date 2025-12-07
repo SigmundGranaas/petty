@@ -26,19 +26,20 @@ pub use self::node::{AnchorLocation, IndexEntry, LayoutContext, LayoutEnvironmen
 
 // Declare the modules that make up the layout engine.
 mod elements;
-pub mod builder; // <--- Added this line to register the builder module
+pub mod builder;
 pub mod fonts;
 pub mod geom;
 pub mod node;
 pub mod node_kind;
 pub mod nodes;
+pub mod perf;
 pub mod style;
 pub mod text;
 pub mod util;
 
 // Publicly expose types that are needed for the layout process but defined elsewhere.
 pub use self::elements::{ImageElement, LayoutElement, PositionedElement, TextElement};
-pub use self::fonts::FontManager;
+pub use self::fonts::{LocalFontContext, SharedFontLibrary};
 pub use self::style::ComputedStyle;
 pub use crate::error::PipelineError;
 

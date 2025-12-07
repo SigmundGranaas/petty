@@ -42,6 +42,9 @@ tempfile = "3.10.1"
 [features]
 dhat-heap = []
 
+[profile.release]
+debug = true
+
 [[example]]
 name = "performance_test"
 path = "examples/performance_test.rs"

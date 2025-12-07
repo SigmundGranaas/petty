@@ -4,11 +4,11 @@ use crate::core::idf::TextStr;
 use crate::core::layout::geom::{self, BoxConstraints, Size};
 use crate::core::layout::{ComputedStyle, LayoutEngine, LayoutError, PositionedElement};
 use bumpalo::Bump;
-use cosmic_text::FontSystem;
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::time::Instant;
 
 // Concrete node implementations used in the RenderNode enum
 use crate::core::layout::nodes::block::BlockNode;
@@ -126,20 +126,23 @@ pub struct IndexEntry {
     pub y_pos: f32,
 }
 
-/// Read-only environment data shared across the layout pass.
-pub struct LayoutEnvironment<'a, 'b> {
+/// Read-only (mostly) environment data shared across the layout pass.
+/// It contains the `LayoutEngine`, page info, and a mutable cache for expensive computations.
+pub struct LayoutEnvironment<'a> {
     pub engine: &'a LayoutEngine,
-    pub font_system: &'b mut FontSystem,
     pub local_page_index: usize,
+    /// A cache for transient layout data (e.g. shaped text Buffers, Taffy trees).
+    /// This allows `measure` and `layout` steps to share expensive results.
+    pub cache: &'a mut HashMap<u64, Box<dyn Any + Send>>,
 }
 
 /// The mutable context passed down the tree during layout.
-pub struct LayoutContext<'a, 'b> {
-    pub engine: &'a LayoutEngine,
-    pub font_system: &'b mut FontSystem,
+pub struct LayoutContext<'a> {
+    // Composition: Wraps the environment to avoid field duplication and borrow conflicts.
+    pub env: LayoutEnvironment<'a>,
+
     /// The Arena allocator for creating transient layout nodes/data.
     pub arena: &'a Bump,
-    pub local_page_index: usize,
 
     // Geometry
     bounds: geom::Rect,
@@ -152,26 +155,20 @@ pub struct LayoutContext<'a, 'b> {
 
     /// Tracks margin collapsing context between blocks
     pub last_v_margin: f32,
-
-    /// A cache for transient layout data (e.g. Taffy trees for Flex nodes)
-    pub layout_cache: &'a mut HashMap<u64, Box<dyn Any + Send>>,
 }
 
-impl<'a, 'b> LayoutContext<'a, 'b> {
+impl<'a> LayoutContext<'a> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        env: LayoutEnvironment<'a, 'b>,
+        env: LayoutEnvironment<'a>,
         bounds: geom::Rect,
         arena: &'a Bump,
         elements: &'a mut Vec<PositionedElement>,
         defined_anchors: &'a mut HashMap<TextStr, AnchorLocation>,
         index_entries: &'a mut HashMap<TextStr, Vec<IndexEntry>>,
-        layout_cache: &'a mut HashMap<u64, Box<dyn Any + Send>>,
     ) -> Self {
         Self {
-            engine: env.engine,
-            font_system: env.font_system,
-            local_page_index: env.local_page_index,
+            env,
             arena,
             bounds,
             cursor: (0.0, 0.0),
@@ -179,7 +176,6 @@ impl<'a, 'b> LayoutContext<'a, 'b> {
             defined_anchors,
             index_entries,
             last_v_margin: 0.0,
-            layout_cache,
         }
     }
 
@@ -205,7 +201,7 @@ impl<'a, 'b> LayoutContext<'a, 'b> {
 
     pub fn register_anchor(&mut self, id: &str) {
         let location = AnchorLocation {
-            local_page_index: self.local_page_index,
+            local_page_index: self.env.local_page_index,
             y_pos: self.cursor.1 + self.bounds.y,
         };
         self.defined_anchors.insert(id.into(), location);
@@ -213,7 +209,7 @@ impl<'a, 'b> LayoutContext<'a, 'b> {
 
     pub fn register_index_entry(&mut self, term: &str) {
         let entry = IndexEntry {
-            local_page_index: self.local_page_index,
+            local_page_index: self.env.local_page_index,
             y_pos: self.cursor.1 + self.bounds.y,
         };
         self.index_entries
@@ -238,29 +234,31 @@ impl<'a, 'b> LayoutContext<'a, 'b> {
         self.elements.is_empty()
     }
 
-    pub fn with_child_bounds<R>(
-        &mut self,
-        child_bounds: geom::Rect,
-        f: impl FnOnce(&mut LayoutContext) -> R,
-    ) -> R {
-        // Temporarily re-borrow font_system
-        // Note: we must reconstruct context carefully.
-        // Rust cannot reborrow mutable reference if it is already moved?
-        // LayoutContext owns mutable references. We can reborrow fields.
-        let mut child_ctx = LayoutContext {
-            engine: self.engine,
-            font_system: self.font_system,
-            local_page_index: self.local_page_index,
-            arena: self.arena,
-            bounds: child_bounds,
-            cursor: (0.0, 0.0),
-            elements: self.elements,
-            defined_anchors: self.defined_anchors,
-            index_entries: self.index_entries,
-            last_v_margin: 0.0,
-            layout_cache: self.layout_cache,
+    /// Creates a new context for a child node with the specified bounds.
+    /// Note: This re-borrows the mutable environment, splitting the borrow.
+    pub fn child<'child>(&'child mut self, bounds: geom::Rect) -> LayoutContext<'child> {
+        // We need to re-construct the LayoutEnvironment with a sub-borrow of the cache
+        // However, `self.env` contains `&mut HashMap`. We can't re-borrow it mutably *easily*
+        // if we just pass `self.env`.
+        // BUT, `LayoutContext` owns `env` which is `LayoutEnvironment<'a>`.
+        // `&'child mut self` allows us to borrow fields.
+
+        let sub_env = LayoutEnvironment {
+            engine: self.env.engine,
+            local_page_index: self.env.local_page_index,
+            cache: self.env.cache, // re-borrow mutable ref
         };
-        f(&mut child_ctx)
+
+        LayoutContext {
+            env: sub_env,
+            arena: self.arena,
+            bounds,
+            cursor: (0.0, 0.0),
+            elements: &mut *self.elements,
+            defined_anchors: &mut *self.defined_anchors,
+            index_entries: &mut *self.index_entries,
+            last_v_margin: 0.0,
+        }
     }
 }
 
@@ -281,24 +279,50 @@ pub enum RenderNode<'a> {
     List(&'a ListNode<'a>),
     ListItem(&'a ListItemNode<'a>),
     PageBreak(&'a PageBreakNode),
-    Paragraph(&'a ParagraphNode<'a>), // Added lifetime here
+    Paragraph(&'a ParagraphNode<'a>),
     Table(&'a TableNode<'a>),
 }
 
+impl<'a> RenderNode<'a> {
+    pub fn kind_str(&self) -> &'static str {
+        match self {
+            RenderNode::Block(_) => "Block",
+            RenderNode::Flex(_) => "Flex",
+            RenderNode::Heading(_) => "Heading",
+            RenderNode::Image(_) => "Image",
+            RenderNode::IndexMarker(_) => "IndexMarker",
+            RenderNode::List(_) => "List",
+            RenderNode::ListItem(_) => "ListItem",
+            RenderNode::PageBreak(_) => "PageBreak",
+            RenderNode::Paragraph(_) => "Paragraph",
+            RenderNode::Table(_) => "Table",
+        }
+    }
+}
+
+// Explicit Static Dispatch Implementation with Performance Logging
 impl<'a> LayoutNode for RenderNode<'a> {
     fn measure(&self, env: &mut LayoutEnvironment, constraints: BoxConstraints) -> Size {
-        match self {
-            Self::Block(n) => n.measure(env, constraints),
-            Self::Flex(n) => n.measure(env, constraints),
-            Self::Heading(n) => n.measure(env, constraints),
-            Self::Image(n) => n.measure(env, constraints),
-            Self::IndexMarker(n) => n.measure(env, constraints),
-            Self::List(n) => n.measure(env, constraints),
-            Self::ListItem(n) => n.measure(env, constraints),
-            Self::PageBreak(n) => n.measure(env, constraints),
-            Self::Paragraph(n) => n.measure(env, constraints),
-            Self::Table(n) => n.measure(env, constraints),
-        }
+        let start = Instant::now();
+        let kind = self.kind_str();
+
+        let size = match self {
+            RenderNode::Block(n) => n.measure(env, constraints),
+            RenderNode::Flex(n) => n.measure(env, constraints),
+            RenderNode::Heading(n) => n.measure(env, constraints),
+            RenderNode::Image(n) => n.measure(env, constraints),
+            RenderNode::IndexMarker(n) => n.measure(env, constraints),
+            RenderNode::List(n) => n.measure(env, constraints),
+            RenderNode::ListItem(n) => n.measure(env, constraints),
+            RenderNode::PageBreak(n) => n.measure(env, constraints),
+            RenderNode::Paragraph(n) => n.measure(env, constraints),
+            RenderNode::Table(n) => n.measure(env, constraints),
+        };
+
+        let duration = start.elapsed();
+        env.engine.record_perf(&format!("Measure: {}", kind), duration);
+
+        size
     }
 
     fn layout(
@@ -307,47 +331,48 @@ impl<'a> LayoutNode for RenderNode<'a> {
         constraints: BoxConstraints,
         break_state: Option<NodeState>,
     ) -> Result<LayoutResult, LayoutError> {
-        match self {
-            Self::Block(n) => n.layout(ctx, constraints, break_state),
-            Self::Flex(n) => n.layout(ctx, constraints, break_state),
-            Self::Heading(n) => n.layout(ctx, constraints, break_state),
-            Self::Image(n) => n.layout(ctx, constraints, break_state),
-            Self::IndexMarker(n) => n.layout(ctx, constraints, break_state),
-            Self::List(n) => n.layout(ctx, constraints, break_state),
-            Self::ListItem(n) => n.layout(ctx, constraints, break_state),
-            Self::PageBreak(n) => n.layout(ctx, constraints, break_state),
-            Self::Paragraph(n) => n.layout(ctx, constraints, break_state),
-            Self::Table(n) => n.layout(ctx, constraints, break_state),
-        }
+        let start = Instant::now();
+        let kind = self.kind_str();
+
+        let res = match self {
+            RenderNode::Block(n) => n.layout(ctx, constraints, break_state),
+            RenderNode::Flex(n) => n.layout(ctx, constraints, break_state),
+            RenderNode::Heading(n) => n.layout(ctx, constraints, break_state),
+            RenderNode::Image(n) => n.layout(ctx, constraints, break_state),
+            RenderNode::IndexMarker(n) => n.layout(ctx, constraints, break_state),
+            RenderNode::List(n) => n.layout(ctx, constraints, break_state),
+            RenderNode::ListItem(n) => n.layout(ctx, constraints, break_state),
+            RenderNode::PageBreak(n) => n.layout(ctx, constraints, break_state),
+            RenderNode::Paragraph(n) => n.layout(ctx, constraints, break_state),
+            RenderNode::Table(n) => n.layout(ctx, constraints, break_state),
+        };
+
+        let duration = start.elapsed();
+        ctx.env.engine.record_perf(&format!("Layout: {}", kind), duration);
+
+        res
     }
 
     fn style(&self) -> &Arc<ComputedStyle> {
         match self {
-            Self::Block(n) => n.style(),
-            Self::Flex(n) => n.style(),
-            Self::Heading(n) => n.style(),
-            Self::Image(n) => n.style(),
-            Self::IndexMarker(n) => n.style(),
-            Self::List(n) => n.style(),
-            Self::ListItem(n) => n.style(),
-            Self::PageBreak(n) => n.style(),
-            Self::Paragraph(n) => n.style(),
-            Self::Table(n) => n.style(),
+            RenderNode::Block(n) => n.style(),
+            RenderNode::Flex(n) => n.style(),
+            RenderNode::Heading(n) => n.style(),
+            RenderNode::Image(n) => n.style(),
+            RenderNode::IndexMarker(n) => n.style(),
+            RenderNode::List(n) => n.style(),
+            RenderNode::ListItem(n) => n.style(),
+            RenderNode::PageBreak(n) => n.style(),
+            RenderNode::Paragraph(n) => n.style(),
+            RenderNode::Table(n) => n.style(),
         }
     }
 
     fn check_for_page_break(&self) -> Option<Option<TextStr>> {
         match self {
-            Self::Block(n) => n.check_for_page_break(),
-            Self::Flex(n) => n.check_for_page_break(),
-            Self::Heading(n) => n.check_for_page_break(),
-            Self::Image(n) => n.check_for_page_break(),
-            Self::IndexMarker(n) => n.check_for_page_break(),
-            Self::List(n) => n.check_for_page_break(),
-            Self::ListItem(n) => n.check_for_page_break(),
-            Self::PageBreak(n) => n.check_for_page_break(),
-            Self::Paragraph(n) => n.check_for_page_break(),
-            Self::Table(n) => n.check_for_page_break(),
+            RenderNode::PageBreak(n) => n.check_for_page_break(),
+            RenderNode::Block(n) => n.check_for_page_break(),
+            _ => None,
         }
     }
 }

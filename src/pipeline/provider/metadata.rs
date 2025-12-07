@@ -58,7 +58,7 @@ impl DataSourceProvider for MetadataGeneratingProvider {
         let pass1_result: Pass1Result;
 
         {
-            let final_layout_engine = LayoutEngine::new(Arc::clone(&context.font_manager));
+            let final_layout_engine = LayoutEngine::new(&context.font_library);
             let final_stylesheet = context.compiled_template.stylesheet();
 
             // Render to an in-memory buffer first for performance, then copy to tempfile.
@@ -158,7 +158,7 @@ fn build_document_from_pass1_result(pass1_result: Pass1Result) -> Document {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::layout::FontManager;
+    use crate::core::layout::fonts::SharedFontLibrary;
     use crate::parser::json::processor::JsonParser;
     use crate::parser::processor::TemplateParser;
     use crate::pipeline::api::IndexEntry;
@@ -260,12 +260,13 @@ mod tests {
         let template_str = serde_json::to_string(&template_json).unwrap();
         let parser = JsonParser;
         let features = parser.parse(&template_str, PathBuf::new()).unwrap();
-        let font_manager = FontManager::new();
-        font_manager.load_fallback_font();
+        let mut library = SharedFontLibrary::new();
+        library.load_fallback_font();
+
         let context = PipelineContext {
             compiled_template: features.main_template,
             role_templates: Arc::new(features.role_templates),
-            font_manager: Arc::new(font_manager),
+            font_library: Arc::new(library),
         };
 
         let provider = MetadataGeneratingProvider;

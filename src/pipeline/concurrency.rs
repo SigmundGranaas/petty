@@ -1,8 +1,3 @@
-// src/pipeline/concurrency.rs
-//! Reusable concurrency primitives for the document generation pipeline.
-//! These helpers (producer, worker, consumer) form the backbone of both the
-//! simple streaming pipeline and the metadata generation pipeline.
-
 use crate::core::layout::LayoutEngine;
 use crate::error::PipelineError;
 use crate::parser::processor::{DataSourceFormat, ExecutionConfig};
@@ -14,12 +9,13 @@ use crate::render::lopdf_renderer::LopdfRenderer;
 use crate::render::renderer::{HyperlinkLocation, Pass1Result, ResolvedAnchor};
 use crate::render::DocumentRenderer;
 use async_channel;
-use log::{debug, info, warn};
+use log::{debug, info, trace, warn};
 use lopdf::dictionary;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Seek, Write};
 use std::sync::Arc;
+use std::time::Instant;
 use tokio::task;
 
 pub(crate) async fn producer_task<I>(
@@ -28,7 +24,7 @@ pub(crate) async fn producer_task<I>(
 ) where
     I: Iterator<Item = Value> + Send + 'static,
 {
-    info!("[PRODUcer] Starting sequence production from iterator.");
+    info!("[PRODUCER] Starting sequence production from iterator.");
     for (i, item) in data_iterator.enumerate() {
         debug!("[PRODUCER] Sending item #{} to layout workers.", i);
         if tx.send(Ok((i, Arc::new(item)))).await.is_err() {
@@ -47,15 +43,20 @@ pub(crate) fn spawn_workers(
     tx: async_channel::Sender<(usize, Result<LaidOutSequence, PipelineError>)>,
 ) -> Vec<task::JoinHandle<()>> {
     let mut handles = Vec::new();
-    let layout_engine = LayoutEngine::new(Arc::clone(&context.font_manager));
+    // We capture the SharedFontLibrary (Arc) to pass to workers.
+    let font_lib = Arc::clone(&context.font_library);
+
     for worker_id in 0..num_threads {
         let rx_clone = rx.clone();
         let tx_clone = tx.clone();
-        // CHANGE: Mutable clone for each worker
-        let mut layout_engine_clone = layout_engine.clone();
+        let font_lib_clone = Arc::clone(&font_lib);
         let template_clone = Arc::clone(&context.compiled_template);
+
         let worker_handle = task::spawn_blocking(move || {
             info!("[WORKER-{}] Started.", worker_id);
+            // Create a thread-local LayoutEngine. This avoids Mutex contention on the FontSystem.
+            let mut layout_engine = LayoutEngine::new(&font_lib_clone);
+
             while let Ok(result) = rx_clone.recv_blocking() {
                 let (index, work_result) = match result {
                     Ok((index, context_arc)) => {
@@ -72,8 +73,7 @@ pub(crate) fn spawn_workers(
                                     ir_nodes,
                                     context_arc.clone(),
                                     template_clone.resource_base_path(),
-                                    // CHANGE: Pass mutable reference
-                                    &mut layout_engine_clone,
+                                    &mut layout_engine,
                                     &template_clone.stylesheet(),
                                     false,
                                 )
@@ -96,7 +96,6 @@ pub(crate) fn spawn_workers(
     handles
 }
 
-
 /// A true streaming consumer that guarantees in-order processing.
 pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
     rx2: async_channel::Receiver<(usize, Result<LaidOutSequence, PipelineError>)>,
@@ -113,7 +112,8 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
 
     let font_map: HashMap<String, String>;
     {
-        let system = renderer.layout_engine.font_manager.system.lock().unwrap();
+        // Use the new accessor which returns RefMut instead of locking a Mutex
+        let system = renderer.layout_engine.font_system();
         font_map = system
             .db()
             .faces()
@@ -122,11 +122,20 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
             .collect();
     }
 
+    // PERF: Consumer Wait time vs Process time
+    let mut last_processed_time = Instant::now();
+
     while let Ok((index, result)) = rx2.recv_blocking() {
+        let wait_time = last_processed_time.elapsed();
+        if wait_time.as_millis() > 50 {
+            debug!("[CONSUMER] Waited {:?} for sequence #{}", wait_time, index);
+        }
+
         buffer.insert(index, result);
 
         // Process any contiguous sequences that are now available
         while let Some(res) = buffer.remove(&next_sequence_idx) {
+            let process_start = Instant::now();
             let seq = res?;
             debug!("[CONSUMER] Processing in-order sequence #{}", next_sequence_idx);
 
@@ -194,7 +203,11 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
                 }
             }
 
+            // Render PDF Content & Write
             renderer.add_resources(&seq.resources)?;
+            let pages_count = seq.pages.len();
+
+            let render_start = Instant::now();
             for page_elements in seq.pages {
                 let content = lopdf_helpers::render_elements_to_content(
                     page_elements,
@@ -216,7 +229,19 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
                 let page_id = writer.write_object(page_dict.into())?;
                 all_page_ids.push(page_id);
             }
+            let render_time = render_start.elapsed();
+
+            if render_time.as_millis() > 5 {
+                trace!(
+                    "[CONSUMER] Rendered {} pages for sequence #{} in {:?}",
+                    pages_count,
+                    next_sequence_idx,
+                    render_time
+                );
+            }
+
             next_sequence_idx += 1;
+            last_processed_time = Instant::now();
         }
     }
 

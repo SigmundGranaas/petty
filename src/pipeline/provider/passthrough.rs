@@ -33,7 +33,7 @@ impl DataSourceProvider for PassThroughProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::layout::FontManager;
+    use crate::core::layout::fonts::SharedFontLibrary;
     use crate::parser::json::processor::JsonParser;
     use crate::parser::processor::TemplateParser;
     use serde_json::json;
@@ -58,7 +58,7 @@ mod tests {
         let context = PipelineContext {
             compiled_template: features.main_template,
             role_templates: Arc::new(HashMap::new()),
-            font_manager: Arc::new(FontManager::new()),
+            font_library: Arc::new(SharedFontLibrary::new()),
         };
 
         // 2. Create the provider and a sample iterator

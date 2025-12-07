@@ -183,35 +183,29 @@ impl<'a> LayoutNode for BlockNode<'a> {
         };
 
         // Layout children in a sub-context.
-        // Capture the child_cursor_y to know the exact used height of content.
-        let (child_cursor_y, child_split_result) = ctx.with_child_bounds(child_bounds, |child_ctx| {
-            let mut split_res = LayoutResult::Finished;
-            for (i, child) in self.children.iter().enumerate().skip(start_index) {
-                let resume = if i == start_index {
-                    child_resume_state.take()
-                } else {
-                    None
-                };
+        let mut child_ctx = ctx.child(child_bounds);
+        let mut split_res = LayoutResult::Finished;
+        for (i, child) in self.children.iter().enumerate().skip(start_index) {
+            let resume = if i == start_index {
+                child_resume_state.take()
+            } else {
+                None
+            };
 
-                let res = child.layout(child_ctx, child_constraints, resume)?;
+            let res = child.layout(&mut child_ctx, child_constraints, resume)?;
 
-                match res {
-                    LayoutResult::Finished => {}
-                    LayoutResult::Break(next_state) => {
-                        split_res = LayoutResult::Break(NodeState::Block(BlockState {
-                            child_index: i,
-                            child_state: Some(Box::new(next_state)),
-                        }));
-                        break;
-                    }
+            match res {
+                LayoutResult::Finished => {}
+                LayoutResult::Break(next_state) => {
+                    split_res = LayoutResult::Break(NodeState::Block(BlockState {
+                        child_index: i,
+                        child_state: Some(Box::new(next_state)),
+                    }));
+                    break;
                 }
             }
-            Ok((child_ctx.cursor_y(), split_res))
-        })?;
-
-        // FIX: Always use the child_cursor_y (content height) for background calculation,
-        // even if a break occurred. This ensures the background tightly wraps the content
-        // that actually fit on this page.
+        }
+        let child_cursor_y = child_ctx.cursor_y();
         let actual_used_height = child_cursor_y;
 
         let bg_elements = create_background_and_borders(
@@ -220,14 +214,14 @@ impl<'a> LayoutNode for BlockNode<'a> {
             block_start_y_in_ctx,
             actual_used_height,
             !is_continuation,
-            matches!(child_split_result, LayoutResult::Finished),
+            matches!(split_res, LayoutResult::Finished),
         );
 
         for el in bg_elements {
             ctx.push_element(el);
         }
 
-        match child_split_result {
+        match split_res {
             LayoutResult::Finished => {
                 let border_bottom = self.style.border_bottom_width();
                 let bottom_spacing = self.style.box_model.padding.bottom + border_bottom;
