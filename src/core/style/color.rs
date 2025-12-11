@@ -1,5 +1,6 @@
 use crate::parser::style_parsers;
 use serde::{de, Deserialize, Deserializer, Serialize};
+use std::hash::{Hash, Hasher};
 
 fn default_one() -> f32 {
     1.0
@@ -16,6 +17,17 @@ pub struct Color {
     pub b: u8,
     #[serde(skip_serializing_if = "is_one", default = "default_one")]
     pub a: f32,
+}
+
+impl Eq for Color {}
+
+impl Hash for Color {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.r.hash(state);
+        self.g.hash(state);
+        self.b.hash(state);
+        self.a.to_bits().hash(state);
+    }
 }
 
 impl Default for Color {

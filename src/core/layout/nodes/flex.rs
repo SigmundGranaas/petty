@@ -2,6 +2,8 @@
 
 use crate::core::idf::{IRNode, TextStr};
 use crate::core::layout::builder::NodeBuilder;
+use crate::core::layout::engine::{LayoutEngine, LayoutStore};
+// Removed unused import `Size`
 use crate::core::layout::geom::{self, BoxConstraints};
 use crate::core::layout::node::{
     FlexState, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode,
@@ -9,8 +11,7 @@ use crate::core::layout::node::{
 use crate::core::layout::nodes::block::create_background_and_borders;
 use crate::core::layout::nodes::taffy_utils::computed_style_to_taffy;
 use crate::core::layout::style::ComputedStyle;
-use crate::core::layout::{LayoutEngine, LayoutError};
-use bumpalo::Bump;
+use crate::core::layout::LayoutError;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -25,9 +26,9 @@ impl NodeBuilder for FlexBuilder {
         node: &IRNode,
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
-        arena: &'a Bump,
+        store: &'a LayoutStore,
     ) -> Result<RenderNode<'a>, LayoutError> {
-        FlexNode::build(node, engine, parent_style, arena)
+        FlexNode::build(node, engine, parent_style, store)
     }
 }
 
@@ -40,9 +41,8 @@ struct FlexLayoutOutput {
 #[derive(Debug)]
 pub struct FlexNode<'a> {
     id: Option<TextStr>,
-    // Children in arena
     children: &'a [RenderNode<'a>],
-    style: Arc<ComputedStyle>,
+    style: &'a ComputedStyle,
 }
 
 impl<'a> FlexNode<'a> {
@@ -50,7 +50,7 @@ impl<'a> FlexNode<'a> {
         node: &IRNode,
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
-        arena: &'a Bump,
+        store: &'a LayoutStore,
     ) -> Result<RenderNode<'a>, LayoutError> {
         let style = engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
 
@@ -62,14 +62,16 @@ impl<'a> FlexNode<'a> {
             return Err(LayoutError::BuilderMismatch("FlexContainer", node.kind()));
         };
 
-        let mut children_vec = engine.build_layout_node_children(ir_children, style.clone(), arena)?;
+        let mut children_vec = engine.build_layout_node_children(ir_children, style.clone(), store)?;
         children_vec.sort_by_key(|c| c.style().flex.order);
-        let children = arena.alloc_slice_copy(&children_vec);
+        let children = store.bump.alloc_slice_copy(&children_vec);
 
-        let node = arena.alloc(Self {
+        let style_ref = store.cache_style(style);
+
+        let node = store.bump.alloc(Self {
             id: meta.id.clone(),
             children,
-            style,
+            style: style_ref,
         });
 
         Ok(RenderNode::Flex(node))
@@ -83,7 +85,6 @@ impl<'a> FlexNode<'a> {
         })
     }
 
-    // Note: compute_flex_layout_data needs mutable env for measure callbacks
     fn compute_flex_layout_data(
         &self,
         env: &mut LayoutEnvironment,
@@ -100,7 +101,7 @@ impl<'a> FlexNode<'a> {
             child_nodes.push(node);
         }
 
-        let mut root_style = computed_style_to_taffy(&self.style);
+        let mut root_style = computed_style_to_taffy(self.style);
 
         if constraints.has_bounded_width() && self.style.box_model.width.is_none() {
             root_style.size.width = taffy::style::Dimension::length(constraints.max_width);
@@ -124,7 +125,6 @@ impl<'a> FlexNode<'a> {
             },
         };
 
-        // SAFETY: We need to pass the mutable environment reference into the closure.
         let env_ptr = env as *mut LayoutEnvironment;
 
         taffy
@@ -147,11 +147,11 @@ impl<'a> FlexNode<'a> {
 
                     let child_constraints = BoxConstraints::new(min_w, max_w, 0.0, f32::INFINITY);
 
-                    // Dereference pointer safely - Taffy is single-threaded here
                     let env = unsafe { &mut *env_ptr };
                     let size = child.measure(env, child_constraints);
 
-                    Size {
+                    // FIX: Explicitly use taffy::geometry::Size to match closure return type
+                    taffy::geometry::Size {
                         width: size.width,
                         height: size.height,
                     }
@@ -168,7 +168,6 @@ impl<'a> FlexNode<'a> {
             .collect();
 
         let duration = start.elapsed();
-        // Since we have mutable env, we can record stats
         env.engine.record_perf("FlexNode::compute_flex_layout_data", duration);
 
         FlexLayoutOutput {
@@ -179,8 +178,8 @@ impl<'a> FlexNode<'a> {
 }
 
 impl<'a> LayoutNode for FlexNode<'a> {
-    fn style(&self) -> &Arc<ComputedStyle> {
-        &self.style
+    fn style(&self) -> &ComputedStyle {
+        self.style
     }
 
     fn measure(&self, env: &mut LayoutEnvironment, constraints: BoxConstraints) -> geom::Size {
@@ -245,7 +244,7 @@ impl<'a> LayoutNode for FlexNode<'a> {
 
         let bg_elements = create_background_and_borders(
             ctx.bounds(),
-            &self.style,
+            self.style,
             start_y,
             content_height,
             !is_continuation,

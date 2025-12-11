@@ -3,7 +3,7 @@
 //! annotations and outlines using the `lopdf` library. These are decoupled
 // from the main renderer to be reusable by different generation strategies.
 
-use crate::core::layout::{LayoutElement, PositionedElement};
+use crate::core::layout::{LayoutElement, PositionedElement, ComputedStyle};
 use crate::pipeline::worker::LaidOutSequence;
 use crate::render::renderer::{Pass1Result, RenderError};
 use crate::render::streaming_writer::StreamingPdfWriter;
@@ -12,6 +12,7 @@ use lopdf::{dictionary, Object, ObjectId, StringFormat};
 use std::collections::HashMap;
 use std::io::{Seek, Write};
 use std::sync::Arc;
+use std::borrow::Cow;
 
 /// Creates all link annotations for the document based on the analysis pass results.
 ///
@@ -202,7 +203,7 @@ pub fn render_elements_to_content(
 
 // --- Internal Page Drawing Context ---
 
-use crate::core::layout::{ComputedStyle, ImageElement, TextElement};
+use crate::core::layout::{ImageElement, TextElement};
 use crate::core::style::color::Color;
 use crate::core::style::font::FontWeight;
 use once_cell::sync::Lazy;
@@ -258,17 +259,17 @@ impl<'a> PageContext<'a> {
         }
         Ok(())
     }
-    fn get_styled_font_name(style: &Arc<ComputedStyle>) -> String {
+    fn get_styled_font_name(style: &Arc<ComputedStyle>) -> Cow<'_, str> {
         let family = &style.text.font_family;
         match style.text.font_weight {
-            FontWeight::Bold | FontWeight::Black => format!("{}-Bold", family),
-            _ => family.to_string(),
+            FontWeight::Bold | FontWeight::Black => Cow::Owned(format!("{}-Bold", family)),
+            _ => Cow::Borrowed(family),
         }
     }
     fn set_font(&mut self, style: &Arc<ComputedStyle>) {
         let styled_font_name = Self::get_styled_font_name(style);
         let internal_font_name = self.font_map
-            .get(&styled_font_name)
+            .get(styled_font_name.as_ref())
             .or_else(|| self.font_map.get(style.text.font_family.as_str()))
             .unwrap_or(&DEFAULT_LOPDF_FONT_NAME);
 

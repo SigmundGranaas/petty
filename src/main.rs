@@ -2,9 +2,44 @@ use petty::{PipelineBuilder, PipelineError};
 use serde_json::{from_str, Value};
 use std::env;
 use std::fs;
+use std::thread;
+use std::time::{Duration, Instant};
+
+// 1. CRITICAL: Use Mimalloc to prevent heap fragmentation.
+// This is essential for long-running streaming processes with many small allocations.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
+/// Spawns a background thread to monitor physical memory usage (RSS).
+fn spawn_memory_monitor() {
+    thread::spawn(|| {
+        let mut max_usage = 0;
+        let start = Instant::now();
+        println!("\n[Monitor] Memory monitoring started...");
+        loop {
+            if let Some(usage) = memory_stats::memory_stats() {
+                let mb = usage.physical_mem / 1024 / 1024;
+                if mb > max_usage {
+                    max_usage = mb;
+                }
+                // Print roughly every second
+                println!(
+                    "[Monitor] T+{:<3}s | RSS: {:<4} MB | Peak: {:<4} MB",
+                    start.elapsed().as_secs(),
+                    mb,
+                    max_usage
+                );
+            }
+            thread::sleep(Duration::from_secs(1));
+        }
+    });
+}
 
 /// A simple CLI to generate a PDF from an XSLT template and a data file.
 fn main() -> Result<(), PipelineError> {
+    // 2. Start the memory monitor thread immediately
+    spawn_memory_monitor();
+
     let args: Vec<String> = env::args().collect();
     if args.len() != 4 {
         eprintln!("A simple tool to generate PDFs from JSON data and an XSLT template.");

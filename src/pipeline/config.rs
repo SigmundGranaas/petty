@@ -1,5 +1,5 @@
-// src/pipeline/config.rs
-// FILE: src/pipeline/config.rs
+// Reuse the configuration struct defined in the core layout module to ensure synergy.
+pub use crate::core::layout::config::LayoutConfig as PipelineCacheConfig;
 
 /// An enum to select the desired PDF rendering backend.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

@@ -19,6 +19,7 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::io::{self, Seek, Write};
 use std::sync::Arc;
+use std::borrow::Cow;
 
 /// Manages the state of the entire PDF document, including pages, fonts, and global resources.
 pub struct PdfDocumentRenderer<W: io::Write + Send> {
@@ -45,32 +46,35 @@ impl<W: io::Write + Send> PdfDocumentRenderer<W> {
         let mut fonts = HashMap::new();
         let mut default_font_id: Option<FontId> = None;
 
-        // Use RefCell borrow via accessor
-        let system = layout_engine.font_system();
+        // Use new font_db accessor
+        {
+            let db_lock = layout_engine.font_db();
+            let db = db_lock.read().unwrap();
 
-        for face in system.db().faces() {
-            let face_post_script_name = face.post_script_name.clone();
-            let face_index = face.index;
-            let id = face.id;
+            for face in db.faces() {
+                let face_post_script_name = face.post_script_name.clone();
+                let face_index = face.index;
+                let id = face.id;
 
-            system.db().with_face_data(id, |font_data, _| {
-                let mut warnings = Vec::new();
-                match ParsedFont::from_bytes(font_data, face_index as usize, &mut warnings) {
-                    Some(parsed_font) => {
-                        let font_id = doc.add_font(&parsed_font);
-                        fonts.insert(face_post_script_name.clone(), font_id.clone());
-                        if face_post_script_name.eq_ignore_ascii_case("helvetica") {
-                            default_font_id = Some(font_id);
+                db.with_face_data(id, |font_data, _| {
+                    let mut warnings = Vec::new();
+                    match ParsedFont::from_bytes(font_data, face_index as usize, &mut warnings) {
+                        Some(parsed_font) => {
+                            let font_id = doc.add_font(&parsed_font);
+                            fonts.insert(face_post_script_name.clone(), font_id.clone());
+                            if face_post_script_name.eq_ignore_ascii_case("helvetica") {
+                                default_font_id = Some(font_id);
+                            }
+                        }
+                        None => {
+                            log::warn!(
+                                "Failed to parse font for embedding: {}",
+                                face_post_script_name
+                            );
                         }
                     }
-                    None => {
-                        log::warn!(
-                            "Failed to parse font for embedding: {}",
-                            face_post_script_name
-                        );
-                    }
-                }
-            });
+                });
+            }
         }
 
         let default_font = default_font_id
@@ -80,8 +84,6 @@ impl<W: io::Write + Send> PdfDocumentRenderer<W> {
                     "No fonts were loaded, cannot create PDF.".to_string(),
                 )
             })?;
-
-        drop(system);
 
         Ok(PdfDocumentRenderer {
             document: doc,
@@ -283,11 +285,11 @@ pub(crate) struct RenderContext<'a> {
     pub(crate) page_height_pt: f32,
 }
 
-pub(crate) fn get_styled_font_name(style: &Arc<ComputedStyle>) -> String {
+pub(crate) fn get_styled_font_name(style: &Arc<ComputedStyle>) -> Cow<'_, str> {
     let family = &style.text.font_family;
     match style.text.font_weight {
-        FontWeight::Bold | FontWeight::Black => format!("{}-Bold", family),
-        _ => family.to_string(),
+        FontWeight::Bold | FontWeight::Black => Cow::Owned(format!("{}-Bold", family)),
+        _ => Cow::Borrowed(family),
     }
 }
 

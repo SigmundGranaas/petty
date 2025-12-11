@@ -252,7 +252,7 @@ fn main() -> Result<(), PipelineError> {
     );
     let start_time = Instant::now();
 
-    pipeline.generate_to_file(data_iterator.collect(), output_path)?;
+    pipeline.generate_to_file(data_iterator, output_path)?;
 
     let duration = start_time.elapsed();
     println!("\nSuccess! Generated {}", output_path);

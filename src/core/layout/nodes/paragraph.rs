@@ -2,20 +2,20 @@
 
 use crate::core::idf::{IRNode, TextStr};
 use crate::core::layout::builder::NodeBuilder;
+// Added MultiSpanCacheKey to import
+use crate::core::layout::engine::{LayoutEngine, LayoutStore, ShapingCacheKey, MultiSpanCacheKey};
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
     LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, ParagraphState,
     RenderNode,
 };
-use crate::core::layout::nodes::image::ImageNode;
-use crate::core::layout::nodes::paragraph_utils::flush_group;
+use crate::core::layout::nodes::paragraph_utils::{
+    break_lines, shape_text, render_lines, ShapedRun, LineLayout
+};
 use crate::core::layout::style::ComputedStyle;
-use crate::core::layout::text::TextBuilder;
-use crate::core::layout::{LayoutEngine, LayoutError};
+use crate::core::layout::text::{TextBuilder, TextSpan, InlineImageEntry};
+use crate::core::layout::LayoutError;
 use crate::core::style::dimension::Dimension;
-use crate::core::style::text::TextAlign;
-use bumpalo::Bump;
-use cosmic_text::{AttrsList, Buffer, LayoutRun, Metrics, Wrap};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -29,20 +29,20 @@ impl NodeBuilder for ParagraphBuilder {
         node: &IRNode,
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
-        arena: &'a Bump,
+        store: &'a LayoutStore,
     ) -> Result<RenderNode<'a>, LayoutError> {
-        ParagraphNode::build(node, engine, parent_style, arena)
+        ParagraphNode::build(node, engine, parent_style, store)
     }
 }
 
 #[derive(Debug)]
 pub struct ParagraphNode<'a> {
     id: Option<TextStr>,
-    text_content: String,
-    attrs_list: AttrsList,
-    links: Vec<String>,
-    _inline_images: Vec<(usize, &'a ImageNode)>,
-    style: Arc<ComputedStyle>,
+    pub spans: &'a [TextSpan<'a>],
+    pub full_text: &'a str,
+    pub links: &'a [&'a str],
+    pub inline_images: &'a [InlineImageEntry<'a>],
+    style: &'a ComputedStyle,
 }
 
 impl<'a> ParagraphNode<'a> {
@@ -50,9 +50,10 @@ impl<'a> ParagraphNode<'a> {
         node: &IRNode,
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
-        arena: &'a Bump,
+        store: &'a LayoutStore,
     ) -> Result<RenderNode<'a>, LayoutError> {
         let style = engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
+        let style = store.canonicalize_style(style);
 
         let IRNode::Paragraph {
             meta,
@@ -62,135 +63,160 @@ impl<'a> ParagraphNode<'a> {
             return Err(LayoutError::BuilderMismatch("Paragraph", node.kind()));
         };
 
-        // TextBuilder now takes arena
-        let mut builder = TextBuilder::new(engine, arena, &style);
+        let mut builder = TextBuilder::new(engine, store, &style);
         builder.process_inlines(inlines, &style);
 
-        let node = arena.alloc(Self {
+        let (full_text, spans, inline_images_vec, links_vec) = builder.finish();
+
+        let mut link_refs = Vec::with_capacity(links_vec.len());
+        for link in links_vec {
+            link_refs.push(store.alloc_str(&link));
+        }
+        let links_slice = store.bump.alloc_slice_copy(&link_refs);
+        let images_slice = store.bump.alloc_slice_clone(&inline_images_vec);
+        let style_ref = store.cache_style(style);
+
+        let node = store.bump.alloc(Self {
             id: meta.id.clone(),
-            text_content: builder.content,
-            attrs_list: builder.attrs_list,
-            links: builder.links,
-            _inline_images: builder.inline_images,
-            style,
+            spans,
+            full_text,
+            links: links_slice,
+            inline_images: images_slice,
+            style: style_ref,
         });
 
         Ok(RenderNode::Paragraph(node))
     }
 
-    /// Generates a cache key for the paragraph based on its pointer identity and constraints.
-    fn get_cache_key(&self, max_width: Option<f32>) -> u64 {
-        let mut s = DefaultHasher::new();
-        // Hash the pointer address to identify this specific paragraph instance
-        (self as *const Self).hash(&mut s);
-        // Add content length for extra safety against address reuse collisions
-        self.text_content.len().hash(&mut s);
-        // Hash the constraint to differentiate layouts at different widths
-        if let Some(w) = max_width {
-            ((w * 100.0) as i64).hash(&mut s);
-        } else {
-            (-1i64).hash(&mut s);
-        }
-        s.finish()
+    fn get_shaping_cache_key(&self) -> u64 {
+        // Optimization: Use direct pointer hashing instead of DefaultHasher
+        // to avoid overhead in very tight layout loops.
+        let ptr_val = (self as *const Self) as u64;
+        // Simple mixing to avoid trivial collisions
+        ptr_val.wrapping_mul(101).wrapping_add(100)
     }
 
-    /// Creates and shapes a buffer for the current content and constraints.
-    fn shape_text(&self, engine: &LayoutEngine, max_width: Option<f32>) -> Buffer {
-        let start = Instant::now();
-
-        let mut font_system = engine.font_system();
-
-        let metrics = Metrics::new(self.style.text.font_size, self.style.text.line_height);
-        let mut buffer = Buffer::new(&mut *font_system, metrics);
-
-        buffer.set_wrap(&mut *font_system, Wrap::Word);
-        buffer.set_size(&mut *font_system, max_width, None);
-
-        let default_attrs = engine.attrs_from_style(&self.style);
-        let spans = self
-            .attrs_list
-            .spans()
-            .into_iter()
-            .map(|(range, attrs)| (&self.text_content[range.clone()], attrs.as_attrs()));
-
-        buffer.set_rich_text(
-            &mut *font_system,
-            spans,
-            &default_attrs,
-            cosmic_text::Shaping::Advanced,
-            None,
-        );
-
-        let align = match self.style.text.text_align {
-            TextAlign::Left => cosmic_text::Align::Left,
-            TextAlign::Right => cosmic_text::Align::Right,
-            TextAlign::Center => cosmic_text::Align::Center,
-            TextAlign::Justify => cosmic_text::Align::Justified,
+    fn get_layout_cache_key(&self, max_width: Option<f32>) -> u64 {
+        let ptr_val = (self as *const Self) as u64;
+        let width_val = if let Some(w) = max_width {
+            (w * 100.0).round() as u64
+        } else {
+            0
         };
+        // Simple mixing
+        ptr_val.wrapping_mul(33) ^ width_val
+    }
 
-        for line in buffer.lines.iter_mut() {
-            line.set_align(Some(align));
+    fn compute_shaped_runs(&self, engine: &LayoutEngine) -> Arc<Vec<ShapedRun>> {
+        // Case 1: Single Span Optimization
+        if self.spans.len() == 1 {
+            let span = &self.spans[0];
+            let key = ShapingCacheKey {
+                text: span.text.to_string(),
+                style: span.style.clone(),
+            };
+
+            if let Some(runs) = engine.get_cached_shaping_run(&key) {
+                engine.count_hit();
+                return runs;
+            }
+
+            engine.count_miss();
+            let runs = Arc::new(shape_text(engine, self.spans, self.inline_images));
+            engine.cache_shaping_run(key, runs.clone());
+            return runs;
         }
 
-        buffer.shape_until_scroll(&mut *font_system, false);
+        // Case 2: Multi-Span Optimization
+        if self.inline_images.is_empty() {
+            let mut key_spans = Vec::with_capacity(self.spans.len());
 
-        let duration = start.elapsed();
-        engine.record_perf("Paragraph::shape_text", duration);
+            for span in self.spans {
+                let mut hasher = DefaultHasher::new();
+                span.style.hash(&mut hasher);
+                let style_hash = hasher.finish();
 
-        buffer
+                key_spans.push((span.text.to_string(), style_hash));
+            }
+
+            let multi_key = MultiSpanCacheKey { spans: key_spans };
+
+            if let Some(runs) = engine.get_cached_multi_span_run(&multi_key) {
+                engine.count_hit();
+                return runs;
+            }
+
+            engine.count_miss();
+            let runs = Arc::new(shape_text(engine, self.spans, self.inline_images));
+            engine.cache_multi_span_run(multi_key, runs.clone());
+            return runs;
+        }
+
+        // Fallback
+        let runs = shape_text(engine, self.spans, self.inline_images);
+        Arc::new(runs)
+    }
+
+    fn compute_layout(&self, _engine: &LayoutEngine, shaped_runs: &Arc<Vec<ShapedRun>>, max_width: f32) -> Arc<ParagraphLayout> {
+        let lines = break_lines(shaped_runs, max_width, self.style);
+
+        let total_height = lines.iter().map(|l| l.height).sum();
+        let max_line_width = lines.iter().map(|l| l.width).fold(0.0f32, f32::max);
+
+        Arc::new(ParagraphLayout {
+            lines,
+            total_height,
+            max_line_width,
+            shaped_runs: shaped_runs.clone(),
+        })
     }
 }
 
+// ... Rest of ParagraphNode impl ... (layout, measure unchanged from previous step)
+#[derive(Debug, Clone)]
+pub struct ParagraphLayout {
+    pub lines: Vec<LineLayout>,
+    pub total_height: f32,
+    pub max_line_width: f32,
+    pub shaped_runs: Arc<Vec<ShapedRun>>,
+}
+
 impl<'a> LayoutNode for ParagraphNode<'a> {
-    fn style(&self) -> &Arc<ComputedStyle> {
-        &self.style
+    fn style(&self) -> &ComputedStyle {
+        self.style
     }
 
     fn measure(&self, env: &mut LayoutEnvironment, constraints: BoxConstraints) -> Size {
         let max_width = if constraints.has_bounded_width() {
-            Some(constraints.max_width)
+            constraints.max_width
         } else {
-            None
+            f32::INFINITY
         };
 
-        // KEY OPTIMIZATION: Check cache in measure!
-        let cache_key = self.get_cache_key(max_width);
+        // 1. Shaping Cache (Local Pointer-Based)
+        let shape_key = self.get_shaping_cache_key();
+        let shaped_runs = if let Some(cached) = env.cache.get(&shape_key) {
+            cached.downcast_ref::<Arc<Vec<ShapedRun>>>().unwrap().clone()
+        } else {
+            // Missed local pointer cache -> Call compute_shaped_runs -> checks Global Content Cache
+            let runs = self.compute_shaped_runs(env.engine);
+            env.cache.insert(shape_key, Box::new(runs.clone()));
+            runs
+        };
 
-        let buffer = if let Some(cached) = env.cache.get(&cache_key) {
-            // log::trace!("[PERF] Paragraph cache HIT in measure");
-            if let Some(b) = cached.downcast_ref::<Buffer>() {
-                b.clone()
-            } else {
-                let b = self.shape_text(env.engine, max_width);
-                env.cache.insert(cache_key, Box::new(b.clone()));
-                b
+        // 2. Layout Cache (Width Dependent)
+        let layout_key = self.get_layout_cache_key(if max_width.is_finite() { Some(max_width) } else { None });
+
+        if let Some(cached) = env.cache.get(&layout_key) {
+            if let Some(layout) = cached.downcast_ref::<Arc<ParagraphLayout>>() {
+                return self.resolve_size(layout, constraints);
             }
-        } else {
-            // log::trace!("[PERF] Paragraph cache MISS in measure");
-            let b = self.shape_text(env.engine, max_width);
-            env.cache.insert(cache_key, Box::new(b.clone()));
-            b
-        };
-
-        let mut measured_width: f32 = 0.0;
-        let mut height: f32 = 0.0;
-
-        let runs: Vec<_> = buffer.layout_runs().collect();
-        let ascent_correction = runs.first().map(|r| r.line_y).unwrap_or(0.0);
-
-        for run in runs {
-            measured_width = measured_width.max(run.line_w);
-            let line_top = run.line_y - ascent_correction;
-            height = line_top + run.line_height;
         }
 
-        let margin_y = self.style.box_model.margin.top + self.style.box_model.margin.bottom;
+        let layout = self.compute_layout(env.engine, &shaped_runs, max_width);
+        env.cache.insert(layout_key, Box::new(layout.clone()));
 
-        if let Some(Dimension::Pt(h)) = self.style.box_model.height {
-            height = h;
-        }
-
-        Size::new(measured_width, height + margin_y)
+        self.resolve_size(&layout, constraints)
     }
 
     fn layout(
@@ -210,183 +236,122 @@ impl<'a> LayoutNode for ParagraphNode<'a> {
         };
 
         let is_continuation = scroll_offset > 0.0;
-        let mut margin_applied = 0.0;
 
         if !is_continuation {
             let margin_to_add = self.style.box_model.margin.top.max(ctx.last_v_margin);
-
             if ctx.cursor_y() > 0.1 && margin_to_add > ctx.available_height() {
                 return Ok(LayoutResult::Break(NodeState::Paragraph(ParagraphState {
                     scroll_offset: 0.0,
                 })));
             }
-
             ctx.advance_cursor(margin_to_add);
-            margin_applied = margin_to_add;
         }
         ctx.last_v_margin = 0.0;
 
         let width = if constraints.has_bounded_width() {
-            Some(constraints.max_width)
+            constraints.max_width
         } else {
-            Some(ctx.bounds().width)
+            ctx.bounds().width
         };
 
-        // Check cache before shaping (cache is in ctx.env)
-        let cache_key = self.get_cache_key(width);
+        // 1. Shaping Cache
+        let shape_key = self.get_shaping_cache_key();
+        let shaped_runs = if let Some(cached) = ctx.env.cache.get(&shape_key) {
+            cached.downcast_ref::<Arc<Vec<ShapedRun>>>().unwrap().clone()
+        } else {
+            let runs = self.compute_shaped_runs(ctx.env.engine);
+            ctx.env.cache.insert(shape_key, Box::new(runs.clone()));
+            runs
+        };
 
-        let buffer = if let Some(cached) = ctx.env.cache.get(&cache_key) {
-            // log::trace!("[PERF] Paragraph cache HIT in layout");
-            if let Some(b) = cached.downcast_ref::<Buffer>() {
-                b.clone()
+        // 2. Layout Cache
+        let layout_key = self.get_layout_cache_key(Some(width));
+
+        let layout_arc = if let Some(cached) = ctx.env.cache.get(&layout_key) {
+            if let Some(layout) = cached.downcast_ref::<Arc<ParagraphLayout>>() {
+                layout.clone()
             } else {
-                let b = self.shape_text(ctx.env.engine, width);
-                ctx.env.cache.insert(cache_key, Box::new(b.clone()));
-                b
+                self.compute_layout(ctx.env.engine, &shaped_runs, width)
             }
         } else {
-            // log::trace!("[PERF] Paragraph cache MISS in layout");
-            let b = self.shape_text(ctx.env.engine, width);
-            ctx.env.cache.insert(cache_key, Box::new(b.clone()));
-            b
+            let l = self.compute_layout(ctx.env.engine, &shaped_runs, width);
+            ctx.env.cache.insert(layout_key, Box::new(l.clone()));
+            l
         };
 
         let available_height = ctx.available_height();
 
-        let all_runs: Vec<LayoutRun> = buffer.layout_runs().collect();
-        let ascent_correction = all_runs.first().map(|r| r.line_y).unwrap_or(0.0);
+        let mut current_y = 0.0;
+        let mut start_line_index = 0;
 
-        let remaining_runs: Vec<&LayoutRun> = all_runs
-            .iter()
-            .filter(|run| (run.line_y - ascent_correction) >= scroll_offset - 0.01)
-            .collect();
+        while start_line_index < layout_arc.lines.len() {
+            if current_y >= scroll_offset - 0.01 {
+                break;
+            }
+            current_y += layout_arc.lines[start_line_index].height;
+            start_line_index += 1;
+        }
 
-        if remaining_runs.is_empty() {
+        if start_line_index >= layout_arc.lines.len() {
             ctx.last_v_margin = self.style.box_model.margin.bottom;
             return Ok(LayoutResult::Finished);
         }
 
-        let orphans = self.style.misc.orphans.max(1) as usize;
-        let widows = self.style.misc.widows.max(1) as usize;
+        let mut rendered_height = 0.0;
+        let mut lines_rendered = 0;
+        let mut next_break_offset = 0.0;
+        let mut split = false;
 
-        let mut fit_count = 0;
-        for run in &remaining_runs {
-            let line_top = run.line_y - ascent_correction;
-            let local_y = line_top - scroll_offset;
-            if local_y + run.line_height <= available_height + 0.1 {
-                fit_count += 1;
-            } else {
+        for i in start_line_index..layout_arc.lines.len() {
+            let line = &layout_arc.lines[i];
+
+            if rendered_height + line.height > available_height + 0.1 {
+                split = true;
+                next_break_offset = current_y;
                 break;
             }
+
+            render_lines(ctx, line, &layout_arc.shaped_runs, rendered_height, self.links, self.full_text);
+
+            rendered_height += line.height;
+            current_y += line.height;
+            lines_rendered += 1;
         }
 
-        let mut forced_break_to_start = false;
-        let at_top_threshold = if is_continuation { 0.1 } else { margin_applied + 2.0 };
-        let is_at_top_of_container = ctx.cursor_y() <= at_top_threshold;
+        ctx.advance_cursor(rendered_height);
 
-        if fit_count < remaining_runs.len() {
-            if fit_count < orphans && !is_continuation && !is_at_top_of_container {
-                forced_break_to_start = true;
-            }
-            if !forced_break_to_start {
-                let remaining_after = remaining_runs.len() - fit_count;
-                if remaining_after < widows {
-                    let needed_on_next = widows - remaining_after;
-                    if fit_count > needed_on_next {
-                        fit_count -= needed_on_next;
-                    } else if !is_continuation && !is_at_top_of_container {
-                        forced_break_to_start = true;
-                    }
-                }
-            }
-        }
-
-        if forced_break_to_start {
-            return Ok(LayoutResult::Break(NodeState::Paragraph(ParagraphState {
-                scroll_offset: 0.0,
-            })));
-        }
-
-        if fit_count == 0 && !remaining_runs.is_empty() {
-            if !is_at_top_of_container {
+        if split {
+            if lines_rendered == 0 {
                 return Ok(LayoutResult::Break(NodeState::Paragraph(ParagraphState {
                     scroll_offset,
                 })));
             }
-            fit_count = 1;
-        }
-
-        let mut last_run_bottom = 0.0;
-        let is_justified = self.style.text.text_align == TextAlign::Justify;
-
-        for i in 0..fit_count {
-            let run = remaining_runs[i];
-            let line_top = run.line_y - ascent_correction;
-            let local_y = line_top - scroll_offset;
-
-            let mut group_glyphs = Vec::new();
-            let mut current_metadata = run.glyphs.first().map(|g| g.metadata).unwrap_or(0);
-
-            for glyph in run.glyphs.iter() {
-                let metadata_changed = glyph.metadata != current_metadata;
-                let mut should_break = metadata_changed;
-
-                if !should_break && is_justified && !group_glyphs.is_empty() {
-                    let first_g: &cosmic_text::LayoutGlyph = group_glyphs[0];
-                    let group_is_space = run.text[first_g.start..first_g.end]
-                        .chars()
-                        .all(char::is_whitespace);
-                    let current_is_space = run.text[glyph.start..glyph.end]
-                        .chars()
-                        .all(char::is_whitespace);
-                    if group_is_space != current_is_space {
-                        should_break = true;
-                    }
-                }
-
-                if should_break {
-                    flush_group(
-                        ctx,
-                        &group_glyphs,
-                        current_metadata,
-                        local_y,
-                        run.line_height,
-                        &self.style,
-                        &self.links,
-                        run.text,
-                    );
-                    group_glyphs.clear();
-                    current_metadata = glyph.metadata;
-                }
-                group_glyphs.push(glyph);
-            }
-            if !group_glyphs.is_empty() {
-                flush_group(
-                    ctx,
-                    &group_glyphs,
-                    current_metadata,
-                    local_y,
-                    run.line_height,
-                    &self.style,
-                    &self.links,
-                    run.text,
-                );
-            }
-
-            last_run_bottom = local_y + run.line_height;
-        }
-
-        ctx.advance_cursor(last_run_bottom);
-
-        if fit_count < remaining_runs.len() {
-            let next_run = remaining_runs[fit_count];
-            let next_offset = next_run.line_y - ascent_correction;
             Ok(LayoutResult::Break(NodeState::Paragraph(ParagraphState {
-                scroll_offset: next_offset,
+                scroll_offset: next_break_offset,
             })))
         } else {
             ctx.last_v_margin = self.style.box_model.margin.bottom;
             Ok(LayoutResult::Finished)
         }
+    }
+}
+
+impl<'a> ParagraphNode<'a> {
+    fn resolve_size(&self, layout: &ParagraphLayout, constraints: BoxConstraints) -> Size {
+        let mut width = layout.max_line_width;
+        let mut height = layout.total_height;
+
+        if let Some(Dimension::Pt(w)) = self.style.box_model.width {
+            width = w;
+        } else if constraints.is_tight() {
+            width = constraints.max_width;
+        }
+
+        if let Some(Dimension::Pt(h)) = self.style.box_model.height {
+            height = h;
+        }
+
+        let margin_y = self.style.box_model.margin.top + self.style.box_model.margin.bottom;
+        Size::new(width, height + margin_y)
     }
 }

@@ -2,13 +2,13 @@
 
 use crate::core::idf::{IRNode, TextStr};
 use crate::core::layout::builder::NodeBuilder;
+use crate::core::layout::engine::{LayoutEngine, LayoutStore};
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
     LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode,
 };
 use crate::core::layout::style::ComputedStyle;
-use crate::core::layout::{LayoutEngine, LayoutError};
-use bumpalo::Bump;
+use crate::core::layout::LayoutError;
 use std::sync::Arc;
 
 pub struct PageBreakBuilder;
@@ -19,44 +19,48 @@ impl NodeBuilder for PageBreakBuilder {
         node: &IRNode,
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
-        arena: &'a Bump,
+        store: &'a LayoutStore,
     ) -> Result<RenderNode<'a>, LayoutError> {
-        PageBreakNode::build(node, engine, parent_style, arena)
+        PageBreakNode::build(node, engine, parent_style, store)
     }
 }
 
+// FIX: Added lifetime 'a
 #[derive(Debug, Clone)]
-pub struct PageBreakNode {
-    pub master_name: Option<TextStr>,
-    style: Arc<ComputedStyle>,
+pub struct PageBreakNode<'a> {
+    pub master_name: Option<&'a str>,
+    style: &'a ComputedStyle,
 }
 
-impl PageBreakNode {
-    pub fn build<'a>(
+impl<'a> PageBreakNode<'a> {
+    pub fn build(
         node: &IRNode,
         _engine: &LayoutEngine,
         _parent_style: Arc<ComputedStyle>,
-        arena: &'a Bump,
+        store: &'a LayoutStore,
     ) -> Result<RenderNode<'a>, LayoutError> {
         let master_name = match node {
-            IRNode::PageBreak { master_name } => master_name.clone(),
+            IRNode::PageBreak { master_name } => master_name,
             _ => return Err(LayoutError::BuilderMismatch("PageBreak", node.kind())),
         };
-        let node = arena.alloc(PageBreakNode::new(master_name));
-        Ok(RenderNode::PageBreak(node))
-    }
 
-    pub fn new(master_name: Option<TextStr>) -> Self {
-        Self {
-            master_name,
-            style: Arc::new(ComputedStyle::default()),
-        }
+        // FIX: Allocate master_name in arena
+        let master_ref = master_name.as_ref().map(|s| store.alloc_str(s));
+        // Needs dummy style
+        let style = Arc::new(ComputedStyle::default());
+        let style_ref = store.cache_style(style);
+
+        let node = store.bump.alloc(Self {
+            master_name: master_ref,
+            style: style_ref,
+        });
+        Ok(RenderNode::PageBreak(node))
     }
 }
 
-impl LayoutNode for PageBreakNode {
-    fn style(&self) -> &Arc<ComputedStyle> {
-        &self.style
+impl<'a> LayoutNode for PageBreakNode<'a> {
+    fn style(&self) -> &ComputedStyle {
+        self.style
     }
 
     fn measure(&self, _env: &mut LayoutEnvironment, _constraints: BoxConstraints) -> Size {
@@ -81,6 +85,8 @@ impl LayoutNode for PageBreakNode {
     }
 
     fn check_for_page_break(&self) -> Option<Option<TextStr>> {
-        Some(self.master_name.clone())
+        // Convert &'a str to String for interface compatibility.
+        // This is safe because check_for_page_break returns a new String (TextStr) in the Option.
+        Some(self.master_name.map(|s| s.to_string()))
     }
 }

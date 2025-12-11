@@ -1,3 +1,5 @@
+// src/core/layout/style.rs
+
 use crate::core::style::border::Border;
 use crate::core::style::color::Color;
 use crate::core::style::dimension::{Dimension, Margins};
@@ -7,7 +9,14 @@ use crate::core::style::list::{ListStylePosition, ListStyleType};
 use crate::core::style::stylesheet::ElementStyle;
 use crate::core::style::text::{TextAlign, TextDecoration};
 use crate::core::layout::geom::BoxConstraints;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+
+// Helper to hash floats
+fn hash_f32<H: Hasher>(v: &f32, state: &mut H) {
+    v.to_bits().hash(state);
+}
 
 // Grouped Style Structures
 
@@ -20,12 +29,35 @@ pub struct BoxModel {
     pub min_height: Dimension,
 }
 
+impl Eq for BoxModel {}
+
+impl Hash for BoxModel {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.margin.hash(state);
+        self.padding.hash(state);
+        self.width.hash(state);
+        self.height.hash(state);
+        self.min_height.hash(state);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct BorderModel {
     pub top: Option<Border>,
     pub right: Option<Border>,
     pub bottom: Option<Border>,
     pub left: Option<Border>,
+}
+
+impl Eq for BorderModel {}
+
+impl Hash for BorderModel {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.top.hash(state);
+        self.right.hash(state);
+        self.bottom.hash(state);
+        self.left.hash(state);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -55,6 +87,21 @@ impl Default for TextModel {
     }
 }
 
+impl Eq for TextModel {}
+
+impl Hash for TextModel {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.font_family.hash(state);
+        hash_f32(&self.font_size, state);
+        self.font_weight.hash(state);
+        self.font_style.hash(state);
+        hash_f32(&self.line_height, state);
+        self.text_align.hash(state);
+        self.text_decoration.hash(state);
+        self.color.hash(state);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct FlexModel {
     pub direction: FlexDirection,
@@ -70,10 +117,36 @@ pub struct FlexModel {
     pub align_self: AlignSelf,
 }
 
+impl Eq for FlexModel {}
+
+impl Hash for FlexModel {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.direction.hash(state);
+        self.wrap.hash(state);
+        self.justify_content.hash(state);
+        self.align_items.hash(state);
+        self.align_content.hash(state);
+        self.order.hash(state);
+        hash_f32(&self.grow, state);
+        hash_f32(&self.shrink, state);
+        self.basis.hash(state);
+        self.align_self.hash(state);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct ListModel {
     pub style_type: ListStyleType,
     pub style_position: ListStylePosition,
+}
+
+impl Eq for ListModel {}
+
+impl Hash for ListModel {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.style_type.hash(state);
+        self.style_position.hash(state);
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -81,11 +154,29 @@ pub struct TableModel {
     pub border_spacing: f32,
 }
 
+impl Eq for TableModel {}
+
+impl Hash for TableModel {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        hash_f32(&self.border_spacing, state);
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct MiscModel {
     pub widows: usize,
     pub orphans: usize,
     pub background_color: Option<Color>,
+}
+
+impl Eq for MiscModel {}
+
+impl Hash for MiscModel {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.widows.hash(state);
+        self.orphans.hash(state);
+        self.background_color.hash(state);
+    }
 }
 
 impl Default for MiscModel {
@@ -99,7 +190,7 @@ impl Default for MiscModel {
 }
 
 /// A fully resolved style with grouped properties.
-#[derive(Debug, Clone, PartialEq, Default)]
+#[derive(Debug, Clone, Default)]
 pub struct ComputedStyle {
     pub box_model: BoxModel,
     pub border: BorderModel,
@@ -108,9 +199,50 @@ pub struct ComputedStyle {
     pub list: ListModel,
     pub table: TableModel,
     pub misc: MiscModel,
+    /// Pre-calculated hash for rapid HashMap lookups (caching).
+    /// This field is ignored in direct comparisons unless hashes differ.
+    cached_hash: u64,
+}
+
+impl Eq for ComputedStyle {}
+
+impl PartialEq for ComputedStyle {
+    fn eq(&self, other: &Self) -> bool {
+        // OPTIMIZATION: Fail fast if hashes differ
+        if self.cached_hash != other.cached_hash {
+            return false;
+        }
+        // Full comparison on collision or match
+        self.box_model == other.box_model
+            && self.border == other.border
+            && self.text == other.text
+            && self.flex == other.flex
+            && self.list == other.list
+            && self.table == other.table
+            && self.misc == other.misc
+    }
+}
+
+impl Hash for ComputedStyle {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // OPTIMIZATION: Only hash the pre-calculated u64
+        self.cached_hash.hash(state);
+    }
 }
 
 impl ComputedStyle {
+    fn calculate_full_hash(&self) -> u64 {
+        let mut s = DefaultHasher::new();
+        self.box_model.hash(&mut s);
+        self.border.hash(&mut s);
+        self.text.hash(&mut s);
+        self.flex.hash(&mut s);
+        self.list.hash(&mut s);
+        self.table.hash(&mut s);
+        self.misc.hash(&mut s);
+        s.finish()
+    }
+
     /// Returns the total width of horizontal padding.
     pub fn padding_x(&self) -> f32 {
         self.box_model.padding.left + self.box_model.padding.right
@@ -152,10 +284,6 @@ impl ComputedStyle {
     /// Calculates constraints for the content box by subtracting padding and borders.
     pub fn content_constraints(&self, constraints: BoxConstraints) -> BoxConstraints {
         let h_deduction = self.padding_x() + self.border_x();
-        // Note: Vertical deduction usually isn't applied to constraints in standard flow unless height is fixed,
-        // but for safety we typically pass infinite height for children unless constrained.
-        // Here we just handle width primarily for block flow.
-
         if constraints.has_bounded_width() {
             let max_w = (constraints.max_width - h_deduction).max(0.0);
             BoxConstraints {
@@ -194,6 +322,9 @@ pub fn compute_style(
         };
         computed.table = TableModel::default();
 
+        // Re-calculate hash as properties changed
+        computed.cached_hash = computed.calculate_full_hash();
+
         return Arc::new(computed);
     }
 
@@ -205,7 +336,7 @@ pub fn compute_style(
         merge_element_styles(&mut merged, override_style_def);
     }
 
-    let computed = ComputedStyle {
+    let mut computed = ComputedStyle {
         text: TextModel {
             font_family: merged
                 .font_family
@@ -274,14 +405,20 @@ pub fn compute_style(
             basis: merged.flex_basis.unwrap_or_default(),
             align_self: merged.align_self.unwrap_or_default(),
         },
+        cached_hash: 0,
     };
+
+    // Calculate hash once
+    computed.cached_hash = computed.calculate_full_hash();
 
     Arc::new(computed)
 }
 
 /// Returns the default style for the document root.
 pub fn get_default_style() -> Arc<ComputedStyle> {
-    Arc::new(ComputedStyle::default())
+    let mut style = ComputedStyle::default();
+    style.cached_hash = style.calculate_full_hash();
+    Arc::new(style)
 }
 
 /// Merges properties from `to_apply` into `base`.

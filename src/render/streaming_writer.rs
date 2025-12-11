@@ -1,22 +1,21 @@
 // src/render/streaming_writer.rs
 use lopdf::content::Content;
-use lopdf::xref::{Xref, XrefEntry, XrefType};
 use lopdf::{dictionary, Dictionary, Object, ObjectId, Stream};
 use std::collections::BTreeMap;
 use std::io::{self, Seek, Write};
 
 pub struct StreamingPdfWriter<W: Write + Seek> {
     writer: W,
-    xref: Xref,
-    max_id: u32,
+    object_offsets: Vec<u64>,
+    current_id: u32,
+
     pub catalog_id: ObjectId,
     pub pages_id: ObjectId,
     pub resources_id: ObjectId,
+
     page_ids: Vec<ObjectId>,
     outline_root_id: Option<ObjectId>,
-    /// Objects to be written during the `finish` call.
-    /// This is for document-level objects that can only be constructed at the end,
-    /// like the Page Tree and Document Catalog, and for buffering in two-pass mode.
+
     buffered_objects: BTreeMap<ObjectId, Object>,
 }
 
@@ -24,20 +23,21 @@ impl<W: Write + Seek> StreamingPdfWriter<W> {
     pub fn new(mut writer: W, version: &str, font_dict: Dictionary) -> io::Result<Self> {
         writer.write_all(format!("%PDF-{}\n%âãÏÓ\n", version).as_bytes())?;
 
+        let resources_id = (1, 0);
+        let pages_id = (2, 0);
+        let catalog_id = (3, 0);
+        let current_id = 3;
+
+        // Initialize offsets with 0 for the reserved IDs
+        let object_offsets = vec![0, 0, 0];
+
         let mut buffered_objects = BTreeMap::new();
-        let mut max_id = 0;
-
-        let resources_id = (max_id + 1, 0);
-        let pages_id = (max_id + 2, 0);
-        let catalog_id = (max_id + 3, 0);
-        max_id = 3;
-
         buffered_objects.insert(resources_id, dictionary! { "Font" => font_dict }.into());
 
         Ok(Self {
             writer,
-            xref: Xref::new(0, XrefType::CrossReferenceTable),
-            max_id,
+            object_offsets,
+            current_id,
             catalog_id,
             pages_id,
             resources_id,
@@ -48,47 +48,56 @@ impl<W: Write + Seek> StreamingPdfWriter<W> {
     }
 
     pub fn new_object_id(&mut self) -> ObjectId {
-        self.max_id += 1;
-        (self.max_id, 0)
+        self.current_id += 1;
+        self.object_offsets.push(0);
+        (self.current_id, 0)
     }
 
-    /// Writes an object to the stream immediately and returns its new ID.
-    /// This is the primary method for streaming content.
     pub fn write_object(&mut self, object: Object) -> io::Result<ObjectId> {
         let id = self.new_object_id();
-        internal_writer::write_indirect_object(&mut self.writer, id, &object, &mut self.xref)?;
+        self.write_object_at_id(id, &object)?;
         Ok(id)
     }
 
-    /// Buffers an object to be written during the `finish` call, returning a new ID.
-    /// Used by `TwoPassStrategy`.
-    pub fn buffer_object(&mut self, object: Object) -> ObjectId {
-        let id = self.new_object_id();
-        self.buffered_objects.insert(id, object);
-        id
+    fn write_object_at_id(&mut self, id: ObjectId, object: &Object) -> io::Result<()> {
+        let offset = self.writer.stream_position()?;
+
+        let idx = (id.0 as usize).checked_sub(1).ok_or_else(|| {
+            io::Error::new(io::ErrorKind::InvalidInput, "Invalid Object ID 0")
+        })?;
+
+        if idx >= self.object_offsets.len() {
+            self.object_offsets.resize(idx + 1, 0);
+        }
+        self.object_offsets[idx] = offset;
+
+        internal_writer::write_indirect_object_header(&mut self.writer, id)?;
+        internal_writer::write_object(&mut self.writer, object)?;
+        internal_writer::write_indirect_object_footer(&mut self.writer)?;
+
+        Ok(())
     }
 
-    /// Writes a content stream to the output immediately. Used by streaming strategies.
     pub fn write_content_stream(&mut self, content: Content) -> io::Result<ObjectId> {
         let stream = Stream::new(dictionary! {}, content.encode().unwrap_or_default());
         self.write_object(Object::Stream(stream))
     }
 
-    /// Buffers a content stream. Used by `TwoPassStrategy`.
-    pub fn buffer_content_stream(&mut self, content: Content) -> ObjectId {
-        let stream = Stream::new(dictionary! {}, content.encode().unwrap_or_default());
-        self.buffer_object(Object::Stream(stream))
-    }
-
-
-    /// Buffers an object to be written during the `finish` call.
-    /// Used by TwoPassStrategy for objects that need to be created with a pre-allocated ID
-    /// and written after other objects have been processed.
     pub fn buffer_object_at_id(&mut self, id: ObjectId, object: Object) {
-        if id.0 > self.max_id {
-            self.max_id = id.0;
+        let idx = (id.0 as usize).saturating_sub(1);
+        if idx >= self.object_offsets.len() {
+            self.object_offsets.resize(idx + 1, 0);
+            if id.0 > self.current_id {
+                self.current_id = id.0;
+            }
         }
         self.buffered_objects.insert(id, object);
+    }
+
+    pub fn buffer_object(&mut self, object: Object) -> ObjectId {
+        let id = self.new_object_id();
+        self.buffer_object_at_id(id, object);
+        id
     }
 
     pub fn set_page_ids(&mut self, page_ids: Vec<ObjectId>) {
@@ -114,16 +123,24 @@ impl<W: Write + Seek> StreamingPdfWriter<W> {
         }
         self.buffer_object_at_id(self.catalog_id, catalog_dict.into());
 
-        // Write all the objects that were deferred until the end.
-        for (id, object) in &self.buffered_objects {
-            internal_writer::write_indirect_object(&mut self.writer, *id, object, &mut self.xref)?;
+        let buffered = std::mem::take(&mut self.buffered_objects);
+        for (id, object) in buffered {
+            self.write_object_at_id(id, &object)?;
         }
 
         let xref_start = self.writer.stream_position()?;
-        self.xref.size = self.max_id + 1;
-        internal_writer::write_xref(&mut self.writer, &self.xref)?;
+        writeln!(self.writer, "xref")?;
+        writeln!(self.writer, "0 {}", self.object_offsets.len() + 1)?;
+        writeln!(self.writer, "0000000000 65535 f ")?;
 
-        let trailer = dictionary! { "Size" => self.xref.size as i64, "Root" => self.catalog_id };
+        for offset in &self.object_offsets {
+            writeln!(self.writer, "{:010} 00000 n ", offset)?;
+        }
+
+        let trailer = dictionary! {
+            "Size" => (self.object_offsets.len() + 1) as i64,
+            "Root" => self.catalog_id
+        };
         writeln!(self.writer, "trailer")?;
         internal_writer::write_dictionary(&mut self.writer, &trailer)?;
         writeln!(self.writer, "\nstartxref")?;
@@ -140,13 +157,12 @@ mod internal_writer {
     use lopdf::StringFormat;
     use std::collections::BTreeMap;
 
-    pub fn write_indirect_object<W: Write + Seek>(writer: &mut W, id: ObjectId, object: &Object, xref: &mut Xref) -> io::Result<()> {
-        let offset = writer.stream_position()?;
-        xref.insert(id.0, XrefEntry::Normal { offset: offset as u32, generation: id.1 as u16 });
-        write!(writer, "{} {} obj\n", id.0, id.1)?;
-        write_object(writer, object)?;
-        writeln!(writer, "\nendobj")?;
-        Ok(())
+    pub fn write_indirect_object_header<W: Write>(writer: &mut W, id: ObjectId) -> io::Result<()> {
+        write!(writer, "{} {} obj\n", id.0, id.1)
+    }
+
+    pub fn write_indirect_object_footer<W: Write>(writer: &mut W) -> io::Result<()> {
+        writeln!(writer, "\nendobj")
     }
 
     pub fn write_object(writer: &mut dyn Write, object: &Object) -> io::Result<()> {
@@ -206,60 +222,5 @@ mod internal_writer {
             writer.write_all(b" ")?;
         }
         writer.write_all(b">>")
-    }
-
-    pub fn write_xref<W: Write>(writer: &mut W, xref: &Xref) -> io::Result<()> {
-        writeln!(writer, "xref")?;
-        let mut sorted_entries: Vec<_> = xref.entries.iter().collect();
-        sorted_entries.sort_by_key(|(k, _)| *k);
-
-        if sorted_entries.is_empty() {
-            writeln!(writer, "0 1")?;
-            writeln!(writer, "0000000000 65535 f ")?;
-            return Ok(());
-        }
-
-        let mut start_id = 0;
-        let mut entries_in_section = Vec::new();
-
-        // This closure is now defined to not capture `writer`, but to accept it as an argument.
-        // This avoids the borrow checker issue where the closure holds a mutable borrow on `writer`
-        // while other code tries to use it.
-        let write_section = |w: &mut W, start_id: u32, entries: &Vec<XrefEntry>| -> io::Result<()> {
-            if entries.is_empty() { return Ok(()); }
-            writeln!(w, "{} {}", start_id, entries.len())?;
-            for entry in entries {
-                if let XrefEntry::Normal { offset, generation } = *entry {
-                    writeln!(w, "{:010} {:05} n ", offset, generation)?;
-                } else {
-                    writeln!(w, "0000000000 65535 f ")?;
-                }
-            }
-            Ok(())
-        };
-
-        // The pattern `|(&id, _)| id` caused a reference pattern error with modern match ergonomics.
-        // A clearer way to get the ID is to access the tuple element directly and dereference it.
-        if sorted_entries.get(0).map(|entry| *entry.0) != Some(0) {
-            writeln!(writer, "0 1")?;
-            writeln!(writer, "0000000000 65535 f ")?;
-        }
-
-        // Iterating over `sorted_entries` gives `(&u32, &XrefEntry)` tuples.
-        // The pattern `(&id, entry)` destructures this, binding `id` to `u32` and `entry` to `&XrefEntry`.
-        for (&id, entry) in sorted_entries {
-            if id > 0 && id != start_id + entries_in_section.len() as u32 {
-                // Pass the writer explicitly to the closure.
-                write_section(writer, start_id, &entries_in_section)?;
-                entries_in_section.clear();
-            }
-            if entries_in_section.is_empty() && id > 0 {
-                start_id = id;
-            }
-            entries_in_section.push(entry.clone());
-        }
-        // Pass the writer explicitly to the final closure call.
-        write_section(writer, start_id, &entries_in_section)?;
-        Ok(())
     }
 }

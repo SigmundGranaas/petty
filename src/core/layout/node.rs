@@ -7,8 +7,7 @@ use bumpalo::Bump;
 use std::any::Any;
 use std::collections::HashMap;
 use std::fmt::Debug;
-use std::sync::Arc;
-use std::time::Instant;
+// Removed unused import `use std::sync::Arc;`
 
 // Concrete node implementations used in the RenderNode enum
 use crate::core::layout::nodes::block::BlockNode;
@@ -274,11 +273,11 @@ pub enum RenderNode<'a> {
     Block(&'a BlockNode<'a>),
     Flex(&'a FlexNode<'a>),
     Heading(&'a HeadingNode<'a>),
-    Image(&'a ImageNode),
-    IndexMarker(&'a IndexMarkerNode),
+    Image(&'a ImageNode<'a>),
+    IndexMarker(&'a IndexMarkerNode<'a>),
     List(&'a ListNode<'a>),
     ListItem(&'a ListItemNode<'a>),
-    PageBreak(&'a PageBreakNode),
+    PageBreak(&'a PageBreakNode<'a>),
     Paragraph(&'a ParagraphNode<'a>),
     Table(&'a TableNode<'a>),
 }
@@ -300,13 +299,11 @@ impl<'a> RenderNode<'a> {
     }
 }
 
-// Explicit Static Dispatch Implementation with Performance Logging
+// Explicit Static Dispatch Implementation
+// FIX: Removed per-node performance recording as string formatting on every node caused 100x slowdown.
 impl<'a> LayoutNode for RenderNode<'a> {
     fn measure(&self, env: &mut LayoutEnvironment, constraints: BoxConstraints) -> Size {
-        let start = Instant::now();
-        let kind = self.kind_str();
-
-        let size = match self {
+        match self {
             RenderNode::Block(n) => n.measure(env, constraints),
             RenderNode::Flex(n) => n.measure(env, constraints),
             RenderNode::Heading(n) => n.measure(env, constraints),
@@ -317,12 +314,7 @@ impl<'a> LayoutNode for RenderNode<'a> {
             RenderNode::PageBreak(n) => n.measure(env, constraints),
             RenderNode::Paragraph(n) => n.measure(env, constraints),
             RenderNode::Table(n) => n.measure(env, constraints),
-        };
-
-        let duration = start.elapsed();
-        env.engine.record_perf(&format!("Measure: {}", kind), duration);
-
-        size
+        }
     }
 
     fn layout(
@@ -331,10 +323,7 @@ impl<'a> LayoutNode for RenderNode<'a> {
         constraints: BoxConstraints,
         break_state: Option<NodeState>,
     ) -> Result<LayoutResult, LayoutError> {
-        let start = Instant::now();
-        let kind = self.kind_str();
-
-        let res = match self {
+        match self {
             RenderNode::Block(n) => n.layout(ctx, constraints, break_state),
             RenderNode::Flex(n) => n.layout(ctx, constraints, break_state),
             RenderNode::Heading(n) => n.layout(ctx, constraints, break_state),
@@ -345,15 +334,10 @@ impl<'a> LayoutNode for RenderNode<'a> {
             RenderNode::PageBreak(n) => n.layout(ctx, constraints, break_state),
             RenderNode::Paragraph(n) => n.layout(ctx, constraints, break_state),
             RenderNode::Table(n) => n.layout(ctx, constraints, break_state),
-        };
-
-        let duration = start.elapsed();
-        ctx.env.engine.record_perf(&format!("Layout: {}", kind), duration);
-
-        res
+        }
     }
 
-    fn style(&self) -> &Arc<ComputedStyle> {
+    fn style(&self) -> &ComputedStyle {
         match self {
             RenderNode::Block(n) => n.style(),
             RenderNode::Flex(n) => n.style(),
@@ -387,7 +371,7 @@ pub trait LayoutNode: Debug + Sync {
         break_state: Option<NodeState>,
     ) -> Result<LayoutResult, LayoutError>;
 
-    fn style(&self) -> &Arc<ComputedStyle>;
+    fn style(&self) -> &ComputedStyle;
 
     fn check_for_page_break(&self) -> Option<Option<TextStr>> {
         None

@@ -2,6 +2,7 @@
 
 use crate::core::idf::{IRNode, InlineNode, TextStr};
 use crate::core::layout::builder::NodeBuilder;
+use crate::core::layout::engine::{LayoutEngine, LayoutStore};
 use crate::core::layout::geom::{self, BoxConstraints, Size};
 use crate::core::layout::node::{
     LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, ListItemState, NodeState, RenderNode,
@@ -10,12 +11,11 @@ use crate::core::layout::nodes::block::create_background_and_borders;
 use crate::core::layout::nodes::list_utils::get_marker_text;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{
-    LayoutElement, LayoutEngine, LayoutError, PositionedElement, TextElement,
+    LayoutElement, LayoutError, PositionedElement, TextElement,
 };
 use crate::core::style::dimension::Dimension;
 use crate::core::style::list::ListStylePosition;
 use crate::core::style::text::TextDecoration;
-use bumpalo::Bump;
 use std::sync::Arc;
 
 pub struct ListItemBuilder;
@@ -26,10 +26,10 @@ impl NodeBuilder for ListItemBuilder {
         node: &IRNode,
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
-        arena: &'a Bump,
+        store: &'a LayoutStore,
     ) -> Result<RenderNode<'a>, LayoutError> {
-        let item = ListItemNode::new(node, engine, parent_style, 1, 0, arena)?;
-        Ok(RenderNode::ListItem(arena.alloc(item)))
+        let item = ListItemNode::new(node, engine, parent_style, 1, 0, store)?;
+        Ok(RenderNode::ListItem(store.bump.alloc(item)))
     }
 }
 
@@ -37,8 +37,8 @@ impl NodeBuilder for ListItemBuilder {
 pub struct ListItemNode<'a> {
     id: Option<TextStr>,
     children: &'a [RenderNode<'a>],
-    style: Arc<ComputedStyle>,
-    marker_text: String,
+    style: &'a ComputedStyle,
+    marker_text: &'a str,
 }
 
 impl<'a> ListItemNode<'a> {
@@ -48,7 +48,7 @@ impl<'a> ListItemNode<'a> {
         parent_style: Arc<ComputedStyle>,
         index: usize,
         depth: usize,
-        arena: &'a Bump,
+        store: &'a LayoutStore,
     ) -> Result<Self, LayoutError> {
         let style = engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
         let IRNode::ListItem {
@@ -59,7 +59,8 @@ impl<'a> ListItemNode<'a> {
             return Err(LayoutError::BuilderMismatch("ListItem", node.kind()));
         };
 
-        let marker_text = get_marker_text(&style, index, depth);
+        let marker_string = get_marker_text(&style, index, depth);
+        let marker_text = store.alloc_str(&marker_string);
 
         let mut children_to_process = ir_children.clone();
         if style.list.style_position == ListStylePosition::Inside && !marker_text.is_empty() {
@@ -74,25 +75,27 @@ impl<'a> ListItemNode<'a> {
         let mut children_vec = Vec::new();
         for child_ir in &children_to_process {
             if let IRNode::List { .. } = child_ir {
-                let list = super::list::ListNode::new_with_depth(child_ir, engine, style.clone(), depth + 1, arena)?;
-                children_vec.push(RenderNode::List(arena.alloc(list)));
+                let list = super::list::ListNode::new_with_depth(child_ir, engine, style.clone(), depth + 1, store)?;
+                children_vec.push(RenderNode::List(store.bump.alloc(list)));
             } else {
-                children_vec.push(engine.build_layout_node_tree(child_ir, style.clone(), arena)?);
+                children_vec.push(engine.build_layout_node_tree(child_ir, style.clone(), store)?);
             }
         }
 
+        let style_ref = store.cache_style(style);
+
         Ok(Self {
             id: meta.id.clone(),
-            children: arena.alloc_slice_copy(&children_vec),
-            style,
+            children: store.bump.alloc_slice_copy(&children_vec),
+            style: style_ref,
             marker_text,
         })
     }
 }
 
 impl<'a> LayoutNode for ListItemNode<'a> {
-    fn style(&self) -> &Arc<ComputedStyle> {
-        &self.style
+    fn style(&self) -> &ComputedStyle {
+        self.style
     }
 
     fn measure(&self, env: &mut LayoutEnvironment, constraints: BoxConstraints) -> Size {
@@ -100,8 +103,10 @@ impl<'a> LayoutNode for ListItemNode<'a> {
         let border_right = self.style.border_right_width();
         const MARKER_SPACING_FACTOR: f32 = 0.4;
         let is_outside_marker = self.style.list.style_position == ListStylePosition::Outside;
+
         let indent = if is_outside_marker && !self.marker_text.is_empty() {
-            measure_text_using_engine(env.engine, &self.marker_text, &self.style)
+            // Using updated engine method
+            env.engine.measure_text_width(self.marker_text, self.style)
                 + self.style.text.font_size * MARKER_SPACING_FACTOR
         } else {
             0.0
@@ -178,9 +183,7 @@ impl<'a> LayoutNode for ListItemNode<'a> {
 
         let block_start_y_in_ctx = ctx.cursor_y();
 
-        // Measure marker using engine
-        // Use ctx.env.engine
-        let marker_width = measure_text_using_engine(ctx.env.engine, &self.marker_text, &self.style);
+        let marker_width = ctx.env.engine.measure_text_width(self.marker_text, self.style);
 
         if !self.marker_text.is_empty() && !is_continuation {
             let should_draw = is_outside_marker;
@@ -200,11 +203,11 @@ impl<'a> LayoutNode for ListItemNode<'a> {
                     width: marker_width,
                     height: self.style.text.line_height,
                     element: LayoutElement::Text(TextElement {
-                        content: self.marker_text.clone(),
+                        content: self.marker_text.to_string(), // Copy to string for output
                         href: None,
                         text_decoration: TextDecoration::None,
                     }),
-                    style: self.style.clone(),
+                    style: Arc::new(self.style.clone()),
                 };
                 ctx.push_element_at(marker_box, 0.0, block_start_y_in_ctx);
             }
@@ -257,7 +260,6 @@ impl<'a> LayoutNode for ListItemNode<'a> {
         }
         let child_cursor_y = child_ctx.cursor_y();
 
-        // Recalculate used height based on split result
         let used_height = if matches!(split_res, LayoutResult::Finished) {
             child_cursor_y
         } else {
@@ -266,7 +268,7 @@ impl<'a> LayoutNode for ListItemNode<'a> {
 
         let bg_elements = create_background_and_borders(
             ctx.bounds(),
-            &self.style,
+            self.style,
             block_start_y_in_ctx,
             used_height,
             !is_continuation,
@@ -292,17 +294,4 @@ impl<'a> LayoutNode for ListItemNode<'a> {
             }
         }
     }
-}
-
-// Helpers to measure text using engine (acquiring RefCell borrow)
-fn measure_text_using_engine(engine: &LayoutEngine, text: &str, style: &Arc<ComputedStyle>) -> f32 {
-    let mut system = engine.font_system();
-    let mut buffer = cosmic_text::Buffer::new(
-        &mut *system,
-        cosmic_text::Metrics::new(style.text.font_size, style.text.line_height),
-    );
-    let attrs = engine.attrs_from_style(style);
-    buffer.set_text(&mut *system, text, &attrs, cosmic_text::Shaping::Advanced);
-    buffer.shape_until_scroll(&mut *system, false);
-    buffer.layout_runs().map(|r| r.line_w).fold(0.0, f32::max)
 }

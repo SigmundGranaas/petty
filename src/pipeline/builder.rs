@@ -1,5 +1,4 @@
-// src/pipeline/builder.rs
-use super::config::{GenerationMode, PdfBackend};
+use super::config::{GenerationMode, PdfBackend, PipelineCacheConfig};
 use super::orchestrator::DocumentPipeline;
 use crate::core::layout::fonts::SharedFontLibrary;
 use crate::error::PipelineError;
@@ -26,6 +25,7 @@ pub struct PipelineBuilder {
     // Use the thread-safe SharedFontLibrary instead of FontManager
     font_library: SharedFontLibrary,
     generation_mode: GenerationMode,
+    cache_config: PipelineCacheConfig,
     debug: bool,
 }
 
@@ -38,6 +38,7 @@ impl Default for PipelineBuilder {
             pdf_backend: Default::default(),
             font_library,
             generation_mode: Default::default(),
+            cache_config: Default::default(),
             debug: false,
         }
     }
@@ -104,7 +105,7 @@ impl PipelineBuilder {
 
     /// Scans a directory for font files (`.ttf`, `.otf`, etc.) and adds them to the font database.
     /// Call this for any custom fonts not installed on the system.
-    pub fn with_font_dir<P: AsRef<Path>>(mut self, path: P) -> Self {
+    pub fn with_font_dir<P: AsRef<Path>>(self, path: P) -> Self {
         self.font_library.add_font_dir(path.as_ref());
         self
     }
@@ -119,6 +120,12 @@ impl PipelineBuilder {
     /// See `GenerationMode` for details on each option.
     pub fn with_generation_mode(mut self, mode: GenerationMode) -> Self {
         self.generation_mode = mode;
+        self
+    }
+
+    /// Configures the memory management and caching behavior of the pipeline.
+    pub fn with_cache_config(mut self, config: PipelineCacheConfig) -> Self {
+        self.cache_config = config;
         self
     }
 
@@ -145,6 +152,7 @@ impl PipelineBuilder {
             role_templates: Arc::new(template_features.role_templates),
             // Pass the Arc-wrapped library
             font_library: Arc::new(self.font_library),
+            cache_config: self.cache_config,
         });
 
         Ok(DocumentPipeline::new(provider, renderer, context))

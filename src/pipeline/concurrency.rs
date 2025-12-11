@@ -1,3 +1,6 @@
+// src/pipeline/concurrency.rs
+
+use crate::core::layout::fonts::SharedFontLibrary;
 use crate::core::layout::LayoutEngine;
 use crate::error::PipelineError;
 use crate::parser::processor::{DataSourceFormat, ExecutionConfig};
@@ -9,24 +12,32 @@ use crate::render::lopdf_renderer::LopdfRenderer;
 use crate::render::renderer::{HyperlinkLocation, Pass1Result, ResolvedAnchor};
 use crate::render::DocumentRenderer;
 use async_channel;
-use log::{debug, info, trace, warn};
+use log::{debug, info, warn};
 use lopdf::dictionary;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Seek, Write};
 use std::sync::Arc;
 use std::time::Instant;
+use tokio::sync::Semaphore;
 use tokio::task;
 
 pub(crate) async fn producer_task<I>(
     data_iterator: I,
     tx: async_channel::Sender<Result<(usize, Arc<Value>), PipelineError>>,
+    semaphore: Arc<Semaphore>,
 ) where
     I: Iterator<Item = Value> + Send + 'static,
 {
     info!("[PRODUCER] Starting sequence production from iterator.");
     for (i, item) in data_iterator.enumerate() {
-        debug!("[PRODUCER] Sending item #{} to layout workers.", i);
+        if let Ok(permit) = semaphore.acquire().await {
+            permit.forget();
+        }
+
+        if i % 100 == 0 {
+            debug!("[PRODUCER] Sending item #{}...", i);
+        }
         if tx.send(Ok((i, Arc::new(item)))).await.is_err() {
             warn!("[PRODUCER] Layout channel closed, stopping producer.");
             break;
@@ -35,7 +46,6 @@ pub(crate) async fn producer_task<I>(
     info!("[PRODUCER] Finished sequence production.");
 }
 
-/// Spawns worker threads for layout tasks.
 pub(crate) fn spawn_workers(
     num_threads: usize,
     context: &PipelineContext,
@@ -43,19 +53,23 @@ pub(crate) fn spawn_workers(
     tx: async_channel::Sender<(usize, Result<LaidOutSequence, PipelineError>)>,
 ) -> Vec<task::JoinHandle<()>> {
     let mut handles = Vec::new();
-    // We capture the SharedFontLibrary (Arc) to pass to workers.
-    let font_lib = Arc::clone(&context.font_library);
+    let cache_config = context.cache_config;
 
     for worker_id in 0..num_threads {
         let rx_clone = rx.clone();
         let tx_clone = tx.clone();
-        let font_lib_clone = Arc::clone(&font_lib);
+
+        // FIX: Use the shared font library from the context.
+        // This ensures all workers share the same font database and cache,
+        // avoiding repeated I/O and cache misses.
+        let current_font_lib = context.font_library.clone();
+
         let template_clone = Arc::clone(&context.compiled_template);
 
         let worker_handle = task::spawn_blocking(move || {
-            info!("[WORKER-{}] Started.", worker_id);
-            // Create a thread-local LayoutEngine. This avoids Mutex contention on the FontSystem.
-            let mut layout_engine = LayoutEngine::new(&font_lib_clone);
+            info!("[WORKER-{}] Started with shared font library.", worker_id);
+
+            let mut layout_engine = LayoutEngine::new(&current_font_lib, cache_config);
 
             while let Ok(result) = rx_clone.recv_blocking() {
                 let (index, work_result) = match result {
@@ -78,6 +92,14 @@ pub(crate) fn spawn_workers(
                                     false,
                                 )
                             });
+
+                        if let Ok(seq) = &layout_result {
+                            let size = seq.rough_heap_size();
+                            if size > 2 * 1024 * 1024 {
+                                warn!("[WORKER-{}] LARGE ITEM #{}: ~{:.2} MB", worker_id, index, size as f64 / 1_000_000.0);
+                            }
+                        }
+
                         (index, layout_result)
                     }
                     Err(e) => (0, Err(e)),
@@ -96,13 +118,13 @@ pub(crate) fn spawn_workers(
     handles
 }
 
-/// A true streaming consumer that guarantees in-order processing.
 pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
     rx2: async_channel::Receiver<(usize, Result<LaidOutSequence, PipelineError>)>,
     renderer: &mut LopdfRenderer<W>,
     page_width: f32,
     page_height: f32,
     perform_analysis: bool,
+    semaphore: Arc<Semaphore>,
 ) -> Result<(Vec<lopdf::ObjectId>, Pass1Result), PipelineError> {
     let mut buffer = BTreeMap::new();
     let mut next_sequence_idx = 0;
@@ -112,32 +134,33 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
 
     let font_map: HashMap<String, String>;
     {
-        // Use the new accessor which returns RefMut instead of locking a Mutex
-        let system = renderer.layout_engine.font_system();
-        font_map = system
-            .db()
+        // Using exposed font_db() instead of font_system()
+        let db_lock = renderer.layout_engine.font_db();
+        let db = db_lock.read().unwrap();
+        font_map = db
             .faces()
             .enumerate()
             .map(|(i, face)| (face.post_script_name.clone(), format!("F{}", i + 1)))
             .collect();
     }
 
-    // PERF: Consumer Wait time vs Process time
     let mut last_processed_time = Instant::now();
 
     while let Ok((index, result)) = rx2.recv_blocking() {
         let wait_time = last_processed_time.elapsed();
-        if wait_time.as_millis() > 50 {
+        if wait_time.as_millis() > 100 {
             debug!("[CONSUMER] Waited {:?} for sequence #{}", wait_time, index);
         }
 
         buffer.insert(index, result);
 
-        // Process any contiguous sequences that are now available
+        if buffer.len() > 20 {
+            debug!("[CONSUMER] Buffer growing: {} items waiting. Looking for #{}.", buffer.len(), next_sequence_idx);
+        }
+
         while let Some(res) = buffer.remove(&next_sequence_idx) {
-            let process_start = Instant::now();
+            let _process_start = Instant::now();
             let seq = res?;
-            debug!("[CONSUMER] Processing in-order sequence #{}", next_sequence_idx);
 
             if perform_analysis {
                 pass1_result.toc_entries.extend(seq.toc_entries.clone());
@@ -180,34 +203,15 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
                 pass1_result.total_pages += seq.pages.len();
                 global_page_offset += seq.pages.len();
             } else {
-                if !seq.toc_entries.is_empty() {
+                if !seq.toc_entries.is_empty() || !seq.index_entries.is_empty() {
                     return Err(PipelineError::Config(
-                        "Template uses a Table of Contents, which requires Auto (metadata) mode."
-                            .into(),
-                    ));
-                }
-                if !seq.index_entries.is_empty() {
-                    return Err(PipelineError::Config(
-                        "Template uses index functions, which requires Auto (metadata) mode."
-                            .into(),
-                    ));
-                }
-                if seq.pages.iter().flatten().any(|el| {
-                    use crate::core::layout::LayoutElement;
-                    matches!(el.element, LayoutElement::PageNumberPlaceholder { .. })
-                }) {
-                    return Err(PipelineError::Config(
-                        "Template uses Page-X-of-Y placeholders, which requires Auto (metadata) mode."
+                        "Template uses advanced features (ToC/Index) which require Auto (metadata) mode."
                             .into(),
                     ));
                 }
             }
 
-            // Render PDF Content & Write
             renderer.add_resources(&seq.resources)?;
-            let pages_count = seq.pages.len();
-
-            let render_start = Instant::now();
             for page_elements in seq.pages {
                 let content = lopdf_helpers::render_elements_to_content(
                     page_elements,
@@ -229,17 +233,8 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
                 let page_id = writer.write_object(page_dict.into())?;
                 all_page_ids.push(page_id);
             }
-            let render_time = render_start.elapsed();
 
-            if render_time.as_millis() > 5 {
-                trace!(
-                    "[CONSUMER] Rendered {} pages for sequence #{} in {:?}",
-                    pages_count,
-                    next_sequence_idx,
-                    render_time
-                );
-            }
-
+            semaphore.add_permits(1);
             next_sequence_idx += 1;
             last_processed_time = Instant::now();
         }

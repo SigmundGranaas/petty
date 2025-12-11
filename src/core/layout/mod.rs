@@ -20,13 +20,14 @@ pub enum LayoutError {
 
 // Re-export the main entry point and key types for external use.
 // Ensure engine is defined before re-exporting
-mod engine;
+pub(crate) mod engine;
 pub use self::engine::LayoutEngine;
 pub use self::node::{AnchorLocation, IndexEntry, LayoutContext, LayoutEnvironment, NodeState};
 
 // Declare the modules that make up the layout engine.
 mod elements;
 pub mod builder;
+pub mod config;
 pub mod fonts;
 pub mod geom;
 pub mod node;
@@ -41,6 +42,7 @@ pub mod util;
 pub use self::elements::{ImageElement, LayoutElement, PositionedElement, TextElement};
 pub use self::fonts::{LocalFontContext, SharedFontLibrary};
 pub use self::style::ComputedStyle;
+pub use self::config::LayoutConfig;
 pub use crate::error::PipelineError;
 
 #[cfg(test)]

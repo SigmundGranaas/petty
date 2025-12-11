@@ -1,5 +1,7 @@
 // src/pipeline/worker.rs
+
 use crate::core::idf::{IRNode, InlineNode, SharedData};
+use crate::core::layout::engine::LayoutStore;
 use crate::core::layout::{AnchorLocation, IndexEntry, LayoutEngine, PositionedElement};
 use crate::core::style::stylesheet::Stylesheet;
 use crate::error::PipelineError;
@@ -11,15 +13,33 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
-use bumpalo::Bump;
 
 pub struct LaidOutSequence {
-    pub context: Arc<Value>,
     pub pages: Vec<Vec<PositionedElement>>,
     pub resources: HashMap<String, SharedData>,
     pub defined_anchors: HashMap<String, AnchorLocation>,
     pub toc_entries: Vec<TocEntry>,
     pub index_entries: HashMap<String, Vec<IndexEntry>>,
+}
+
+impl LaidOutSequence {
+    pub fn rough_heap_size(&self) -> usize {
+        let mut size = 0;
+        size += self.pages.capacity() * std::mem::size_of::<Vec<PositionedElement>>();
+        for page in &self.pages {
+            size += page.capacity() * std::mem::size_of::<PositionedElement>();
+            for el in page {
+                if let crate::core::layout::LayoutElement::Text(t) = &el.element {
+                    size += t.content.capacity();
+                }
+            }
+        }
+        for (k, v) in &self.resources {
+            size += k.capacity();
+            size += v.len();
+        }
+        size
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -32,7 +52,7 @@ pub struct TocEntry {
 pub(super) fn finish_layout_and_resource_loading(
     worker_id: usize,
     ir_nodes: Vec<IRNode>,
-    context_arc: Arc<Value>,
+    _context_arc: Arc<Value>,
     resource_base_path: &Path,
     layout_engine: &mut LayoutEngine,
     stylesheet: &Stylesheet,
@@ -40,12 +60,10 @@ pub(super) fn finish_layout_and_resource_loading(
 ) -> Result<LaidOutSequence, PipelineError> {
     let total_start = Instant::now();
 
-    // 1. Pre-process IR (IDs)
     let prep_start = Instant::now();
     let mut ir_nodes_with_ids = ir_nodes;
     ensure_heading_ids(&mut ir_nodes_with_ids);
-    let final_ir_nodes = ir_nodes_with_ids;
-    let tree = IRNode::Root(final_ir_nodes.clone());
+    let tree = IRNode::Root(ir_nodes_with_ids);
     if prep_start.elapsed().as_millis() > 1 {
         trace!("[WORKER-{}] IR Prep took {:?}", worker_id, prep_start.elapsed());
     }
@@ -54,41 +72,38 @@ pub(super) fn finish_layout_and_resource_loading(
         debug!("[WORKER-{}] IR tree dump:\n{:#?}", worker_id, &tree);
     }
 
-    // 2. Resource Loading
     let resource_start = Instant::now();
     let resources = collect_and_load_resources(&tree, resource_base_path)?;
     if resource_start.elapsed().as_millis() > 5 {
         debug!("[WORKER-{}] Resource load took {:?}", worker_id, resource_start.elapsed());
     }
 
-    // 3. TOC Collection
     let mut toc_entries = Vec::new();
     collect_toc_entries(&tree, &mut toc_entries);
 
-    // 4. Layout
     let layout_phase_start = Instant::now();
 
-    // 4a. Build Render Tree
-    let arena = Bump::new();
+    // Use LayoutStore for scoped memory management
+    let store = LayoutStore::new();
+    // Reset stats for clean metrics per sequence
+    layout_engine.reset_stats();
+
     let build_tree_start = Instant::now();
     let root_render_node = layout_engine
-        .build_render_tree(&tree, &arena)
+        .build_render_tree(&tree, &store)
         .map_err(|e| PipelineError::Layout(e.to_string()))?;
     if build_tree_start.elapsed().as_millis() > 1 {
         trace!("[WORKER-{}] Build Render Tree took {:?}", worker_id, build_tree_start.elapsed());
     }
 
-    // 4b. Pagination Iterator Creation
     let iterator = layout_engine
-        .paginate(stylesheet, root_render_node, &arena)
+        .paginate(stylesheet, root_render_node, &store)
         .map_err(|e| PipelineError::Layout(e.to_string()))?;
 
     let mut pages = Vec::new();
     let mut defined_anchors = HashMap::new();
     let mut index_entries: HashMap<String, Vec<IndexEntry>> = HashMap::new();
 
-    // 4c. Iterate Pages
-    let iter_start = Instant::now();
     for page_res in iterator {
         let page = page_res.map_err(|e| PipelineError::Layout(e.to_string()))?;
         pages.push(page.elements);
@@ -98,24 +113,23 @@ pub(super) fn finish_layout_and_resource_loading(
         }
     }
 
-    // Log total layout time
     let layout_total = layout_phase_start.elapsed();
     let pages_count = pages.len();
-    if layout_total.as_millis() > 10 {
+    if layout_total.as_millis() > 50 {
         debug!(
-            "[WORKER-{}] Layout total: {:?} for {} pages ({:?}/page avg)", 
+            "[WORKER-{}] Layout total: {:?} for {} pages ({:?}/page avg)",
             worker_id, layout_total, pages_count, layout_total.checked_div(pages_count as u32).unwrap_or(layout_total)
         );
+        // FIX: Dump stats when layout is slow to identify bottleneck
+        layout_engine.dump_stats(worker_id);
     }
 
     let total_dur = total_start.elapsed();
-    // Only log if it's noticeably slow (>20ms total)
-    if total_dur.as_millis() > 20 {
+    if total_dur.as_millis() > 50 {
         info!("[WORKER-{}] Total Sequence Time: {:?} (Layout: {:?})", worker_id, total_dur, layout_total);
     }
 
     Ok(LaidOutSequence {
-        context: context_arc,
         pages,
         resources,
         defined_anchors,
@@ -124,7 +138,6 @@ pub(super) fn finish_layout_and_resource_loading(
     })
 }
 
-// ... rest of the file (helper functions) remains unchanged ...
 fn ensure_heading_ids(nodes: &mut [IRNode]) {
     for node in nodes {
         match node {
@@ -158,20 +171,15 @@ fn ensure_heading_ids(nodes: &mut [IRNode]) {
                     }
                 }
             }
-            IRNode::IndexMarker { .. } => {}
             _ => {}
         }
     }
 }
 
-
-/// Recursively collects TOC entries from headings that have IDs.
-/// This is used for generating PDF Outlines (Bookmarks), not the in-document TOC.
 fn collect_toc_entries(node: &IRNode, entries: &mut Vec<TocEntry>) {
     match node {
         IRNode::Heading { meta, level, children, .. } => {
             if *level > 0 {
-                // Only include sub-headings in the TOC
                 if let Some(id) = &meta.id {
                     entries.push(TocEntry {
                         level: *level,
@@ -194,20 +202,23 @@ fn collect_toc_entries(node: &IRNode, entries: &mut Vec<TocEntry>) {
             if let Some(h) = header {
                 for row in &h.rows {
                     for cell in &row.cells {
-                        collect_toc_entries(&IRNode::Root(cell.children.clone()), entries);
+                        for child in &cell.children {
+                            collect_toc_entries(child, entries);
+                        }
                     }
                 }
             }
             for row in &body.rows {
                 for cell in &row.cells {
-                    collect_toc_entries(&IRNode::Root(cell.children.clone()), entries);
+                    for child in &cell.children {
+                        collect_toc_entries(child, entries);
+                    }
                 }
             }
         }
         _ => {}
     }
 }
-
 
 fn extract_text_from_inlines(inlines: &[InlineNode]) -> String {
     let mut text = String::new();
@@ -220,13 +231,12 @@ fn extract_text_from_inlines(inlines: &[InlineNode]) -> String {
                 text.push_str(&extract_text_from_inlines(children));
             }
             InlineNode::LineBreak => text.push(' '),
-            InlineNode::Image { .. } => {} // Skip images in TOC text
+            InlineNode::Image { .. } => {}
         }
     }
     text
 }
 
-/// Traverses the IR tree to find all unique image `src` URIs.
 fn collect_image_uris(node: &IRNode, uris: &mut HashSet<String>) {
     match node {
         IRNode::Image { meta: _, src } => {
@@ -264,12 +274,10 @@ fn collect_image_uris(node: &IRNode, uris: &mut HashSet<String>) {
                 }
             }
         }
-        IRNode::IndexMarker { .. } => {}
-        IRNode::PageBreak { .. } => {}
+        _ => {}
     }
 }
 
-/// A recursive helper to find image URIs in inline elements.
 fn collect_inline_image_uris(inline: &InlineNode, uris: &mut HashSet<String>) {
     match inline {
         InlineNode::Image { src, .. } => {
@@ -286,7 +294,6 @@ fn collect_inline_image_uris(inline: &InlineNode, uris: &mut HashSet<String>) {
     }
 }
 
-/// Gathers all unique image URIs from a tree and loads them from disk.
 fn collect_and_load_resources(
     node: &IRNode,
     base_path: &Path,

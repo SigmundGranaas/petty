@@ -54,12 +54,18 @@ impl DocumentPipeline {
             .unwrap() // Propagate panics from the spawned task
     }
 
-    /// A convenience method to generate a document to a file path from a dataset in memory.
-    pub fn generate_to_file<P: AsRef<Path>>(
+    /// A convenience method to generate a document to a file path from a dataset in memory
+    /// or a lazy iterator.
+    pub fn generate_to_file<P, I>(
         &self,
-        data: Vec<Value>,
+        data: I,
         path: P,
-    ) -> Result<(), PipelineError> {
+    ) -> Result<(), PipelineError>
+    where
+        P: AsRef<Path>,
+        I: IntoIterator<Item = Value> + Send + 'static,
+        I::IntoIter: Send + 'static,
+    {
         let output_path = path.as_ref();
         if let Some(parent_dir) = output_path.parent() {
             fs::create_dir_all(parent_dir)?;

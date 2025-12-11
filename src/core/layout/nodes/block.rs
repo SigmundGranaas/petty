@@ -2,16 +2,16 @@
 
 use crate::core::idf::{IRNode, TextStr};
 use crate::core::layout::builder::NodeBuilder;
+use crate::core::layout::engine::{LayoutEngine, LayoutStore};
 use crate::core::layout::elements::RectElement;
 use crate::core::layout::geom::{self, BoxConstraints, Size};
 use crate::core::layout::node::{
     BlockState, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode,
 };
 use crate::core::layout::style::ComputedStyle;
-use crate::core::layout::{LayoutElement, LayoutEngine, LayoutError, PositionedElement};
+use crate::core::layout::{LayoutElement, LayoutError, PositionedElement};
 use crate::core::style::border::Border;
 use crate::core::style::dimension::Dimension;
-use bumpalo::Bump;
 use std::sync::Arc;
 
 pub struct BlockBuilder;
@@ -22,18 +22,17 @@ impl NodeBuilder for BlockBuilder {
         node: &IRNode,
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
-        arena: &'a Bump,
+        store: &'a LayoutStore,
     ) -> Result<RenderNode<'a>, LayoutError> {
-        BlockNode::build(node, engine, parent_style, arena)
+        BlockNode::build(node, engine, parent_style, store)
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BlockNode<'a> {
-    pub id: Option<TextStr>,
-    // Arena-allocated slice of children
+    pub id: Option<&'a str>,
     pub children: &'a [RenderNode<'a>],
-    pub style: Arc<ComputedStyle>,
+    pub style: &'a ComputedStyle,
 }
 
 impl<'a> BlockNode<'a> {
@@ -41,58 +40,73 @@ impl<'a> BlockNode<'a> {
         node: &IRNode,
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
-        arena: &'a Bump,
+        store: &'a LayoutStore,
     ) -> Result<RenderNode<'a>, LayoutError> {
-        let (id, children_ir, style) = match node {
+        let (id_string, children_ir, style) = match node {
             IRNode::Block { meta, children } => {
                 let style = engine.compute_style(
                     &meta.style_sets,
                     meta.style_override.as_ref(),
                     &parent_style,
                 );
-                (meta.id.clone(), children, style)
+                (&meta.id, children, style)
             }
             IRNode::Root(children) => {
                 let style = engine.get_default_style();
-                (None, children, style)
+                (&None, children, style)
             }
             _ => return Err(LayoutError::BuilderMismatch("Block", node.kind())),
         };
 
-        // Recursively build children into a Vec, then move to Arena slice
-        let child_vec = engine.build_layout_node_children(children_ir, style.clone(), arena)?;
-        let children = arena.alloc_slice_copy(&child_vec);
+        let child_vec = engine.build_layout_node_children(children_ir, style.clone(), store)?;
+        let children = store.bump.alloc_slice_copy(&child_vec);
 
-        let node = arena.alloc(Self {
+        let id = id_string.as_ref().map(|s| store.alloc_str(s));
+
+        let style_ref = store.cache_style(style);
+
+        let node = store.bump.alloc(Self {
             id,
             children,
-            style,
+            style: style_ref,
         });
 
         Ok(RenderNode::Block(node))
     }
 
     pub fn new_from_children(
-        id: Option<TextStr>,
+        id_string: Option<TextStr>,
         children_vec: Vec<RenderNode<'a>>,
         style: Arc<ComputedStyle>,
-        arena: &'a Bump,
+        store: &'a LayoutStore,
     ) -> Self {
+        let style_ref = store.cache_style(style);
         Self {
-            id,
-            children: arena.alloc_slice_copy(&children_vec),
-            style,
+            id: id_string.as_ref().map(|s| store.alloc_str(s)),
+            children: store.bump.alloc_slice_copy(&children_vec),
+            style: style_ref,
         }
     }
 }
 
 impl<'a> LayoutNode for BlockNode<'a> {
-    fn style(&self) -> &Arc<ComputedStyle> {
-        &self.style
+    fn style(&self) -> &ComputedStyle {
+        self.style
     }
 
     fn measure(&self, env: &mut LayoutEnvironment, constraints: BoxConstraints) -> Size {
         let h_deduction = self.style.padding_x() + self.style.border_x();
+        let padding_y = self.style.padding_y();
+        let border_y = self.style.border_y();
+        let margin_y = self.style.box_model.margin.top + self.style.box_model.margin.bottom;
+
+        // OPTIMIZATION: If width AND height are fixed in style, return immediately.
+        // We use references (&) to avoid moving out of the shared style struct.
+        // w and h become &f32, which can be used in arithmetic directly.
+        if let (Some(Dimension::Pt(w)), Some(Dimension::Pt(h))) = (&self.style.box_model.width, &self.style.box_model.height) {
+            return Size::new(w + h_deduction, h + margin_y);
+        }
+
         let child_constraints = self.style.content_constraints(constraints);
 
         let mut max_child_width: f32 = 0.0;
@@ -103,10 +117,6 @@ impl<'a> LayoutNode for BlockNode<'a> {
             max_child_width = max_child_width.max(child_size.width);
             total_content_height += child_size.height;
         }
-
-        let padding_y = self.style.padding_y();
-        let border_y = self.style.border_y();
-        let margin_y = self.style.box_model.margin.top + self.style.box_model.margin.bottom;
 
         let height = if let Some(Dimension::Pt(h)) = self.style.box_model.height {
             margin_y + h
@@ -131,7 +141,7 @@ impl<'a> LayoutNode for BlockNode<'a> {
         constraints: BoxConstraints,
         break_state: Option<NodeState>,
     ) -> Result<LayoutResult, LayoutError> {
-        if let Some(id) = &self.id {
+        if let Some(id) = self.id {
             ctx.register_anchor(id);
         }
 
@@ -182,7 +192,6 @@ impl<'a> LayoutNode for BlockNode<'a> {
             height: ctx.available_height(),
         };
 
-        // Layout children in a sub-context.
         let mut child_ctx = ctx.child(child_bounds);
         let mut split_res = LayoutResult::Finished;
         for (i, child) in self.children.iter().enumerate().skip(start_index) {
@@ -210,7 +219,7 @@ impl<'a> LayoutNode for BlockNode<'a> {
 
         let bg_elements = create_background_and_borders(
             ctx.bounds(),
-            &self.style,
+            self.style,
             block_start_y_in_ctx,
             actual_used_height,
             !is_continuation,
@@ -221,11 +230,10 @@ impl<'a> LayoutNode for BlockNode<'a> {
             ctx.push_element(el);
         }
 
-        match split_res {
+        let result = match split_res {
             LayoutResult::Finished => {
                 let border_bottom = self.style.border_bottom_width();
                 let bottom_spacing = self.style.box_model.padding.bottom + border_bottom;
-                // Move parent cursor past the block
                 ctx.set_cursor_y(content_start_y_in_ctx + actual_used_height + bottom_spacing);
                 ctx.last_v_margin = self.style.box_model.margin.bottom;
                 Ok(LayoutResult::Finished)
@@ -234,7 +242,9 @@ impl<'a> LayoutNode for BlockNode<'a> {
                 ctx.set_cursor_y(content_start_y_in_ctx + actual_used_height);
                 Ok(LayoutResult::Break(state))
             }
-        }
+        };
+
+        result
     }
 
     fn check_for_page_break(&self) -> Option<Option<TextStr>> {
@@ -246,15 +256,9 @@ impl<'a> LayoutNode for BlockNode<'a> {
     }
 }
 
-impl LayoutResult {
-    fn is_break(&self) -> bool {
-        matches!(self, LayoutResult::Break(_))
-    }
-}
-
 pub fn create_background_and_borders(
     bounds: geom::Rect,
-    style: &Arc<ComputedStyle>,
+    style: &ComputedStyle,
     start_y: f32,
     content_height: f32,
     draw_top: bool,

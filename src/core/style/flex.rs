@@ -1,7 +1,7 @@
 //! Defines enums and structs for CSS Flexbox layout properties.
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum FlexDirection {
     Row,
@@ -16,7 +16,7 @@ impl Default for FlexDirection {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum FlexWrap {
     NoWrap,
@@ -30,7 +30,7 @@ impl Default for FlexWrap {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum JustifyContent {
     FlexStart,
@@ -48,7 +48,7 @@ impl Default for JustifyContent {
 }
 
 /// Note: `baseline` alignment is not yet supported and will be treated as `flex-start`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum AlignItems {
     Stretch,
@@ -65,7 +65,7 @@ impl Default for AlignItems {
 }
 
 /// Note: `baseline` alignment is not yet supported and will be treated as `flex-start`.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
 pub enum AlignSelf {
     Auto,

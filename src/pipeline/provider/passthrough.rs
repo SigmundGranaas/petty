@@ -1,15 +1,9 @@
-// src/pipeline/provider/passthrough.rs
 use crate::error::PipelineError;
 use crate::pipeline::api::PreparedDataSources;
 use crate::pipeline::provider::DataSourceProvider;
 use serde_json::Value;
 use crate::pipeline::context::PipelineContext;
 
-/// A simple provider that performs no analysis.
-///
-/// It acts as a zero-cost abstraction, taking the user's data iterator,
-/// boxing it, and placing it into a `PreparedDataSources` struct for
-/// a streaming renderer to consume.
 #[derive(Clone)]
 pub struct PassThroughProvider;
 
@@ -43,7 +37,6 @@ mod tests {
 
     #[test]
     fn pass_through_provider_works() {
-        // 1. Setup a mock context
         let parser = JsonParser;
         let template_str = r#"
         {
@@ -59,17 +52,15 @@ mod tests {
             compiled_template: features.main_template,
             role_templates: Arc::new(HashMap::new()),
             font_library: Arc::new(SharedFontLibrary::new()),
+            cache_config: Default::default(),
         };
 
-        // 2. Create the provider and a sample iterator
         let provider = PassThroughProvider;
         let data = vec![json!(1), json!(2), json!(3)];
         let iterator = data.into_iter();
 
-        // 3. Call provide
         let prepared_sources = provider.provide(&context, iterator).unwrap();
 
-        // 4. Assertions
         assert!(prepared_sources.document.is_none());
         assert!(prepared_sources.body_artifact.is_none());
 

@@ -4,7 +4,7 @@ use super::streaming_writer::StreamingPdfWriter;
 use crate::core::idf::SharedData;
 use crate::core::layout::{LayoutEngine, PositionedElement};
 use crate::core::style::stylesheet::Stylesheet;
-use crate::render::{lopdf_helpers, renderer};
+use crate::render::{lopdf_helpers};
 use lopdf::{dictionary, Dictionary, Object, ObjectId};
 use std::any::Any;
 use std::collections::HashMap;
@@ -27,13 +27,14 @@ impl<W: Write + Seek + Send> LopdfRenderer<W> {
     ) -> Result<Self, RenderError> {
         let mut font_map = HashMap::new();
 
-        // Lock/Borrow system before accessing db
-        // Use the new RefCell access method
-        let system = layout_engine.font_system();
-        for (i, face) in system.db().faces().enumerate() {
-            font_map.insert(face.post_script_name.clone(), format!("F{}", i + 1));
+        {
+            // Use the font_db() accessor
+            let db_lock = layout_engine.font_db();
+            let db = db_lock.read().unwrap();
+            for (i, face) in db.faces().enumerate() {
+                font_map.insert(face.post_script_name.clone(), format!("F{}", i + 1));
+            }
         }
-        drop(system); // Explicit drop to avoid borrow conflict in struct construction
 
         Ok(Self {
             writer: None,
@@ -86,6 +87,7 @@ impl<W: Write + Seek + Send> LopdfRenderer<W> {
 }
 
 impl LopdfRenderer<Cursor<Vec<u8>>> {
+    /// Convenience method for in-memory completion used by ComposingRenderer
     pub fn finish_into_buffer(mut self, page_ids: Vec<ObjectId>) -> Result<Vec<u8>, RenderError> {
         if let Some(mut writer) = self.writer.take() {
             writer.set_page_ids(page_ids);
@@ -104,18 +106,19 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> 
     fn begin_document(&mut self, writer: W) -> Result<(), RenderError> {
         let mut font_dict = Dictionary::new();
 
-        // Use RefCell borrow
-        let system = self.layout_engine.font_system();
-
-        for face in system.db().faces() {
-            if let Some(internal_name) = self.font_map.get(&face.post_script_name) {
-                let single_font_dict = dictionary! {
-                    "Type" => "Font", "Subtype" => "Type1", "BaseFont" => face.post_script_name.clone(), "Encoding" => "WinAnsiEncoding",
-                };
-                font_dict.set(
-                    internal_name.as_bytes(),
-                    Object::Dictionary(single_font_dict),
-                );
+        {
+            let db_lock = self.layout_engine.font_db();
+            let db = db_lock.read().unwrap();
+            for face in db.faces() {
+                if let Some(internal_name) = self.font_map.get(&face.post_script_name) {
+                    let single_font_dict = dictionary! {
+                        "Type" => "Font", "Subtype" => "Type1", "BaseFont" => face.post_script_name.clone(), "Encoding" => "WinAnsiEncoding",
+                    };
+                    font_dict.set(
+                        internal_name.as_bytes(),
+                        Object::Dictionary(single_font_dict),
+                    );
+                }
             }
         }
         self.writer = Some(StreamingPdfWriter::new(writer, "1.7", font_dict)?);
@@ -146,7 +149,8 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> 
             page_width,
             page_height,
         )?;
-        let content_id = writer.buffer_content_stream(content);
+        // Use write_content_stream to stream immediately
+        let content_id = writer.write_content_stream(content)?;
         Ok(content_id)
     }
 
@@ -181,7 +185,7 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> 
             );
         }
 
-        let page_id = writer.buffer_object(page_dict.into());
+        let page_id = writer.write_object(page_dict.into())?;
         Ok(page_id)
     }
 
@@ -189,7 +193,7 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> 
         self.outline_root_id = Some(outline_root_id);
     }
 
-    fn finish(self: Box<Self>, page_ids: Vec<ObjectId>) -> Result<W, renderer::RenderError> {
+    fn finish(self: Box<Self>, page_ids: Vec<ObjectId>) -> Result<W, RenderError> {
         let mut renderer = *self;
         if let Some(mut internal_writer) = renderer.writer.take() {
             internal_writer.set_page_ids(page_ids);
@@ -197,7 +201,7 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> 
             let writer = internal_writer.finish()?;
             Ok(writer)
         } else {
-            Err(renderer::RenderError::Other(
+            Err(RenderError::Other(
                 "Document was never started with begin_document".into(),
             ))
         }

@@ -1,4 +1,3 @@
-use crate::core::layout::{LayoutElement, LayoutEngine, PositionedElement};
 use crate::error::PipelineError;
 use crate::parser::processor::{DataSourceFormat, ExecutionConfig};
 use crate::pipeline::api::{Anchor, Document, PreparedDataSources};
@@ -6,14 +5,15 @@ use crate::pipeline::context::PipelineContext;
 use crate::pipeline::renderer::RenderingStrategy;
 use crate::render::composer::{merge_documents, overlay_content};
 use crate::render::lopdf_renderer::LopdfRenderer;
-use crate::render::DocumentRenderer as _;
+use crate::render::DocumentRenderer;
 use log::{info, warn};
 use lopdf::{dictionary, Document as LopdfDocument, Object, ObjectId, StringFormat};
 use serde_json::json;
 use std::collections::{HashMap};
 use std::io::{Cursor, Seek, Write};
+use crate::core::layout::{LayoutElement, LayoutEngine, PositionedElement};
+use crate::core::layout::engine::LayoutStore;
 
-/// A rendering strategy that composes a final document from multiple sources.
 #[derive(Clone)]
 pub struct ComposingRenderer;
 
@@ -58,7 +58,6 @@ impl RenderingStrategy for ComposingRenderer {
         let (page_width, page_height) = stylesheet.get_default_page_layout().size.dimensions_pt();
         let mut prepended_pages = 0;
 
-        // --- Phase 1: Page Generation & Merging ---
         let prepend_roles = ["cover-page", "preface", "table-of-contents"];
         let append_roles = ["back-cover"];
 
@@ -69,18 +68,17 @@ impl RenderingStrategy for ComposingRenderer {
                 let exec_config = ExecutionConfig { format: DataSourceFormat::Json, strict: false };
                 let ir_nodes = template.execute(&doc_json_str, exec_config)?;
 
-                // Use SharedFontLibrary to create engine
-                let layout_engine = LayoutEngine::new(&context.font_library);
+                let layout_engine = LayoutEngine::new(&context.font_library, context.cache_config);
+                // Pass Arc<Stylesheet> correctly
                 let mut temp_renderer = LopdfRenderer::new(layout_engine, stylesheet.clone())?;
                 temp_renderer.begin_document(Cursor::new(Vec::new()))?;
 
-                // New layout strategy
-                let arena = bumpalo::Bump::new();
+                let store = LayoutStore::new();
                 let ir_root = crate::core::idf::IRNode::Root(ir_nodes);
-                let root_node = temp_renderer.layout_engine.build_render_tree(&ir_root, &arena)
+                let root_node = temp_renderer.layout_engine.build_render_tree(&ir_root, &store)
                     .map_err(|e| PipelineError::Layout(e.to_string()))?;
 
-                let iterator = temp_renderer.layout_engine.paginate(&stylesheet, root_node, &arena)
+                let iterator = temp_renderer.layout_engine.paginate(&stylesheet, root_node, &store)
                     .map_err(|e| PipelineError::Layout(e.to_string()))?;
 
                 let mut laid_out_pages = Vec::new();
@@ -94,8 +92,9 @@ impl RenderingStrategy for ComposingRenderer {
                     let mut new_page_ids = vec![];
                     let font_map: HashMap<String, String>;
                     {
-                        let system = temp_renderer.layout_engine.font_system();
-                        font_map = system.db().faces().enumerate().map(|(i, f)| (f.post_script_name.clone(), format!("F{}", i + 1))).collect();
+                        let db_lock = temp_renderer.layout_engine.font_db();
+                        let db = db_lock.read().unwrap();
+                        font_map = db.faces().enumerate().map(|(i, f)| (f.post_script_name.clone(), format!("F{}", i + 1))).collect();
                     }
 
                     for page_elements in laid_out_pages {
@@ -104,7 +103,8 @@ impl RenderingStrategy for ComposingRenderer {
                         new_page_ids.push(page_id);
                     }
 
-                    let role_pdf_bytes = Box::new(temp_renderer).finish_into_buffer(new_page_ids)?;
+                    // Call finish_into_buffer directly on the concrete type, not Box
+                    let role_pdf_bytes = temp_renderer.finish_into_buffer(new_page_ids)?;
                     let role_doc = LopdfDocument::load_mem(&role_pdf_bytes)?;
                     let role_page_count = role_doc.get_pages().len();
 
@@ -143,17 +143,16 @@ impl RenderingStrategy for ComposingRenderer {
                 let exec_config = ExecutionConfig { format: DataSourceFormat::Json, strict: false };
                 let ir_nodes = template.execute(&doc_json_str, exec_config)?;
 
-                let layout_engine = LayoutEngine::new(&context.font_library);
+                let layout_engine = LayoutEngine::new(&context.font_library, context.cache_config);
                 let mut temp_renderer = LopdfRenderer::new(layout_engine, stylesheet.clone())?;
                 temp_renderer.begin_document(Cursor::new(Vec::new()))?;
 
-                // New layout strategy
-                let arena = bumpalo::Bump::new();
+                let store = LayoutStore::new();
                 let ir_root = crate::core::idf::IRNode::Root(ir_nodes);
-                let root_node = temp_renderer.layout_engine.build_render_tree(&ir_root, &arena)
+                let root_node = temp_renderer.layout_engine.build_render_tree(&ir_root, &store)
                     .map_err(|e| PipelineError::Layout(e.to_string()))?;
 
-                let iterator = temp_renderer.layout_engine.paginate(&stylesheet, root_node, &arena)
+                let iterator = temp_renderer.layout_engine.paginate(&stylesheet, root_node, &store)
                     .map_err(|e| PipelineError::Layout(e.to_string()))?;
 
                 let mut laid_out_pages = Vec::new();
@@ -165,8 +164,9 @@ impl RenderingStrategy for ComposingRenderer {
                     let mut new_page_ids = vec![];
                     let font_map: HashMap<String, String>;
                     {
-                        let system = temp_renderer.layout_engine.font_system();
-                        font_map = system.db().faces().enumerate().map(|(i, f)| (f.post_script_name.clone(), format!("F{}", i + 1))).collect();
+                        let db_lock = temp_renderer.layout_engine.font_db();
+                        let db = db_lock.read().unwrap();
+                        font_map = db.faces().enumerate().map(|(i, f)| (f.post_script_name.clone(), format!("F{}", i + 1))).collect();
                     }
 
                     for page_elements in laid_out_pages {
@@ -175,7 +175,7 @@ impl RenderingStrategy for ComposingRenderer {
                         new_page_ids.push(page_id);
                     }
 
-                    let role_pdf_bytes = Box::new(temp_renderer).finish_into_buffer(new_page_ids)?;
+                    let role_pdf_bytes = temp_renderer.finish_into_buffer(new_page_ids)?;
                     let role_doc = LopdfDocument::load_mem(&role_pdf_bytes)?;
 
                     info!("[COMPOSER] Appending {} pages from role '{}'", role_doc.get_pages().len(), role);
@@ -184,7 +184,6 @@ impl RenderingStrategy for ComposingRenderer {
             }
         }
 
-        // --- Phase 2: Overlays (for roles like headers/footers) ---
         let final_page_count = main_doc.get_pages().len();
         let overlay_roles = ["page-header", "page-footer"];
         let page_ids: Vec<ObjectId> = main_doc.get_pages().into_values().collect();
@@ -192,8 +191,7 @@ impl RenderingStrategy for ComposingRenderer {
         for (role, template) in context.role_templates.iter() {
             if overlay_roles.contains(&role.as_str()) {
                 info!("[COMPOSER] Executing overlay role template: '{}'", role);
-                // Create layout engine using shared library
-                let layout_engine = LayoutEngine::new(&context.font_library);
+                let layout_engine = LayoutEngine::new(&context.font_library, context.cache_config);
 
                 for (i, page_id) in page_ids.iter().enumerate() {
                     let page_number = i + 1;
@@ -204,13 +202,12 @@ impl RenderingStrategy for ComposingRenderer {
                     let exec_config = ExecutionConfig { format: DataSourceFormat::Json, strict: false };
                     let ir_nodes = template.execute(&overlay_context_str, exec_config)?;
 
-                    // New layout strategy
-                    let arena = bumpalo::Bump::new();
+                    let store = LayoutStore::new();
                     let ir_root = crate::core::idf::IRNode::Root(ir_nodes);
-                    let root_node = layout_engine.build_render_tree(&ir_root, &arena)
+                    let root_node = layout_engine.build_render_tree(&ir_root, &store)
                         .map_err(|e| PipelineError::Layout(e.to_string()))?;
 
-                    let iterator = layout_engine.paginate(&stylesheet, root_node, &arena)
+                    let iterator = layout_engine.paginate(&stylesheet, root_node, &store)
                         .map_err(|e| PipelineError::Layout(e.to_string()))?;
 
                     let mut overlay_pages = Vec::new();
@@ -224,8 +221,9 @@ impl RenderingStrategy for ComposingRenderer {
                         }
                         let font_map: HashMap<String, String>;
                         {
-                            let system = layout_engine.font_system();
-                            font_map = system.db().faces().enumerate().map(|(i, f)| (f.post_script_name.clone(), format!("F{}", i + 1))).collect();
+                            let db_lock = layout_engine.font_db();
+                            let db = db_lock.read().unwrap();
+                            font_map = db.faces().enumerate().map(|(i, f)| (f.post_script_name.clone(), format!("F{}", i + 1))).collect();
                         }
                         let content = crate::render::lopdf_helpers::render_elements_to_content(elements, &font_map, page_width, page_height)?;
                         overlay_content(&mut main_doc, *page_id, content.encode()?)?;
@@ -234,7 +232,6 @@ impl RenderingStrategy for ComposingRenderer {
             }
         }
 
-        // --- Phase 3: Fixups (Main Body Links and Outlines) ---
         if !doc_metadata.hyperlinks.is_empty() || !doc_metadata.headings.is_empty() {
             info!("[COMPOSER] Applying fixups (body links, outlines).");
             let final_page_ids: Vec<ObjectId> = main_doc.get_pages().into_values().collect();

@@ -2,16 +2,16 @@
 
 use crate::core::idf::{IRNode, InlineMetadata, TextStr};
 use crate::core::layout::builder::NodeBuilder;
+use crate::core::layout::engine::{LayoutEngine, LayoutStore};
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
     LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode,
 };
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{
-    ImageElement, LayoutElement, LayoutEngine, LayoutError, PositionedElement,
+    ImageElement, LayoutElement, LayoutError, PositionedElement,
 };
 use crate::core::style::dimension::Dimension;
-use bumpalo::Bump;
 use std::sync::Arc;
 
 pub struct ImageBuilder;
@@ -22,35 +22,30 @@ impl NodeBuilder for ImageBuilder {
         node: &IRNode,
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
-        arena: &'a Bump,
+        store: &'a LayoutStore,
     ) -> Result<RenderNode<'a>, LayoutError> {
-        ImageNode::build(node, engine, parent_style, arena)
+        ImageNode::build(node, engine, parent_style, store)
     }
 }
 
+// FIX: Added lifetime 'a to ImageNode to hold references
 #[derive(Debug, Clone)]
-pub struct ImageNode {
-    id: Option<TextStr>,
-    src: TextStr,
-    style: Arc<ComputedStyle>,
+pub struct ImageNode<'a> {
+    id: Option<&'a str>,
+    src: &'a str,
+    style: &'a ComputedStyle,
 }
 
-impl ImageNode {
-    pub fn build<'a>(
+impl<'a> ImageNode<'a> {
+    pub fn build(
         node: &IRNode,
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
-        arena: &'a Bump,
+        store: &'a LayoutStore,
     ) -> Result<RenderNode<'a>, LayoutError> {
-        let item = arena.alloc(Self::new(node, engine, parent_style)?);
-        Ok(RenderNode::Image(item))
-    }
+        // We cannot use store.bump directly inside new() easily without passing it,
+        // so we inline construction or pass store.
 
-    pub fn new(
-        node: &IRNode,
-        engine: &LayoutEngine,
-        parent_style: Arc<ComputedStyle>,
-    ) -> Result<Self, LayoutError> {
         let IRNode::Image { meta, src } = node else {
             return Err(LayoutError::BuilderMismatch("Image", node.kind()));
         };
@@ -60,25 +55,34 @@ impl ImageNode {
             &parent_style,
         );
 
-        Ok(Self {
-            id: meta.id.clone(),
-            src: src.clone(),
-            style,
-        })
+        let id = meta.id.as_ref().map(|s| store.alloc_str(s));
+        let src = store.alloc_str(src);
+        let style_ref = store.cache_style(style);
+
+        let item = store.bump.alloc(Self {
+            id,
+            src,
+            style: style_ref,
+        });
+        Ok(RenderNode::Image(item))
     }
 
+    // Used for inline images in paragraphs
     pub fn new_inline(
         meta: &InlineMetadata,
         src: TextStr,
         engine: &LayoutEngine,
         parent_style: &Arc<ComputedStyle>,
-        _arena: &Bump,
+        store: &'a LayoutStore,
     ) -> Result<Self, LayoutError> {
         let style = engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), parent_style);
+        let src_ref = store.alloc_str(&src);
+        let style_ref = store.cache_style(style);
+
         Ok(Self {
             id: None,
-            src,
-            style,
+            src: src_ref,
+            style: style_ref,
         })
     }
 
@@ -115,9 +119,9 @@ impl ImageNode {
     }
 }
 
-impl LayoutNode for ImageNode {
-    fn style(&self) -> &Arc<ComputedStyle> {
-        &self.style
+impl<'a> LayoutNode for ImageNode<'a> {
+    fn style(&self) -> &ComputedStyle {
+        self.style
     }
 
     fn measure(&self, _env: &mut LayoutEnvironment, constraints: BoxConstraints) -> Size {
@@ -138,7 +142,7 @@ impl LayoutNode for ImageNode {
             // resume logic...
         }
 
-        if let Some(id) = &self.id {
+        if let Some(id) = self.id {
             ctx.register_anchor(id);
         }
 
@@ -163,9 +167,9 @@ impl LayoutNode for ImageNode {
             width: size.width,
             height: size.height,
             element: LayoutElement::Image(ImageElement {
-                src: self.src.to_string(),
+                src: self.src.to_string(), // Copy to output String
             }),
-            style: self.style.clone(),
+            style: Arc::new(self.style.clone()),
         };
         ctx.push_element(element);
 

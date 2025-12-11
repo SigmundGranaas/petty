@@ -20,7 +20,7 @@ pub(super) fn draw_text<W: io::Write + Send>(
     let style = &positioned.style;
 
     let styled_font_name = get_styled_font_name(style);
-    let font_id = match page.doc_renderer.fonts.get(&styled_font_name) {
+    let font_id = match page.doc_renderer.fonts.get(styled_font_name.as_ref()) {
         Some(font) => font,
         None => {
             if styled_font_name != style.text.font_family.as_str() {
@@ -96,7 +96,7 @@ pub(super) fn draw_text_stateless(
     let style = &positioned.style;
 
     let styled_font_name = get_styled_font_name(style);
-    let font_id = match ctx.fonts.get(&styled_font_name) {
+    let font_id = match ctx.fonts.get(styled_font_name.as_ref()) {
         Some(font) => font,
         None => {
             if styled_font_name != style.text.font_family.as_str() {
