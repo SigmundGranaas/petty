@@ -5,8 +5,9 @@ use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::engine::{LayoutEngine, LayoutStore};
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
-    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode,
+    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
 };
+use super::RenderNode;
 use crate::core::layout::nodes::paragraph::ParagraphNode;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::LayoutError;
@@ -74,7 +75,7 @@ impl<'a> LayoutNode for HeadingNode<'a> {
         self.p_node.style()
     }
 
-    fn measure(&self, env: &mut LayoutEnvironment, constraints: BoxConstraints) -> Size {
+    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<Size, LayoutError> {
         self.p_node.measure(env, constraints)
     }
 

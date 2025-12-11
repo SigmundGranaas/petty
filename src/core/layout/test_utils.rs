@@ -9,7 +9,7 @@ use std::collections::HashMap;
 
 /// Creates a default layout engine for testing purposes.
 pub fn create_test_engine() -> LayoutEngine {
-    let mut library = SharedFontLibrary::new();
+    let library = SharedFontLibrary::new();
     library.load_fallback_font();
     LayoutEngine::new(&library, Default::default())
 }

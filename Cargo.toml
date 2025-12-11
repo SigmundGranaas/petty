@@ -46,13 +46,6 @@ tempfile = "3.10.1"
 [features]
 dhat-heap = []
 
-[profile.release]
-debug = true
-
-# Optimize dependencies even in debug builds for performance testing without full release compile times
-[profile.dev.package."*"]
-opt-level = 3
-
 [[example]]
 name = "performance_test"
 path = "examples/performance_test.rs"

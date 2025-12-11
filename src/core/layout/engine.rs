@@ -4,14 +4,15 @@ use super::fonts::{SharedFontLibrary, FontData};
 use super::geom::{self, BoxConstraints};
 use super::node::{
     AnchorLocation, IndexEntry, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult,
-    NodeState, RenderNode,
+    NodeState,
 };
+use super::nodes::RenderNode;
 use super::node_kind::NodeKind;
 use super::perf::PerformanceTracker;
 use super::style::{self, ComputedStyle};
 use super::PositionedElement;
 use crate::core::idf::{IRNode, TextStr};
-use crate::core::layout::builder::NodeRegistry;
+use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::config::LayoutConfig;
 use crate::core::layout::LayoutError;
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
@@ -21,6 +22,7 @@ use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock, Mutex};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 use crate::core::layout::nodes::paragraph_utils::ShapedRun;
 
@@ -36,7 +38,10 @@ use super::nodes::{
 
 pub struct LayoutStore {
     pub bump: Bump,
+    /// Cache to deduplicate styles. Returns Arc<ComputedStyle>.
     style_cache: RefCell<HashMap<ComputedStyle, Arc<ComputedStyle>>>,
+    /// Counter for unique node IDs used for caching.
+    node_id_counter: AtomicUsize,
 }
 
 impl LayoutStore {
@@ -44,6 +49,7 @@ impl LayoutStore {
         Self {
             bump: Bump::new(),
             style_cache: RefCell::new(HashMap::with_capacity(512)),
+            node_id_counter: AtomicUsize::new(1), // Start at 1 to reserve 0
         }
     }
 
@@ -55,18 +61,15 @@ impl LayoutStore {
         self.bump.alloc_str(s)
     }
 
-    pub fn cache_style(&self, style: Arc<ComputedStyle>) -> &ComputedStyle {
-        let mut cache = self.style_cache.borrow_mut();
-        if let Some(existing) = cache.get(&style) {
-            unsafe { &*(Arc::as_ptr(existing)) }
-        } else {
-            let key = (*style).clone();
-            cache.insert(key, style.clone());
-            unsafe { &*(Arc::as_ptr(&style)) }
-        }
+    /// Generates a unique ID for a layout node.
+    /// Thread-safe via atomic increment.
+    pub fn next_node_id(&self) -> usize {
+        self.node_id_counter.fetch_add(1, Ordering::Relaxed)
     }
 
-    pub fn canonicalize_style(&self, style: Arc<ComputedStyle>) -> Arc<ComputedStyle> {
+    /// Canonicalizes the style, returning a deduplicated Arc.
+    /// This effectively works as a cache.
+    pub fn cache_style(&self, style: Arc<ComputedStyle>) -> Arc<ComputedStyle> {
         let mut cache = self.style_cache.borrow_mut();
         if let Some(existing) = cache.get(&style) {
             existing.clone()
@@ -74,6 +77,10 @@ impl LayoutStore {
             cache.insert((*style).clone(), style.clone());
             style
         }
+    }
+
+    pub fn canonicalize_style(&self, style: Arc<ComputedStyle>) -> Arc<ComputedStyle> {
+        self.cache_style(style)
     }
 }
 
@@ -119,7 +126,6 @@ thread_local! {
 pub struct LayoutEngine {
     pub font_library: SharedFontLibrary,
     metrics: Mutex<PerformanceTracker>,
-    registry: Arc<NodeRegistry>,
     config: LayoutConfig,
     font_cache: RwLock<HashMap<FontCacheKey, Option<FontData>>>,
     pub shaping_cache: RwLock<HashMap<ShapingCacheKey, Arc<Vec<ShapedRun>>>>,
@@ -128,7 +134,6 @@ pub struct LayoutEngine {
     text_measure_cache: RwLock<HashMap<(String, u64), f32>>,
 }
 
-// Automatically dump statistics when the LayoutEngine is dropped (e.g., when a worker finishes).
 impl Drop for LayoutEngine {
     fn drop(&mut self) {
         self.dump_stats(0);
@@ -137,23 +142,9 @@ impl Drop for LayoutEngine {
 
 impl LayoutEngine {
     pub fn new(library: &SharedFontLibrary, config: LayoutConfig) -> Self {
-        let mut registry = NodeRegistry::new();
-        registry.register(NodeKind::Root, Box::new(BlockBuilder));
-        registry.register(NodeKind::Block, Box::new(BlockBuilder));
-        registry.register(NodeKind::Paragraph, Box::new(ParagraphBuilder));
-        registry.register(NodeKind::Heading, Box::new(HeadingBuilder));
-        registry.register(NodeKind::Image, Box::new(ImageBuilder));
-        registry.register(NodeKind::FlexContainer, Box::new(FlexBuilder));
-        registry.register(NodeKind::List, Box::new(ListBuilder));
-        registry.register(NodeKind::ListItem, Box::new(ListItemBuilder));
-        registry.register(NodeKind::Table, Box::new(TableBuilder));
-        registry.register(NodeKind::PageBreak, Box::new(PageBreakBuilder));
-        registry.register(NodeKind::IndexMarker, Box::new(IndexMarkerBuilder));
-
         LayoutEngine {
             font_library: library.clone(),
             metrics: Mutex::new(PerformanceTracker::default()),
-            registry: Arc::new(registry),
             config,
             font_cache: RwLock::new(HashMap::new()),
             shaping_cache: RwLock::new(HashMap::new()),
@@ -318,9 +309,6 @@ impl LayoutEngine {
             .clone()
             .ok_or_else(|| LayoutError::Generic("No default page master defined".to_string()))?;
 
-        // Removed self.reset_stats() to allow accumulation of metrics across sequences
-        // for average calculations (e.g. time per sequence).
-
         Ok(PaginationIterator {
             engine: self,
             stylesheet,
@@ -329,7 +317,8 @@ impl LayoutEngine {
             current_state: None,
             current_master_name: Some(current_master_name),
             page_count: 0,
-            layout_cache: HashMap::new(),
+            // The iterator owns the cache for the lifetime of the pagination process
+            layout_cache: RefCell::new(HashMap::new()),
             finished: false,
         })
     }
@@ -353,13 +342,20 @@ impl LayoutEngine {
         parent_style: Arc<ComputedStyle>,
         store: &'a LayoutStore,
     ) -> Result<RenderNode<'a>, LayoutError> {
-        let kind = NodeKind::from_ir(node);
-        let builder = self
-            .registry
-            .get(kind)
-            .ok_or_else(|| LayoutError::BuilderMismatch("Known Node", kind.as_str()))?;
-
-        builder.build(node, self, parent_style, store)
+        // STATIC DISPATCH: We replaced the dynamic NodeRegistry with this match expression
+        // to avoid HashMap lookups and dynamic dispatch overhead for every node.
+        match NodeKind::from_ir(node) {
+            NodeKind::Root | NodeKind::Block => BlockBuilder.build(node, self, parent_style, store),
+            NodeKind::Paragraph => ParagraphBuilder.build(node, self, parent_style, store),
+            NodeKind::Heading => HeadingBuilder.build(node, self, parent_style, store),
+            NodeKind::Image => ImageBuilder.build(node, self, parent_style, store),
+            NodeKind::FlexContainer => FlexBuilder.build(node, self, parent_style, store),
+            NodeKind::List => ListBuilder.build(node, self, parent_style, store),
+            NodeKind::ListItem => ListItemBuilder.build(node, self, parent_style, store),
+            NodeKind::Table => TableBuilder.build(node, self, parent_style, store),
+            NodeKind::PageBreak => PageBreakBuilder.build(node, self, parent_style, store),
+            NodeKind::IndexMarker => IndexMarkerBuilder.build(node, self, parent_style, store),
+        }
     }
 
     pub fn compute_style(
@@ -376,7 +372,6 @@ impl LayoutEngine {
     }
 
     pub fn measure_text_width(&self, text: &str, style: &ComputedStyle) -> f32 {
-        // OPTIMIZATION: Check text measurement cache first
         let mut hasher = DefaultHasher::new();
         style.hash(&mut hasher);
         let style_hash = hasher.finish();
@@ -389,25 +384,30 @@ impl LayoutEngine {
             }
         }
 
+        // On-demand face creation happens in get_font_for_style -> FontInstance::as_face() inside
+        // shaping, but here we manually do it.
         let font_data = match self.get_font_for_style(style) {
             Some(d) => d,
             None => return 0.0,
         };
 
-        let face = font_data.face();
+        // Create face on stack
+        let face = match font_data.as_face() {
+            Some(f) => f,
+            None => return 0.0,
+        };
 
         let mut buffer = rustybuzz::UnicodeBuffer::new();
         buffer.push_str(text);
         buffer.guess_segment_properties();
 
-        let glyph_buffer = rustybuzz::shape(face, &[], buffer);
+        let glyph_buffer = rustybuzz::shape(&face, &[], buffer);
         let positions = glyph_buffer.glyph_positions();
 
         let scale = style.text.font_size / face.units_per_em() as f32;
 
         let width: f32 = positions.iter().map(|p| p.x_advance as f32 * scale).sum();
 
-        // Update cache
         if let Ok(mut cache) = self.text_measure_cache.write() {
             cache.insert(key, width);
         }
@@ -424,7 +424,8 @@ struct PaginationIterator<'a> {
     current_state: Option<NodeState>,
     current_master_name: Option<String>,
     page_count: usize,
-    layout_cache: HashMap<u64, Box<dyn Any + Send>>,
+    // Use RefCell to allow shared access via LayoutEnvironment
+    layout_cache: RefCell<HashMap<u64, Box<dyn Any + Send>>>,
     finished: bool,
 }
 
@@ -436,8 +437,6 @@ impl<'a> Iterator for PaginationIterator<'a> {
 
         let start = Instant::now();
 
-        // Loop block used to allow `break` for returning values, enabling measurement
-        // of the entire logic block including error paths.
         let result = loop {
             const MAX_PAGES: usize = 500;
             self.page_count += 1;
@@ -474,7 +473,7 @@ impl<'a> Iterator for PaginationIterator<'a> {
             let env = LayoutEnvironment {
                 engine: self.engine,
                 local_page_index: self.page_count - 1,
-                cache: &mut self.layout_cache,
+                cache: &self.layout_cache,
             };
 
             let mut ctx = LayoutContext::new(env, bounds, self.arena, &mut elements, &mut anchors, &mut indices);
@@ -501,7 +500,6 @@ impl<'a> Iterator for PaginationIterator<'a> {
             };
         };
 
-        // Record total time taken for this page's generation logic
         self.engine.record_perf("PageLayout::generate_page", start.elapsed());
 
         result

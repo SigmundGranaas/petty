@@ -2,13 +2,12 @@
 
 use crate::core::idf::{IRNode, TextStr};
 use crate::core::layout::builder::NodeBuilder;
-// Added MultiSpanCacheKey to import
 use crate::core::layout::engine::{LayoutEngine, LayoutStore, ShapingCacheKey, MultiSpanCacheKey};
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
     LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, ParagraphState,
-    RenderNode,
 };
+use super::RenderNode;
 use crate::core::layout::nodes::paragraph_utils::{
     break_lines, shape_text, render_lines, ShapedRun, LineLayout
 };
@@ -16,10 +15,12 @@ use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::text::{TextBuilder, TextSpan, InlineImageEntry};
 use crate::core::layout::LayoutError;
 use crate::core::style::dimension::Dimension;
+use std::any::Any;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use std::time::Instant;
 
 pub struct ParagraphBuilder;
 
@@ -37,12 +38,14 @@ impl NodeBuilder for ParagraphBuilder {
 
 #[derive(Debug)]
 pub struct ParagraphNode<'a> {
+    /// Unique identifier for this node instance, used for stable caching.
+    unique_id: usize,
     id: Option<TextStr>,
     pub spans: &'a [TextSpan<'a>],
     pub full_text: &'a str,
     pub links: &'a [&'a str],
     pub inline_images: &'a [InlineImageEntry<'a>],
-    style: &'a ComputedStyle,
+    style: Arc<ComputedStyle>,
 }
 
 impl<'a> ParagraphNode<'a> {
@@ -76,7 +79,10 @@ impl<'a> ParagraphNode<'a> {
         let images_slice = store.bump.alloc_slice_clone(&inline_images_vec);
         let style_ref = store.cache_style(style);
 
+        let unique_id = store.next_node_id();
+
         let node = store.bump.alloc(Self {
+            unique_id,
             id: meta.id.clone(),
             spans,
             full_text,
@@ -89,22 +95,38 @@ impl<'a> ParagraphNode<'a> {
     }
 
     fn get_shaping_cache_key(&self) -> u64 {
-        // Optimization: Use direct pointer hashing instead of DefaultHasher
-        // to avoid overhead in very tight layout loops.
-        let ptr_val = (self as *const Self) as u64;
-        // Simple mixing to avoid trivial collisions
-        ptr_val.wrapping_mul(101).wrapping_add(100)
+        let mut s = DefaultHasher::new();
+        self.unique_id.hash(&mut s);
+        1u8.hash(&mut s); // Domain 1: Shaping
+        s.finish()
     }
 
     fn get_layout_cache_key(&self, max_width: Option<f32>) -> u64 {
-        let ptr_val = (self as *const Self) as u64;
-        let width_val = if let Some(w) = max_width {
-            (w * 100.0).round() as u64
+        let mut s = DefaultHasher::new();
+        self.unique_id.hash(&mut s);
+        2u8.hash(&mut s); // Domain 2: Paragraph Layout
+        if let Some(w) = max_width {
+            ((w * 100.0).round() as i32).hash(&mut s);
         } else {
-            0
-        };
-        // Simple mixing
-        ptr_val.wrapping_mul(33) ^ width_val
+            (-1i32).hash(&mut s);
+        }
+        s.finish()
+    }
+
+    /// Strategy Step 1: Resolve Text Shaping
+    /// Uses two-level caching (node-ID based and structural content based) to avoid repeated shaping.
+    fn resolve_shaping(&self, engine: &LayoutEngine, cache: &RefCell<HashMap<u64, Box<dyn Any + Send>>>) -> Arc<Vec<ShapedRun>> {
+        let shape_key = self.get_shaping_cache_key();
+
+        // 1. Check local node cache
+        if let Some(runs) = cache.borrow().get(&shape_key).and_then(|v| v.downcast_ref::<Arc<Vec<ShapedRun>>>()).cloned() {
+            return runs;
+        }
+
+        // 2. Compute or fetch from global cache
+        let runs = self.compute_shaped_runs(engine);
+        cache.borrow_mut().insert(shape_key, Box::new(runs.clone()));
+        runs
     }
 
     fn compute_shaped_runs(&self, engine: &LayoutEngine) -> Arc<Vec<ShapedRun>> {
@@ -157,8 +179,28 @@ impl<'a> ParagraphNode<'a> {
         Arc::new(runs)
     }
 
+    /// Strategy Step 2: Resolve Line Breaking
+    /// Breaks lines based on the shaped runs and the available width.
+    fn resolve_layout(
+        &self,
+        engine: &LayoutEngine,
+        cache: &RefCell<HashMap<u64, Box<dyn Any + Send>>>,
+        shaped_runs: &Arc<Vec<ShapedRun>>,
+        width: f32
+    ) -> Arc<ParagraphLayout> {
+        let layout_key = self.get_layout_cache_key(if width.is_finite() { Some(width) } else { None });
+
+        if let Some(layout) = cache.borrow().get(&layout_key).and_then(|v| v.downcast_ref::<Arc<ParagraphLayout>>()).cloned() {
+            return layout;
+        }
+
+        let layout = self.compute_layout(engine, shaped_runs, width);
+        cache.borrow_mut().insert(layout_key, Box::new(layout.clone()));
+        layout
+    }
+
     fn compute_layout(&self, _engine: &LayoutEngine, shaped_runs: &Arc<Vec<ShapedRun>>, max_width: f32) -> Arc<ParagraphLayout> {
-        let lines = break_lines(shaped_runs, max_width, self.style);
+        let lines = break_lines(shaped_runs, max_width, &self.style, self.full_text);
 
         let total_height = lines.iter().map(|l| l.height).sum();
         let max_line_width = lines.iter().map(|l| l.width).fold(0.0f32, f32::max);
@@ -170,9 +212,75 @@ impl<'a> ParagraphNode<'a> {
             shaped_runs: shaped_runs.clone(),
         })
     }
+
+    /// Strategy Step 3: Render lines to context
+    /// Handles the actual pagination loop, checking vertical space and issuing draw commands.
+    fn render_lines_to_context(
+        &self,
+        ctx: &mut LayoutContext,
+        layout: &ParagraphLayout,
+        scroll_offset: f32,
+    ) -> Result<LayoutResult, LayoutError> {
+        let available_height = ctx.available_height();
+        let mut current_y = 0.0;
+        let mut start_line_index = 0;
+
+        // Fast-forward to resume point
+        while start_line_index < layout.lines.len() {
+            if current_y >= scroll_offset - 0.01 {
+                break;
+            }
+            current_y += layout.lines[start_line_index].height;
+            start_line_index += 1;
+        }
+
+        if start_line_index >= layout.lines.len() {
+            ctx.finish_block(self.style.box_model.margin.bottom);
+            return Ok(LayoutResult::Finished);
+        }
+
+        let mut rendered_height = 0.0;
+        let mut lines_rendered = 0;
+        let mut next_break_offset = 0.0;
+        let mut split = false;
+
+        for i in start_line_index..layout.lines.len() {
+            let line = &layout.lines[i];
+
+            if rendered_height + line.height > available_height + 0.1 {
+                split = true;
+                next_break_offset = current_y;
+                break;
+            }
+
+            render_lines(ctx, line, &layout.shaped_runs, rendered_height, self.links, self.full_text);
+
+            rendered_height += line.height;
+            current_y += line.height;
+            lines_rendered += 1;
+        }
+
+        ctx.advance_cursor(rendered_height);
+
+        if split {
+            if lines_rendered == 0 {
+                // If we couldn't fit a single line, but we are at the start of the block,
+                // we must force a break to avoid infinite loops, OR if we are at top of page, we clip.
+                // Here we assume we break and resume on next page.
+                return Ok(LayoutResult::Break(NodeState::Paragraph(ParagraphState {
+                    scroll_offset,
+                })));
+            }
+            Ok(LayoutResult::Break(NodeState::Paragraph(ParagraphState {
+                scroll_offset: next_break_offset,
+            })))
+        } else {
+            ctx.finish_block(self.style.box_model.margin.bottom);
+            Ok(LayoutResult::Finished)
+        }
+    }
 }
 
-// ... Rest of ParagraphNode impl ... (layout, measure unchanged from previous step)
 #[derive(Debug, Clone)]
 pub struct ParagraphLayout {
     pub lines: Vec<LineLayout>,
@@ -183,40 +291,20 @@ pub struct ParagraphLayout {
 
 impl<'a> LayoutNode for ParagraphNode<'a> {
     fn style(&self) -> &ComputedStyle {
-        self.style
+        self.style.as_ref()
     }
 
-    fn measure(&self, env: &mut LayoutEnvironment, constraints: BoxConstraints) -> Size {
+    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<Size, LayoutError> {
         let max_width = if constraints.has_bounded_width() {
             constraints.max_width
         } else {
             f32::INFINITY
         };
 
-        // 1. Shaping Cache (Local Pointer-Based)
-        let shape_key = self.get_shaping_cache_key();
-        let shaped_runs = if let Some(cached) = env.cache.get(&shape_key) {
-            cached.downcast_ref::<Arc<Vec<ShapedRun>>>().unwrap().clone()
-        } else {
-            // Missed local pointer cache -> Call compute_shaped_runs -> checks Global Content Cache
-            let runs = self.compute_shaped_runs(env.engine);
-            env.cache.insert(shape_key, Box::new(runs.clone()));
-            runs
-        };
+        let shaped_runs = self.resolve_shaping(env.engine, env.cache);
+        let layout = self.resolve_layout(env.engine, env.cache, &shaped_runs, max_width);
 
-        // 2. Layout Cache (Width Dependent)
-        let layout_key = self.get_layout_cache_key(if max_width.is_finite() { Some(max_width) } else { None });
-
-        if let Some(cached) = env.cache.get(&layout_key) {
-            if let Some(layout) = cached.downcast_ref::<Arc<ParagraphLayout>>() {
-                return self.resolve_size(layout, constraints);
-            }
-        }
-
-        let layout = self.compute_layout(env.engine, &shaped_runs, max_width);
-        env.cache.insert(layout_key, Box::new(layout.clone()));
-
-        self.resolve_size(&layout, constraints)
+        Ok(self.resolve_size(&layout, constraints))
     }
 
     fn layout(
@@ -237,16 +325,16 @@ impl<'a> LayoutNode for ParagraphNode<'a> {
 
         let is_continuation = scroll_offset > 0.0;
 
+        // Handle pre-layout vertical spacing
         if !is_continuation {
-            let margin_to_add = self.style.box_model.margin.top.max(ctx.last_v_margin);
-            if ctx.cursor_y() > 0.1 && margin_to_add > ctx.available_height() {
+            if ctx.prepare_for_block(self.style.box_model.margin.top) {
                 return Ok(LayoutResult::Break(NodeState::Paragraph(ParagraphState {
                     scroll_offset: 0.0,
                 })));
             }
-            ctx.advance_cursor(margin_to_add);
+        } else {
+            ctx.last_v_margin = 0.0;
         }
-        ctx.last_v_margin = 0.0;
 
         let width = if constraints.has_bounded_width() {
             constraints.max_width
@@ -254,85 +342,14 @@ impl<'a> LayoutNode for ParagraphNode<'a> {
             ctx.bounds().width
         };
 
-        // 1. Shaping Cache
-        let shape_key = self.get_shaping_cache_key();
-        let shaped_runs = if let Some(cached) = ctx.env.cache.get(&shape_key) {
-            cached.downcast_ref::<Arc<Vec<ShapedRun>>>().unwrap().clone()
-        } else {
-            let runs = self.compute_shaped_runs(ctx.env.engine);
-            ctx.env.cache.insert(shape_key, Box::new(runs.clone()));
-            runs
-        };
+        // Phase 1: Shaping
+        let shaped_runs = self.resolve_shaping(ctx.env.engine, ctx.env.cache);
 
-        // 2. Layout Cache
-        let layout_key = self.get_layout_cache_key(Some(width));
+        // Phase 2: Layout
+        let layout = self.resolve_layout(ctx.env.engine, ctx.env.cache, &shaped_runs, width);
 
-        let layout_arc = if let Some(cached) = ctx.env.cache.get(&layout_key) {
-            if let Some(layout) = cached.downcast_ref::<Arc<ParagraphLayout>>() {
-                layout.clone()
-            } else {
-                self.compute_layout(ctx.env.engine, &shaped_runs, width)
-            }
-        } else {
-            let l = self.compute_layout(ctx.env.engine, &shaped_runs, width);
-            ctx.env.cache.insert(layout_key, Box::new(l.clone()));
-            l
-        };
-
-        let available_height = ctx.available_height();
-
-        let mut current_y = 0.0;
-        let mut start_line_index = 0;
-
-        while start_line_index < layout_arc.lines.len() {
-            if current_y >= scroll_offset - 0.01 {
-                break;
-            }
-            current_y += layout_arc.lines[start_line_index].height;
-            start_line_index += 1;
-        }
-
-        if start_line_index >= layout_arc.lines.len() {
-            ctx.last_v_margin = self.style.box_model.margin.bottom;
-            return Ok(LayoutResult::Finished);
-        }
-
-        let mut rendered_height = 0.0;
-        let mut lines_rendered = 0;
-        let mut next_break_offset = 0.0;
-        let mut split = false;
-
-        for i in start_line_index..layout_arc.lines.len() {
-            let line = &layout_arc.lines[i];
-
-            if rendered_height + line.height > available_height + 0.1 {
-                split = true;
-                next_break_offset = current_y;
-                break;
-            }
-
-            render_lines(ctx, line, &layout_arc.shaped_runs, rendered_height, self.links, self.full_text);
-
-            rendered_height += line.height;
-            current_y += line.height;
-            lines_rendered += 1;
-        }
-
-        ctx.advance_cursor(rendered_height);
-
-        if split {
-            if lines_rendered == 0 {
-                return Ok(LayoutResult::Break(NodeState::Paragraph(ParagraphState {
-                    scroll_offset,
-                })));
-            }
-            Ok(LayoutResult::Break(NodeState::Paragraph(ParagraphState {
-                scroll_offset: next_break_offset,
-            })))
-        } else {
-            ctx.last_v_margin = self.style.box_model.margin.bottom;
-            Ok(LayoutResult::Finished)
-        }
+        // Phase 3: Render
+        self.render_lines_to_context(ctx, &layout, scroll_offset)
     }
 }
 

@@ -5,21 +5,9 @@ use crate::core::layout::geom::{self, BoxConstraints, Size};
 use crate::core::layout::{ComputedStyle, LayoutEngine, LayoutError, PositionedElement};
 use bumpalo::Bump;
 use std::any::Any;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fmt::Debug;
-// Removed unused import `use std::sync::Arc;`
-
-// Concrete node implementations used in the RenderNode enum
-use crate::core::layout::nodes::block::BlockNode;
-use crate::core::layout::nodes::flex::FlexNode;
-use crate::core::layout::nodes::heading::HeadingNode;
-use crate::core::layout::nodes::image::ImageNode;
-use crate::core::layout::nodes::index_marker::IndexMarkerNode;
-use crate::core::layout::nodes::list::ListNode;
-use crate::core::layout::nodes::list_item::ListItemNode;
-use crate::core::layout::nodes::page_break::PageBreakNode;
-use crate::core::layout::nodes::paragraph::ParagraphNode;
-use crate::core::layout::nodes::table::TableNode;
 
 // --- State Definitions (Type-Safe) ---
 
@@ -51,7 +39,6 @@ pub struct TableState {
     pub row_index: usize,
 }
 
-/// Represents the resumption state for any node type.
 #[derive(Debug, Clone)]
 pub enum NodeState {
     Block(BlockState),
@@ -59,7 +46,6 @@ pub enum NodeState {
     ListItem(ListItemState),
     Paragraph(ParagraphState),
     Table(TableState),
-    // For nodes that break cleanly without internal data (e.g. PageBreak, Image)
     Atomic,
 }
 
@@ -125,34 +111,27 @@ pub struct IndexEntry {
     pub y_pos: f32,
 }
 
-/// Read-only (mostly) environment data shared across the layout pass.
-/// It contains the `LayoutEngine`, page info, and a mutable cache for expensive computations.
+/// Read-only environment data shared across the layout pass.
+///
+/// SAFETY: We use `RefCell` for the cache to allow `measure` to take an immutable
+/// reference to the environment. This enables the environment to be captured
+/// by closures (like in Taffy layout) without violating borrow rules.
 pub struct LayoutEnvironment<'a> {
     pub engine: &'a LayoutEngine,
     pub local_page_index: usize,
     /// A cache for transient layout data (e.g. shaped text Buffers, Taffy trees).
-    /// This allows `measure` and `layout` steps to share expensive results.
-    pub cache: &'a mut HashMap<u64, Box<dyn Any + Send>>,
+    /// Uses interior mutability.
+    pub cache: &'a RefCell<HashMap<u64, Box<dyn Any + Send>>>,
 }
 
-/// The mutable context passed down the tree during layout.
 pub struct LayoutContext<'a> {
-    // Composition: Wraps the environment to avoid field duplication and borrow conflicts.
     pub env: LayoutEnvironment<'a>,
-
-    /// The Arena allocator for creating transient layout nodes/data.
     pub arena: &'a Bump,
-
-    // Geometry
     bounds: geom::Rect,
-    cursor: (f32, f32), // (x, y) relative to bounds
-
-    // Outputs
+    cursor: (f32, f32),
     elements: &'a mut Vec<PositionedElement>,
     defined_anchors: &'a mut HashMap<TextStr, AnchorLocation>,
     index_entries: &'a mut HashMap<TextStr, Vec<IndexEntry>>,
-
-    /// Tracks margin collapsing context between blocks
     pub last_v_margin: f32,
 }
 
@@ -198,6 +177,32 @@ impl<'a> LayoutContext<'a> {
         (self.bounds.height - self.cursor.1).max(0.0)
     }
 
+    /// Handles vertical margin collapsing and cursor advancement before placing a block.
+    ///
+    /// This method calculates the collapsed margin (max of the previous element's bottom margin
+    /// and the current element's top margin), checks if adding this margin pushes the cursor
+    /// out of bounds (requiring a page break), and if not, advances the cursor.
+    ///
+    /// Returns `true` if the margin pushes content past the available height (break required).
+    pub fn prepare_for_block(&mut self, top_margin: f32) -> bool {
+        let margin_to_add = top_margin.max(self.last_v_margin);
+
+        // If we are not at the very top of the page, check if the margin pushes us over.
+        // We use a small epsilon to detect "not at top".
+        if self.cursor_y() > 0.001 && margin_to_add > self.available_height() {
+            return true; // Caller should return LayoutResult::Break
+        }
+
+        self.advance_cursor(margin_to_add);
+        self.last_v_margin = 0.0;
+        false
+    }
+
+    /// Finalizes a block by setting the trailing vertical margin to be collapsed with the next element.
+    pub fn finish_block(&mut self, bottom_margin: f32) {
+        self.last_v_margin = bottom_margin;
+    }
+
     pub fn register_anchor(&mut self, id: &str) {
         let location = AnchorLocation {
             local_page_index: self.env.local_page_index,
@@ -233,19 +238,11 @@ impl<'a> LayoutContext<'a> {
         self.elements.is_empty()
     }
 
-    /// Creates a new context for a child node with the specified bounds.
-    /// Note: This re-borrows the mutable environment, splitting the borrow.
     pub fn child<'child>(&'child mut self, bounds: geom::Rect) -> LayoutContext<'child> {
-        // We need to re-construct the LayoutEnvironment with a sub-borrow of the cache
-        // However, `self.env` contains `&mut HashMap`. We can't re-borrow it mutably *easily*
-        // if we just pass `self.env`.
-        // BUT, `LayoutContext` owns `env` which is `LayoutEnvironment<'a>`.
-        // `&'child mut self` allows us to borrow fields.
-
         let sub_env = LayoutEnvironment {
             engine: self.env.engine,
             local_page_index: self.env.local_page_index,
-            cache: self.env.cache, // re-borrow mutable ref
+            cache: self.env.cache,
         };
 
         LayoutContext {
@@ -266,103 +263,9 @@ pub enum LayoutResult {
     Break(NodeState),
 }
 
-/// The core enum wrapping all possible layout nodes.
-/// Uses references allocated in a bump arena (`&'a Node`) for performance.
-#[derive(Debug, Clone, Copy)]
-pub enum RenderNode<'a> {
-    Block(&'a BlockNode<'a>),
-    Flex(&'a FlexNode<'a>),
-    Heading(&'a HeadingNode<'a>),
-    Image(&'a ImageNode<'a>),
-    IndexMarker(&'a IndexMarkerNode<'a>),
-    List(&'a ListNode<'a>),
-    ListItem(&'a ListItemNode<'a>),
-    PageBreak(&'a PageBreakNode<'a>),
-    Paragraph(&'a ParagraphNode<'a>),
-    Table(&'a TableNode<'a>),
-}
-
-impl<'a> RenderNode<'a> {
-    pub fn kind_str(&self) -> &'static str {
-        match self {
-            RenderNode::Block(_) => "Block",
-            RenderNode::Flex(_) => "Flex",
-            RenderNode::Heading(_) => "Heading",
-            RenderNode::Image(_) => "Image",
-            RenderNode::IndexMarker(_) => "IndexMarker",
-            RenderNode::List(_) => "List",
-            RenderNode::ListItem(_) => "ListItem",
-            RenderNode::PageBreak(_) => "PageBreak",
-            RenderNode::Paragraph(_) => "Paragraph",
-            RenderNode::Table(_) => "Table",
-        }
-    }
-}
-
-// Explicit Static Dispatch Implementation
-// FIX: Removed per-node performance recording as string formatting on every node caused 100x slowdown.
-impl<'a> LayoutNode for RenderNode<'a> {
-    fn measure(&self, env: &mut LayoutEnvironment, constraints: BoxConstraints) -> Size {
-        match self {
-            RenderNode::Block(n) => n.measure(env, constraints),
-            RenderNode::Flex(n) => n.measure(env, constraints),
-            RenderNode::Heading(n) => n.measure(env, constraints),
-            RenderNode::Image(n) => n.measure(env, constraints),
-            RenderNode::IndexMarker(n) => n.measure(env, constraints),
-            RenderNode::List(n) => n.measure(env, constraints),
-            RenderNode::ListItem(n) => n.measure(env, constraints),
-            RenderNode::PageBreak(n) => n.measure(env, constraints),
-            RenderNode::Paragraph(n) => n.measure(env, constraints),
-            RenderNode::Table(n) => n.measure(env, constraints),
-        }
-    }
-
-    fn layout(
-        &self,
-        ctx: &mut LayoutContext,
-        constraints: BoxConstraints,
-        break_state: Option<NodeState>,
-    ) -> Result<LayoutResult, LayoutError> {
-        match self {
-            RenderNode::Block(n) => n.layout(ctx, constraints, break_state),
-            RenderNode::Flex(n) => n.layout(ctx, constraints, break_state),
-            RenderNode::Heading(n) => n.layout(ctx, constraints, break_state),
-            RenderNode::Image(n) => n.layout(ctx, constraints, break_state),
-            RenderNode::IndexMarker(n) => n.layout(ctx, constraints, break_state),
-            RenderNode::List(n) => n.layout(ctx, constraints, break_state),
-            RenderNode::ListItem(n) => n.layout(ctx, constraints, break_state),
-            RenderNode::PageBreak(n) => n.layout(ctx, constraints, break_state),
-            RenderNode::Paragraph(n) => n.layout(ctx, constraints, break_state),
-            RenderNode::Table(n) => n.layout(ctx, constraints, break_state),
-        }
-    }
-
-    fn style(&self) -> &ComputedStyle {
-        match self {
-            RenderNode::Block(n) => n.style(),
-            RenderNode::Flex(n) => n.style(),
-            RenderNode::Heading(n) => n.style(),
-            RenderNode::Image(n) => n.style(),
-            RenderNode::IndexMarker(n) => n.style(),
-            RenderNode::List(n) => n.style(),
-            RenderNode::ListItem(n) => n.style(),
-            RenderNode::PageBreak(n) => n.style(),
-            RenderNode::Paragraph(n) => n.style(),
-            RenderNode::Table(n) => n.style(),
-        }
-    }
-
-    fn check_for_page_break(&self) -> Option<Option<TextStr>> {
-        match self {
-            RenderNode::PageBreak(n) => n.check_for_page_break(),
-            RenderNode::Block(n) => n.check_for_page_break(),
-            _ => None,
-        }
-    }
-}
-
 pub trait LayoutNode: Debug + Sync {
-    fn measure(&self, env: &mut LayoutEnvironment, constraints: BoxConstraints) -> Size;
+    // Note: env is now an immutable reference using interior mutability
+    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<Size, LayoutError>;
 
     fn layout(
         &self,

@@ -5,8 +5,9 @@ use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::engine::{LayoutEngine, LayoutStore};
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
-    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode,
+    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
 };
+use super::RenderNode;
 use crate::core::layout::nodes::block::BlockNode;
 use crate::core::layout::nodes::list_item::ListItemNode;
 use crate::core::layout::style::ComputedStyle;
@@ -87,7 +88,7 @@ impl<'a> LayoutNode for ListNode<'a> {
         self.block.style()
     }
 
-    fn measure(&self, env: &mut LayoutEnvironment, constraints: BoxConstraints) -> Size {
+    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<Size, LayoutError> {
         self.block.measure(env, constraints)
     }
 

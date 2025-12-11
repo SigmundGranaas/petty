@@ -5,8 +5,9 @@ use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::engine::{LayoutEngine, LayoutStore};
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
-    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode,
+    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
 };
+use super::RenderNode;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{
     ImageElement, LayoutElement, LayoutError, PositionedElement,
@@ -28,12 +29,11 @@ impl NodeBuilder for ImageBuilder {
     }
 }
 
-// FIX: Added lifetime 'a to ImageNode to hold references
 #[derive(Debug, Clone)]
 pub struct ImageNode<'a> {
     id: Option<&'a str>,
     src: &'a str,
-    style: &'a ComputedStyle,
+    style: Arc<ComputedStyle>,
 }
 
 impl<'a> ImageNode<'a> {
@@ -43,9 +43,6 @@ impl<'a> ImageNode<'a> {
         parent_style: Arc<ComputedStyle>,
         store: &'a LayoutStore,
     ) -> Result<RenderNode<'a>, LayoutError> {
-        // We cannot use store.bump directly inside new() easily without passing it,
-        // so we inline construction or pass store.
-
         let IRNode::Image { meta, src } = node else {
             return Err(LayoutError::BuilderMismatch("Image", node.kind()));
         };
@@ -121,15 +118,15 @@ impl<'a> ImageNode<'a> {
 
 impl<'a> LayoutNode for ImageNode<'a> {
     fn style(&self) -> &ComputedStyle {
-        self.style
+        self.style.as_ref()
     }
 
-    fn measure(&self, _env: &mut LayoutEnvironment, constraints: BoxConstraints) -> Size {
+    fn measure(&self, _env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<Size, LayoutError> {
         let content_size = self.resolve_sizes(constraints);
         let total_height = self.style.box_model.margin.top
             + content_size.height
             + self.style.box_model.margin.bottom;
-        Size::new(content_size.width, total_height)
+        Ok(Size::new(content_size.width, total_height))
     }
 
     fn layout(
@@ -169,7 +166,7 @@ impl<'a> LayoutNode for ImageNode<'a> {
             element: LayoutElement::Image(ImageElement {
                 src: self.src.to_string(), // Copy to output String
             }),
-            style: Arc::new(self.style.clone()),
+            style: self.style.clone(),
         };
         ctx.push_element(element);
 

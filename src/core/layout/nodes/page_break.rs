@@ -5,8 +5,9 @@ use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::engine::{LayoutEngine, LayoutStore};
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
-    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode,
+    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
 };
+use super::RenderNode;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::LayoutError;
 use std::sync::Arc;
@@ -25,11 +26,10 @@ impl NodeBuilder for PageBreakBuilder {
     }
 }
 
-// FIX: Added lifetime 'a
 #[derive(Debug, Clone)]
 pub struct PageBreakNode<'a> {
     pub master_name: Option<&'a str>,
-    style: &'a ComputedStyle,
+    style: Arc<ComputedStyle>,
 }
 
 impl<'a> PageBreakNode<'a> {
@@ -44,7 +44,6 @@ impl<'a> PageBreakNode<'a> {
             _ => return Err(LayoutError::BuilderMismatch("PageBreak", node.kind())),
         };
 
-        // FIX: Allocate master_name in arena
         let master_ref = master_name.as_ref().map(|s| store.alloc_str(s));
         // Needs dummy style
         let style = Arc::new(ComputedStyle::default());
@@ -60,11 +59,11 @@ impl<'a> PageBreakNode<'a> {
 
 impl<'a> LayoutNode for PageBreakNode<'a> {
     fn style(&self) -> &ComputedStyle {
-        self.style
+        self.style.as_ref()
     }
 
-    fn measure(&self, _env: &mut LayoutEnvironment, _constraints: BoxConstraints) -> Size {
-        Size::zero()
+    fn measure(&self, _env: &LayoutEnvironment, _constraints: BoxConstraints) -> Result<Size, LayoutError> {
+        Ok(Size::zero())
     }
 
     fn layout(

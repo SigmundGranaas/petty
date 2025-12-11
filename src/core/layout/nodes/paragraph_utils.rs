@@ -1,5 +1,3 @@
-// src/core/layout/nodes/paragraph_utils.rs
-
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{LayoutContext, LayoutElement, LayoutEngine, PositionedElement, TextElement};
 use crate::core::layout::text::{TextSpan, InlineImageEntry};
@@ -9,7 +7,6 @@ use rustybuzz::{UnicodeBuffer, Feature};
 use ttf_parser::Tag;
 use std::cell::RefCell;
 use crate::core::layout::node::LayoutNode;
-use std::time::Instant;
 
 // Reuse buffer to avoid allocations in the tight loop
 thread_local! {
@@ -71,8 +68,6 @@ pub fn shape_text(
         Feature::new(Tag::from_bytes(b"kern"), 1, ..)
     ]);
 
-    // OPTIMIZATION: Cache the last used font to avoid engine/lock overhead for adjacent spans.
-    // We use Option<&Arc<ComputedStyle>> to allow value comparison via PartialEq.
     let mut last_style_ref: Option<&Arc<ComputedStyle>> = None;
     let mut last_font_data: Option<crate::core::layout::fonts::FontData> = None;
 
@@ -97,7 +92,6 @@ pub fn shape_text(
                 baseline_offset: height,
             });
 
-            // Reset font optimization cache on image break
             last_style_ref = None;
             last_font_data = None;
 
@@ -105,8 +99,6 @@ pub fn shape_text(
             continue;
         }
 
-        // Optimized Font Lookup:
-        // Use PartialEq on ComputedStyle (which uses a fast u64 hash check) instead of pointer equality.
         let font_data = if let Some(last) = last_style_ref {
             if **last == *span.style {
                 last_font_data.clone()
@@ -133,22 +125,25 @@ pub fn shape_text(
             }
         };
 
-        let face = font_data.face();
+        // Stack allocation of Face, safe because font_data (Arc<Vec<u8>>) outlives it
+        let face = match font_data.as_face() {
+            Some(f) => f,
+            None => {
+                current_char_idx += span_len;
+                continue;
+            }
+        };
 
         let scale = span.style.text.font_size / face.units_per_em() as f32;
         let ascender = face.ascender() as f32 * scale;
         let style_line_height = span.style.text.line_height;
         let baseline_offset = (style_line_height - (style_line_height - ascender)) / 2.0 + ascender;
 
-        // OPTIMIZATION: Recycle the UnicodeBuffer from thread-local storage
-        // to avoid allocating a new buffer for every text span.
         let mut buffer = SCRATCH_BUFFER.with(|b| b.borrow_mut().take().unwrap_or_else(UnicodeBuffer::new));
         buffer.push_str(span.text);
         buffer.guess_segment_properties();
 
-        let glyph_buffer = rustybuzz::shape(face, features, buffer);
-
-        // REMOVED LOGGING: Removed record_perf call here
+        let glyph_buffer = rustybuzz::shape(&face, features, buffer);
 
         let infos = glyph_buffer.glyph_infos();
         let positions = glyph_buffer.glyph_positions();
@@ -168,7 +163,6 @@ pub fn shape_text(
             total_width += x_advance;
         }
 
-        // Return the buffer to the pool for reuse
         let recycled_buffer = glyph_buffer.clear();
         SCRATCH_BUFFER.with(|b| *b.borrow_mut() = Some(recycled_buffer));
 
@@ -192,7 +186,7 @@ pub fn shape_text(
     runs
 }
 
-pub fn break_lines(runs: &[ShapedRun], max_width: f32, block_style: &ComputedStyle) -> Vec<LineLayout> {
+pub fn break_lines(runs: &[ShapedRun], max_width: f32, block_style: &ComputedStyle, full_text: &str) -> Vec<LineLayout> {
     let mut lines = Vec::new();
     let mut current_line_items = Vec::new();
     let mut current_line_width = 0.0;
@@ -202,7 +196,7 @@ pub fn break_lines(runs: &[ShapedRun], max_width: f32, block_style: &ComputedSty
     for (run_idx, run) in runs.iter().enumerate() {
         if run.is_image {
             if current_line_width + run.width > max_width && !current_line_items.is_empty() {
-                lines.push(finalize_line(current_line_items, current_line_width, current_line_height, current_line_baseline, max_width, &block_style.text.text_align));
+                lines.push(finalize_line(current_line_items, current_line_width, current_line_height, current_line_baseline, max_width, &block_style.text.text_align, full_text, runs));
                 current_line_items = Vec::new();
                 current_line_width = 0.0;
                 current_line_height = 0.0;
@@ -229,10 +223,65 @@ pub fn break_lines(runs: &[ShapedRun], max_width: f32, block_style: &ComputedSty
 
         while glyph_idx < run.glyphs.len() {
             let glyph = &run.glyphs[glyph_idx];
+            let cluster = glyph.cluster as usize;
 
-            if current_line_width + current_segment_width + glyph.x_advance > max_width {
+            let is_newline = cluster < full_text.len() && full_text.as_bytes()[cluster] == b'\n';
+            let is_space = cluster < full_text.len() && full_text.as_bytes()[cluster] == b' ';
+
+            let char_width = glyph.x_advance;
+
+            if is_newline {
+                if glyph_idx >= glyph_start {
+                    current_line_items.push(LineItem {
+                        run_index: run_idx,
+                        start_glyph: glyph_start,
+                        end_glyph: glyph_idx + 1,
+                        x: current_line_width,
+                        width: current_segment_width + char_width,
+                    });
+                }
+
+                lines.push(finalize_line(current_line_items, current_line_width + current_segment_width + char_width, current_line_height, current_line_baseline, max_width, &block_style.text.text_align, full_text, runs));
+
+                current_line_items = Vec::new();
+                current_line_width = 0.0;
+                current_segment_width = 0.0;
+
+                glyph_start = glyph_idx + 1;
+                glyph_idx += 1;
+                continue;
+            }
+
+            if is_space {
+                if current_line_width + current_segment_width + char_width > max_width {
+                    if !current_line_items.is_empty() {
+                        lines.push(finalize_line(current_line_items, current_line_width + current_segment_width, current_line_height, current_line_baseline, max_width, &block_style.text.text_align, full_text, runs));
+                        current_line_items = Vec::new();
+                        current_line_width = 0.0;
+                        current_segment_width = 0.0;
+                    }
+                }
+
+                if glyph_idx >= glyph_start {
+                    current_line_items.push(LineItem {
+                        run_index: run_idx,
+                        start_glyph: glyph_start,
+                        end_glyph: glyph_idx + 1,
+                        x: current_line_width,
+                        width: current_segment_width + char_width,
+                    });
+                    current_line_width += current_segment_width + char_width;
+                    current_segment_width = 0.0;
+                    glyph_start = glyph_idx + 1;
+                }
+
+                glyph_idx += 1;
+                continue;
+            }
+
+            if current_line_width + current_segment_width + char_width > max_width {
                 if current_line_items.is_empty() && glyph_start == glyph_idx {
-                    current_segment_width += glyph.x_advance;
+                    current_segment_width += char_width;
                     glyph_idx += 1;
                     continue;
                 }
@@ -246,16 +295,16 @@ pub fn break_lines(runs: &[ShapedRun], max_width: f32, block_style: &ComputedSty
                         width: current_segment_width,
                     });
                 }
-                lines.push(finalize_line(current_line_items, current_line_width + current_segment_width, current_line_height, current_line_baseline, max_width, &block_style.text.text_align));
+
+                lines.push(finalize_line(current_line_items, current_line_width + current_segment_width, current_line_height, current_line_baseline, max_width, &block_style.text.text_align, full_text, runs));
                 current_line_items = Vec::new();
                 current_line_width = 0.0;
                 current_segment_width = 0.0;
-                current_line_height = run.line_height;
-                current_line_baseline = run.baseline_offset;
                 glyph_start = glyph_idx;
                 continue;
             }
-            current_segment_width += glyph.x_advance;
+
+            current_segment_width += char_width;
             glyph_idx += 1;
         }
 
@@ -272,12 +321,12 @@ pub fn break_lines(runs: &[ShapedRun], max_width: f32, block_style: &ComputedSty
     }
 
     if !current_line_items.is_empty() {
-        lines.push(finalize_line(current_line_items, current_line_width, current_line_height, current_line_baseline, max_width, &block_style.text.text_align));
+        lines.push(finalize_line(current_line_items, current_line_width, current_line_height, current_line_baseline, max_width, &block_style.text.text_align, full_text, runs));
     }
     lines
 }
 
-fn finalize_line(mut items: Vec<LineItem>, content_width: f32, height: f32, baseline: f32, max_width: f32, align: &TextAlign) -> LineLayout {
+fn finalize_line(mut items: Vec<LineItem>, content_width: f32, height: f32, baseline: f32, max_width: f32, align: &TextAlign, full_text: &str, runs: &[ShapedRun]) -> LineLayout {
     if !max_width.is_finite() {
         return LineLayout { items, width: content_width, height, baseline };
     }
@@ -292,6 +341,41 @@ fn finalize_line(mut items: Vec<LineItem>, content_width: f32, height: f32, base
         TextAlign::Right => {
             for item in &mut items {
                 item.x += free_space;
+            }
+        }
+        TextAlign::Justify => {
+            let mut space_count = 0;
+            for item in &items {
+                if item.end_glyph > 0 {
+                    let run = &runs[item.run_index];
+                    if item.end_glyph <= run.glyphs.len() {
+                        let last_glyph = &run.glyphs[item.end_glyph - 1];
+                        let cluster = last_glyph.cluster as usize;
+                        if cluster < full_text.len() && full_text.as_bytes()[cluster] == b' ' {
+                            space_count += 1;
+                        }
+                    }
+                }
+            }
+
+            if space_count > 0 && free_space > 0.0 {
+                let extra_per_space = free_space / space_count as f32;
+                let mut accumulated_offset = 0.0;
+
+                for item in &mut items {
+                    item.x += accumulated_offset;
+
+                    if item.end_glyph > 0 {
+                        let run = &runs[item.run_index];
+                        if item.end_glyph <= run.glyphs.len() {
+                            let last_glyph = &run.glyphs[item.end_glyph - 1];
+                            let cluster = last_glyph.cluster as usize;
+                            if cluster < full_text.len() && full_text.as_bytes()[cluster] == b' ' {
+                                accumulated_offset += extra_per_space;
+                            }
+                        }
+                    }
+                }
             }
         }
         _ => {}

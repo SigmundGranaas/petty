@@ -1,12 +1,14 @@
 use crate::core::layout::engine::{LayoutEngine, LayoutStore};
-use crate::core::layout::node::RenderNode;
-use crate::core::layout::node_kind::NodeKind;
+use crate::core::layout::nodes::RenderNode;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::LayoutError;
-use std::collections::HashMap;
 use std::sync::Arc;
 use crate::core::idf::IRNode;
 
+/// Trait defining the interface for building a RenderNode from an IRNode.
+///
+/// While we utilize static dispatch in the engine for performance, this trait
+/// ensures interface consistency across all node builders.
 pub trait NodeBuilder: Send + Sync {
     fn build<'a>(
         &self,
@@ -15,30 +17,4 @@ pub trait NodeBuilder: Send + Sync {
         parent_style: Arc<ComputedStyle>,
         store: &'a LayoutStore,
     ) -> Result<RenderNode<'a>, LayoutError>;
-}
-
-pub struct NodeRegistry {
-    builders: HashMap<NodeKind, Box<dyn NodeBuilder>>,
-}
-
-impl NodeRegistry {
-    pub fn new() -> Self {
-        Self {
-            builders: HashMap::new(),
-        }
-    }
-
-    pub fn register(&mut self, kind: NodeKind, builder: Box<dyn NodeBuilder>) {
-        self.builders.insert(kind, builder);
-    }
-
-    pub fn get(&self, kind: NodeKind) -> Option<&dyn NodeBuilder> {
-        self.builders.get(&kind).map(|b| b.as_ref())
-    }
-}
-
-impl Default for NodeRegistry {
-    fn default() -> Self {
-        Self::new()
-    }
 }

@@ -6,9 +6,10 @@ use crate::core::layout::engine::{LayoutEngine, LayoutStore};
 use crate::core::layout::elements::RectElement;
 use crate::core::layout::geom::{self, BoxConstraints, Size};
 use crate::core::layout::node::{
-    BlockState, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode,
+    BlockState, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
 };
-use crate::core::layout::style::ComputedStyle;
+use super::RenderNode;
+use crate::core::layout::style::{ComputedStyle, ComputedStyleData};
 use crate::core::layout::{LayoutElement, LayoutError, PositionedElement};
 use crate::core::style::border::Border;
 use crate::core::style::dimension::Dimension;
@@ -32,7 +33,7 @@ impl NodeBuilder for BlockBuilder {
 pub struct BlockNode<'a> {
     pub id: Option<&'a str>,
     pub children: &'a [RenderNode<'a>],
-    pub style: &'a ComputedStyle,
+    pub style: Arc<ComputedStyle>,
 }
 
 impl<'a> BlockNode<'a> {
@@ -91,20 +92,17 @@ impl<'a> BlockNode<'a> {
 
 impl<'a> LayoutNode for BlockNode<'a> {
     fn style(&self) -> &ComputedStyle {
-        self.style
+        self.style.as_ref()
     }
 
-    fn measure(&self, env: &mut LayoutEnvironment, constraints: BoxConstraints) -> Size {
+    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<Size, LayoutError> {
         let h_deduction = self.style.padding_x() + self.style.border_x();
         let padding_y = self.style.padding_y();
         let border_y = self.style.border_y();
         let margin_y = self.style.box_model.margin.top + self.style.box_model.margin.bottom;
 
-        // OPTIMIZATION: If width AND height are fixed in style, return immediately.
-        // We use references (&) to avoid moving out of the shared style struct.
-        // w and h become &f32, which can be used in arithmetic directly.
         if let (Some(Dimension::Pt(w)), Some(Dimension::Pt(h))) = (&self.style.box_model.width, &self.style.box_model.height) {
-            return Size::new(w + h_deduction, h + margin_y);
+            return Ok(Size::new(w + h_deduction, h + margin_y));
         }
 
         let child_constraints = self.style.content_constraints(constraints);
@@ -113,7 +111,7 @@ impl<'a> LayoutNode for BlockNode<'a> {
         let mut total_content_height: f32 = 0.0;
 
         for child in self.children {
-            let child_size = child.measure(env, child_constraints);
+            let child_size = child.measure(env, child_constraints)?;
             max_child_width = max_child_width.max(child_size.width);
             total_content_height += child_size.height;
         }
@@ -132,7 +130,7 @@ impl<'a> LayoutNode for BlockNode<'a> {
             max_child_width + h_deduction
         };
 
-        Size::new(computed_width, height)
+        Ok(Size::new(computed_width, height))
     }
 
     fn layout(
@@ -157,17 +155,18 @@ impl<'a> LayoutNode for BlockNode<'a> {
 
         let is_continuation = start_index > 0 || child_resume_state.is_some();
 
+        // REFACTORED: Use LayoutContext helpers for margin collapsing
         if !is_continuation {
-            let margin_to_add = self.style.box_model.margin.top.max(ctx.last_v_margin);
-            if ctx.cursor_y() > 0.0 && margin_to_add > ctx.available_height() {
+            if ctx.prepare_for_block(self.style.box_model.margin.top) {
                 return Ok(LayoutResult::Break(NodeState::Block(BlockState {
                     child_index: 0,
                     child_state: None,
                 })));
             }
-            ctx.advance_cursor(margin_to_add);
+        } else {
+            // If continuing, ensure previous margins are cleared so we don't double add them
+            ctx.last_v_margin = 0.0;
         }
-        ctx.last_v_margin = 0.0;
 
         let border_top = self.style.border_top_width();
         let border_left = self.style.border_left_width();
@@ -219,7 +218,7 @@ impl<'a> LayoutNode for BlockNode<'a> {
 
         let bg_elements = create_background_and_borders(
             ctx.bounds(),
-            self.style,
+            &self.style,
             block_start_y_in_ctx,
             actual_used_height,
             !is_continuation,
@@ -235,7 +234,8 @@ impl<'a> LayoutNode for BlockNode<'a> {
                 let border_bottom = self.style.border_bottom_width();
                 let bottom_spacing = self.style.box_model.padding.bottom + border_bottom;
                 ctx.set_cursor_y(content_start_y_in_ctx + actual_used_height + bottom_spacing);
-                ctx.last_v_margin = self.style.box_model.margin.bottom;
+                // REFACTORED: Use finish_block helper
+                ctx.finish_block(self.style.box_model.margin.bottom);
                 Ok(LayoutResult::Finished)
             }
             LayoutResult::Break(state) => {
@@ -287,8 +287,9 @@ pub fn create_background_and_borders(
     };
 
     if style.misc.background_color.is_some() {
-        let mut bg_style = ComputedStyle::default();
-        bg_style.misc.background_color = style.misc.background_color.clone();
+        let mut bg_data = ComputedStyleData::default();
+        bg_data.misc.background_color = style.misc.background_color.clone();
+        let bg_style = ComputedStyle::new(bg_data);
 
         let bg_rect = geom::Rect {
             x: border_left,
@@ -309,8 +310,10 @@ pub fn create_background_and_borders(
     let mut draw_border = |b: &Option<Border>, rect: geom::Rect| {
         if let Some(border) = b {
             if border.width > 0.0 {
-                let mut border_style = ComputedStyle::default();
-                border_style.misc.background_color = Some(border.color.clone());
+                let mut border_data = ComputedStyleData::default();
+                border_data.misc.background_color = Some(border.color.clone());
+                let border_style = ComputedStyle::new(border_data);
+
                 let positioned_rect = PositionedElement {
                     element: LayoutElement::Rectangle(RectElement),
                     style: Arc::new(border_style),

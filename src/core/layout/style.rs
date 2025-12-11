@@ -189,9 +189,9 @@ impl Default for MiscModel {
     }
 }
 
-/// A fully resolved style with grouped properties.
-#[derive(Debug, Clone, Default)]
-pub struct ComputedStyle {
+/// Holds the raw styling data. Separated from `ComputedStyle` to enforce safe hashing.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ComputedStyleData {
     pub box_model: BoxModel,
     pub border: BorderModel,
     pub text: TextModel,
@@ -199,50 +199,23 @@ pub struct ComputedStyle {
     pub list: ListModel,
     pub table: TableModel,
     pub misc: MiscModel,
-    /// Pre-calculated hash for rapid HashMap lookups (caching).
-    /// This field is ignored in direct comparisons unless hashes differ.
-    cached_hash: u64,
 }
 
-impl Eq for ComputedStyle {}
-
-impl PartialEq for ComputedStyle {
-    fn eq(&self, other: &Self) -> bool {
-        // OPTIMIZATION: Fail fast if hashes differ
-        if self.cached_hash != other.cached_hash {
-            return false;
-        }
-        // Full comparison on collision or match
-        self.box_model == other.box_model
-            && self.border == other.border
-            && self.text == other.text
-            && self.flex == other.flex
-            && self.list == other.list
-            && self.table == other.table
-            && self.misc == other.misc
-    }
-}
-
-impl Hash for ComputedStyle {
+// We implement Hash manually for the Data struct because it contains f32s,
+// which don't support auto-derive Hash.
+impl Hash for ComputedStyleData {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        // OPTIMIZATION: Only hash the pre-calculated u64
-        self.cached_hash.hash(state);
+        self.box_model.hash(state);
+        self.border.hash(state);
+        self.text.hash(state);
+        self.flex.hash(state);
+        self.list.hash(state);
+        self.table.hash(state);
+        self.misc.hash(state);
     }
 }
 
-impl ComputedStyle {
-    fn calculate_full_hash(&self) -> u64 {
-        let mut s = DefaultHasher::new();
-        self.box_model.hash(&mut s);
-        self.border.hash(&mut s);
-        self.text.hash(&mut s);
-        self.flex.hash(&mut s);
-        self.list.hash(&mut s);
-        self.table.hash(&mut s);
-        self.misc.hash(&mut s);
-        s.finish()
-    }
-
+impl ComputedStyleData {
     /// Returns the total width of horizontal padding.
     pub fn padding_x(&self) -> f32 {
         self.box_model.padding.left + self.box_model.padding.right
@@ -303,6 +276,61 @@ impl ComputedStyle {
     }
 }
 
+/// A wrapper around style data that enforces hashing on construction.
+/// This prevents bugs where data changes but the hash doesn't.
+#[derive(Debug, Clone)]
+pub struct ComputedStyle {
+    /// The actual style data.
+    pub inner: ComputedStyleData,
+    /// Pre-calculated hash for rapid HashMap lookups (caching).
+    cached_hash: u64,
+}
+
+impl ComputedStyle {
+    pub fn new(data: ComputedStyleData) -> Self {
+        let mut s = DefaultHasher::new();
+        data.hash(&mut s);
+        Self {
+            inner: data,
+            cached_hash: s.finish(),
+        }
+    }
+}
+
+impl Default for ComputedStyle {
+    fn default() -> Self {
+        Self::new(ComputedStyleData::default())
+    }
+}
+
+// Allows accessing style data directly (e.g. style.box_model)
+impl std::ops::Deref for ComputedStyle {
+    type Target = ComputedStyleData;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl Eq for ComputedStyle {}
+
+impl PartialEq for ComputedStyle {
+    fn eq(&self, other: &Self) -> bool {
+        // OPTIMIZATION: Fail fast if hashes differ
+        if self.cached_hash != other.cached_hash {
+            return false;
+        }
+        // Fallback to full comparison to handle potential collisions
+        self.inner == other.inner
+    }
+}
+
+impl Hash for ComputedStyle {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        // OPTIMIZATION: Only hash the pre-calculated u64
+        self.cached_hash.hash(state);
+    }
+}
+
 /// Computes the style for a node by inheriting from its parent, applying any named
 /// style from the stylesheet, and finally applying any inline style overrides.
 pub fn compute_style(
@@ -311,21 +339,19 @@ pub fn compute_style(
     parent_style: &Arc<ComputedStyle>,
 ) -> Arc<ComputedStyle> {
     if style_sets.is_empty() && style_override.is_none() {
-        let mut computed = (**parent_style).clone();
+        let mut computed_data = parent_style.inner.clone();
+
         // Reset non-inherited box model properties
-        computed.box_model = BoxModel::default();
-        computed.border = BorderModel::default();
-        computed.misc.background_color = None;
-        computed.flex = FlexModel {
+        computed_data.box_model = BoxModel::default();
+        computed_data.border = BorderModel::default();
+        computed_data.misc.background_color = None;
+        computed_data.flex = FlexModel {
             shrink: 1.0, // Default shrink is 1.0
             ..Default::default()
         };
-        computed.table = TableModel::default();
+        computed_data.table = TableModel::default();
 
-        // Re-calculate hash as properties changed
-        computed.cached_hash = computed.calculate_full_hash();
-
-        return Arc::new(computed);
+        return Arc::new(ComputedStyle::new(computed_data));
     }
 
     let mut merged = ElementStyle::default();
@@ -336,7 +362,7 @@ pub fn compute_style(
         merge_element_styles(&mut merged, override_style_def);
     }
 
-    let mut computed = ComputedStyle {
+    let computed_data = ComputedStyleData {
         text: TextModel {
             font_family: merged
                 .font_family
@@ -405,20 +431,14 @@ pub fn compute_style(
             basis: merged.flex_basis.unwrap_or_default(),
             align_self: merged.align_self.unwrap_or_default(),
         },
-        cached_hash: 0,
     };
 
-    // Calculate hash once
-    computed.cached_hash = computed.calculate_full_hash();
-
-    Arc::new(computed)
+    Arc::new(ComputedStyle::new(computed_data))
 }
 
 /// Returns the default style for the document root.
 pub fn get_default_style() -> Arc<ComputedStyle> {
-    let mut style = ComputedStyle::default();
-    style.cached_hash = style.calculate_full_hash();
-    Arc::new(style)
+    Arc::new(ComputedStyle::default())
 }
 
 /// Merges properties from `to_apply` into `base`.

@@ -5,8 +5,9 @@ use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::engine::{LayoutEngine, LayoutStore};
 use crate::core::layout::geom::{BoxConstraints, Size};
 use crate::core::layout::node::{
-    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState, RenderNode,
+    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
 };
+use super::RenderNode;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::LayoutError;
 use std::sync::Arc;
@@ -25,11 +26,10 @@ impl NodeBuilder for IndexMarkerBuilder {
     }
 }
 
-// FIX: Added lifetime 'a
 #[derive(Debug, Clone)]
 pub struct IndexMarkerNode<'a> {
     term: &'a str,
-    style: &'a ComputedStyle,
+    style: Arc<ComputedStyle>,
 }
 
 impl<'a> IndexMarkerNode<'a> {
@@ -42,7 +42,7 @@ impl<'a> IndexMarkerNode<'a> {
         let IRNode::IndexMarker { term, .. } = node else {
             return Err(LayoutError::BuilderMismatch("IndexMarker", node.kind()));
         };
-        // FIX: Allocate term in arena
+
         let term_ref = store.alloc_str(term);
         // Default style needed for layout node, even if invisible
         let style = Arc::new(ComputedStyle::default());
@@ -58,11 +58,11 @@ impl<'a> IndexMarkerNode<'a> {
 
 impl<'a> LayoutNode for IndexMarkerNode<'a> {
     fn style(&self) -> &ComputedStyle {
-        self.style
+        self.style.as_ref()
     }
 
-    fn measure(&self, _env: &mut LayoutEnvironment, _constraints: BoxConstraints) -> Size {
-        Size::zero()
+    fn measure(&self, _env: &LayoutEnvironment, _constraints: BoxConstraints) -> Result<Size, LayoutError> {
+        Ok(Size::zero())
     }
 
     fn layout(

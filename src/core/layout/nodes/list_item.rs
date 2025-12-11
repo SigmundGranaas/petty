@@ -5,8 +5,9 @@ use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::engine::{LayoutEngine, LayoutStore};
 use crate::core::layout::geom::{self, BoxConstraints, Size};
 use crate::core::layout::node::{
-    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, ListItemState, NodeState, RenderNode,
+    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, ListItemState, NodeState,
 };
+use super::RenderNode;
 use crate::core::layout::nodes::block::create_background_and_borders;
 use crate::core::layout::nodes::list_utils::get_marker_text;
 use crate::core::layout::style::ComputedStyle;
@@ -37,7 +38,7 @@ impl NodeBuilder for ListItemBuilder {
 pub struct ListItemNode<'a> {
     id: Option<TextStr>,
     children: &'a [RenderNode<'a>],
-    style: &'a ComputedStyle,
+    style: Arc<ComputedStyle>,
     marker_text: &'a str,
 }
 
@@ -95,18 +96,17 @@ impl<'a> ListItemNode<'a> {
 
 impl<'a> LayoutNode for ListItemNode<'a> {
     fn style(&self) -> &ComputedStyle {
-        self.style
+        self.style.as_ref()
     }
 
-    fn measure(&self, env: &mut LayoutEnvironment, constraints: BoxConstraints) -> Size {
+    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<Size, LayoutError> {
         let border_left = self.style.border_left_width();
         let border_right = self.style.border_right_width();
         const MARKER_SPACING_FACTOR: f32 = 0.4;
         let is_outside_marker = self.style.list.style_position == ListStylePosition::Outside;
 
         let indent = if is_outside_marker && !self.marker_text.is_empty() {
-            // Using updated engine method
-            env.engine.measure_text_width(self.marker_text, self.style)
+            env.engine.measure_text_width(self.marker_text, &self.style)
                 + self.style.text.font_size * MARKER_SPACING_FACTOR
         } else {
             0.0
@@ -132,7 +132,7 @@ impl<'a> LayoutNode for ListItemNode<'a> {
 
         let mut total_content_height = 0.0;
         for child in self.children {
-            total_content_height += child.measure(env, child_constraints).height;
+            total_content_height += child.measure(env, child_constraints)?.height;
         }
 
         let border_top = self.style.border_top_width();
@@ -154,7 +154,7 @@ impl<'a> LayoutNode for ListItemNode<'a> {
             0.0
         };
 
-        Size::new(width, height)
+        Ok(Size::new(width, height))
     }
 
     fn layout(
@@ -183,7 +183,7 @@ impl<'a> LayoutNode for ListItemNode<'a> {
 
         let block_start_y_in_ctx = ctx.cursor_y();
 
-        let marker_width = ctx.env.engine.measure_text_width(self.marker_text, self.style);
+        let marker_width = ctx.env.engine.measure_text_width(self.marker_text, &self.style);
 
         if !self.marker_text.is_empty() && !is_continuation {
             let should_draw = is_outside_marker;
@@ -207,7 +207,7 @@ impl<'a> LayoutNode for ListItemNode<'a> {
                         href: None,
                         text_decoration: TextDecoration::None,
                     }),
-                    style: Arc::new(self.style.clone()),
+                    style: self.style.clone(),
                 };
                 ctx.push_element_at(marker_box, 0.0, block_start_y_in_ctx);
             }
@@ -268,7 +268,7 @@ impl<'a> LayoutNode for ListItemNode<'a> {
 
         let bg_elements = create_background_and_borders(
             ctx.bounds(),
-            self.style,
+            &self.style,
             block_start_y_in_ctx,
             used_height,
             !is_continuation,

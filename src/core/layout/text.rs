@@ -5,14 +5,13 @@ use crate::core::layout::LayoutEngine;
 use crate::core::layout::nodes::image::ImageNode;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::engine::LayoutStore;
-// Removed unused import `use bumpalo::Bump;`
 use std::sync::Arc;
 
 /// Represents a contiguous run of text with a single style.
 #[derive(Debug, Clone)]
 pub struct TextSpan<'a> {
     pub text: &'a str,
-    pub style: Arc<ComputedStyle>, // Changed from &'a ComputedStyle to Arc
+    pub style: Arc<ComputedStyle>,
     pub link_index: usize, // 0 if no link, 1-based index into builder.links
 }
 
@@ -84,7 +83,6 @@ impl<'a, 'b> TextBuilder<'a, 'b> {
                     self.raw_content.push_str(text);
                     let end = self.raw_content.len();
 
-                    // We keep the Arc directly
                     let style = parent_style.clone();
 
                     // OPTIMIZATION: Attempt to merge with the previous span
@@ -94,7 +92,6 @@ impl<'a, 'b> TextBuilder<'a, 'b> {
                         // Check 2: Link index matches
                         if Arc::ptr_eq(&last.1, &style) && last.2 == current_link_idx {
                             // Check 3: Ensure we don't merge into an Image span
-                            // Images in the pipeline rely on exact 1-to-1 span mapping
                             let is_image_span = if let Some(last_img) = self.inline_images.last() {
                                 last_img.index == last.0.start
                             } else {
@@ -131,7 +128,6 @@ impl<'a, 'b> TextBuilder<'a, 'b> {
                     self.process_inlines_recursive(children, &style, current_link_idx);
                 }
                 InlineNode::LineBreak => {
-                    // LineBreaks are not merged to ensure consistent handling of hard breaks
                     let start = self.raw_content.len();
                     self.raw_content.push('\n');
                     let end = self.raw_content.len();
@@ -149,7 +145,6 @@ impl<'a, 'b> TextBuilder<'a, 'b> {
                             index: start,
                             node: node_ref,
                         });
-                        // Use parent style for the span container of the image char
                         let style = parent_style.clone();
                         self.span_ranges.push((start..end, style, current_link_idx));
                     }
