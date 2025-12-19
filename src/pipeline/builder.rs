@@ -1,20 +1,20 @@
 use super::config::{GenerationMode, PdfBackend, PipelineCacheConfig};
 use super::orchestrator::DocumentPipeline;
-use petty_core::layout::fonts::SharedFontLibrary;
-use petty_core::error::PipelineError;
-use petty_json_template::JsonParser;
-use petty_core::parser::processor::{TemplateFeatures, TemplateParser};
-use petty_xslt::XsltParser;
 use crate::pipeline::context::PipelineContext;
+use crate::pipeline::provider::Provider;
 use crate::pipeline::provider::metadata::MetadataGeneratingProvider;
 use crate::pipeline::provider::passthrough::PassThroughProvider;
-use crate::pipeline::provider::Provider;
+use crate::pipeline::renderer::Renderer;
 use crate::pipeline::renderer::composing::ComposingRenderer;
 use crate::pipeline::renderer::streaming::SinglePassStreamingRenderer;
-use crate::pipeline::renderer::Renderer;
+use petty_core::error::PipelineError;
+use petty_core::layout::fonts::SharedFontLibrary;
+use petty_core::parser::processor::{TemplateFeatures, TemplateParser};
+use petty_core::traits::ResourceProvider;
+use petty_json_template::JsonParser;
 use petty_resource::FilesystemResourceProvider;
 use petty_template_dsl::Template;
-use petty_core::traits::ResourceProvider;
+use petty_xslt::XsltParser;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -63,10 +63,7 @@ impl PipelineBuilder {
     /// The template language (XSLT, JSON) is inferred from the file extension.
     pub fn with_template_file<P: AsRef<Path>>(mut self, path: P) -> Result<Self, PipelineError> {
         let path_ref = path.as_ref();
-        let extension = path_ref
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
+        let extension = path_ref.extension().and_then(|s| s.to_str()).unwrap_or("");
         let resource_base_path = path_ref
             .parent()
             .unwrap_or_else(|| Path::new(""))
@@ -74,7 +71,11 @@ impl PipelineBuilder {
         let template_source = fs::read_to_string(path_ref).map_err(|e| {
             PipelineError::Io(io::Error::new(
                 e.kind(),
-                format!("Failed to read template from '{}': {}", path_ref.display(), e),
+                format!(
+                    "Failed to read template from '{}': {}",
+                    path_ref.display(),
+                    e
+                ),
             ))
         })?;
 
@@ -210,7 +211,8 @@ impl PipelineBuilder {
                 } else {
                     log::info!("Template is streamable. Selecting simple Streaming pipeline.");
                     provider = Provider::PassThrough(PassThroughProvider);
-                    renderer = Renderer::Streaming(SinglePassStreamingRenderer::new(self.pdf_backend));
+                    renderer =
+                        Renderer::Streaming(SinglePassStreamingRenderer::new(self.pdf_backend));
                 }
             }
         }

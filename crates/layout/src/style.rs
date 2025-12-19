@@ -1,13 +1,13 @@
 // src/core/layout/style.rs
 
 use petty_style::border::Border;
-use petty_types::color::Color;
 use petty_style::dimension::{Dimension, Margins};
 use petty_style::flex::{AlignItems, AlignSelf, FlexDirection, FlexWrap, JustifyContent};
 use petty_style::font::{FontStyle, FontWeight};
 use petty_style::list::{ListStylePosition, ListStyleType};
 use petty_style::stylesheet::ElementStyle;
 use petty_style::text::{TextAlign, TextDecoration};
+use petty_types::color::Color;
 use petty_types::geometry::BoxConstraints;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -228,14 +228,14 @@ impl ComputedStyleData {
 
     /// Returns the total width of horizontal borders.
     pub fn border_x(&self) -> f32 {
-        self.border.left.as_ref().map_or(0.0, |b| b.width) +
-            self.border.right.as_ref().map_or(0.0, |b| b.width)
+        self.border.left.as_ref().map_or(0.0, |b| b.width)
+            + self.border.right.as_ref().map_or(0.0, |b| b.width)
     }
 
     /// Returns the total height of vertical borders.
     pub fn border_y(&self) -> f32 {
-        self.border.top.as_ref().map_or(0.0, |b| b.width) +
-            self.border.bottom.as_ref().map_or(0.0, |b| b.width)
+        self.border.top.as_ref().map_or(0.0, |b| b.width)
+            + self.border.bottom.as_ref().map_or(0.0, |b| b.width)
     }
 
     pub fn border_top_width(&self) -> f32 {
@@ -387,7 +387,9 @@ pub fn compute_style(
             text_decoration: merged
                 .text_decoration
                 .unwrap_or_else(|| parent_style.text.text_decoration.clone()),
-            color: merged.color.unwrap_or_else(|| parent_style.text.color.clone()),
+            color: merged
+                .color
+                .unwrap_or_else(|| parent_style.text.color.clone()),
         },
         misc: MiscModel {
             widows: merged.widows.unwrap_or(parent_style.misc.widows),
@@ -403,7 +405,9 @@ pub fn compute_style(
                 .unwrap_or_else(|| parent_style.list.style_position.clone()),
         },
         table: TableModel {
-            border_spacing: merged.border_spacing.unwrap_or(parent_style.table.border_spacing),
+            border_spacing: merged
+                .border_spacing
+                .unwrap_or(parent_style.table.border_spacing),
         },
         // Non-inherited properties
         box_model: BoxModel {
@@ -443,37 +447,103 @@ pub fn get_default_style() -> Arc<ComputedStyle> {
 
 /// Merges properties from `to_apply` into `base`.
 fn merge_element_styles(base: &mut ElementStyle, to_apply: &ElementStyle) {
-    if to_apply.font_family.is_some() { base.font_family = to_apply.font_family.clone(); }
-    if to_apply.font_size.is_some() { base.font_size = to_apply.font_size; }
-    if to_apply.font_weight.is_some() { base.font_weight = to_apply.font_weight.clone(); }
-    if to_apply.font_style.is_some() { base.font_style = to_apply.font_style.clone(); }
-    if to_apply.line_height.is_some() { base.line_height = to_apply.line_height; }
-    if to_apply.text_align.is_some() { base.text_align = to_apply.text_align.clone(); }
-    if to_apply.color.is_some() { base.color = to_apply.color.clone(); }
-    if to_apply.text_decoration.is_some() { base.text_decoration = to_apply.text_decoration.clone(); }
-    if to_apply.widows.is_some() { base.widows = to_apply.widows; }
-    if to_apply.orphans.is_some() { base.orphans = to_apply.orphans; }
-    if to_apply.background_color.is_some() { base.background_color = to_apply.background_color.clone(); }
-    if to_apply.border.is_some() { base.border = to_apply.border.clone(); }
-    if to_apply.border_top.is_some() { base.border_top = to_apply.border_top.clone(); }
-    if to_apply.border_right.is_some() { base.border_right = to_apply.border_right.clone(); }
-    if to_apply.border_bottom.is_some() { base.border_bottom = to_apply.border_bottom.clone(); }
-    if to_apply.border_left.is_some() { base.border_left = to_apply.border_left.clone(); }
-    if to_apply.margin.is_some() { base.margin = to_apply.margin.clone(); }
-    if to_apply.padding.is_some() { base.padding = to_apply.padding.clone(); }
-    if to_apply.width.is_some() { base.width = to_apply.width.clone(); }
-    if to_apply.height.is_some() { base.height = to_apply.height.clone(); }
-    if to_apply.list_style_type.is_some() { base.list_style_type = to_apply.list_style_type.clone(); }
-    if to_apply.list_style_position.is_some() { base.list_style_position = to_apply.list_style_position.clone(); }
-    if to_apply.list_style_image.is_some() { base.list_style_image = to_apply.list_style_image.clone(); }
-    if to_apply.border_spacing.is_some() { base.border_spacing = to_apply.border_spacing; }
-    if to_apply.flex_direction.is_some() { base.flex_direction = to_apply.flex_direction.clone(); }
-    if to_apply.flex_wrap.is_some() { base.flex_wrap = to_apply.flex_wrap.clone(); }
-    if to_apply.justify_content.is_some() { base.justify_content = to_apply.justify_content.clone(); }
-    if to_apply.align_items.is_some() { base.align_items = to_apply.align_items.clone(); }
-    if to_apply.order.is_some() { base.order = to_apply.order; }
-    if to_apply.flex_grow.is_some() { base.flex_grow = to_apply.flex_grow; }
-    if to_apply.flex_shrink.is_some() { base.flex_shrink = to_apply.flex_shrink; }
-    if to_apply.flex_basis.is_some() { base.flex_basis = to_apply.flex_basis.clone(); }
-    if to_apply.align_self.is_some() { base.align_self = to_apply.align_self.clone(); }
+    if to_apply.font_family.is_some() {
+        base.font_family = to_apply.font_family.clone();
+    }
+    if to_apply.font_size.is_some() {
+        base.font_size = to_apply.font_size;
+    }
+    if to_apply.font_weight.is_some() {
+        base.font_weight = to_apply.font_weight.clone();
+    }
+    if to_apply.font_style.is_some() {
+        base.font_style = to_apply.font_style.clone();
+    }
+    if to_apply.line_height.is_some() {
+        base.line_height = to_apply.line_height;
+    }
+    if to_apply.text_align.is_some() {
+        base.text_align = to_apply.text_align.clone();
+    }
+    if to_apply.color.is_some() {
+        base.color = to_apply.color.clone();
+    }
+    if to_apply.text_decoration.is_some() {
+        base.text_decoration = to_apply.text_decoration.clone();
+    }
+    if to_apply.widows.is_some() {
+        base.widows = to_apply.widows;
+    }
+    if to_apply.orphans.is_some() {
+        base.orphans = to_apply.orphans;
+    }
+    if to_apply.background_color.is_some() {
+        base.background_color = to_apply.background_color.clone();
+    }
+    if to_apply.border.is_some() {
+        base.border = to_apply.border.clone();
+    }
+    if to_apply.border_top.is_some() {
+        base.border_top = to_apply.border_top.clone();
+    }
+    if to_apply.border_right.is_some() {
+        base.border_right = to_apply.border_right.clone();
+    }
+    if to_apply.border_bottom.is_some() {
+        base.border_bottom = to_apply.border_bottom.clone();
+    }
+    if to_apply.border_left.is_some() {
+        base.border_left = to_apply.border_left.clone();
+    }
+    if to_apply.margin.is_some() {
+        base.margin = to_apply.margin.clone();
+    }
+    if to_apply.padding.is_some() {
+        base.padding = to_apply.padding.clone();
+    }
+    if to_apply.width.is_some() {
+        base.width = to_apply.width.clone();
+    }
+    if to_apply.height.is_some() {
+        base.height = to_apply.height.clone();
+    }
+    if to_apply.list_style_type.is_some() {
+        base.list_style_type = to_apply.list_style_type.clone();
+    }
+    if to_apply.list_style_position.is_some() {
+        base.list_style_position = to_apply.list_style_position.clone();
+    }
+    if to_apply.list_style_image.is_some() {
+        base.list_style_image = to_apply.list_style_image.clone();
+    }
+    if to_apply.border_spacing.is_some() {
+        base.border_spacing = to_apply.border_spacing;
+    }
+    if to_apply.flex_direction.is_some() {
+        base.flex_direction = to_apply.flex_direction.clone();
+    }
+    if to_apply.flex_wrap.is_some() {
+        base.flex_wrap = to_apply.flex_wrap.clone();
+    }
+    if to_apply.justify_content.is_some() {
+        base.justify_content = to_apply.justify_content.clone();
+    }
+    if to_apply.align_items.is_some() {
+        base.align_items = to_apply.align_items.clone();
+    }
+    if to_apply.order.is_some() {
+        base.order = to_apply.order;
+    }
+    if to_apply.flex_grow.is_some() {
+        base.flex_grow = to_apply.flex_grow;
+    }
+    if to_apply.flex_shrink.is_some() {
+        base.flex_shrink = to_apply.flex_shrink;
+    }
+    if to_apply.flex_basis.is_some() {
+        base.flex_basis = to_apply.flex_basis.clone();
+    }
+    if to_apply.align_self.is_some() {
+        base.align_self = to_apply.align_self.clone();
+    }
 }

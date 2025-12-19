@@ -1,6 +1,6 @@
-use petty_style::stylesheet::{ElementStyle, PageLayout};
-use petty_json_template::ast::{JsonTemplateFile, StylesheetDef};
 use crate::node::TemplateBuilder;
+use petty_json_template::ast::{JsonTemplateFile, StylesheetDef};
+use petty_style::stylesheet::{ElementStyle, PageLayout};
 use std::collections::HashMap;
 
 /// The top-level container for a programmatically-defined template.
@@ -33,12 +33,18 @@ impl Template {
 
     /// Adds a named page layout (master) to the template's stylesheet.
     pub fn add_page_master(mut self, name: &str, layout: PageLayout) -> Self {
-        self.stylesheet.page_masters.insert(name.to_string(), layout);
+        self.stylesheet
+            .page_masters
+            .insert(name.to_string(), layout);
         self
     }
 
     /// Adds a reusable template definition (a "partial").
-    pub fn add_definition(mut self, name: &str, definition: impl TemplateBuilder + 'static) -> Self {
+    pub fn add_definition(
+        mut self,
+        name: &str,
+        definition: impl TemplateBuilder + 'static,
+    ) -> Self {
         self.stylesheet
             .definitions
             .insert(name.to_string(), Box::new(definition).build());

@@ -1,11 +1,11 @@
-use crate::style::ComputedStyle;
 use crate::LayoutEngine;
-use crate::text::builder::{TextSpan, InlineImageEntry};
-use std::sync::Arc;
-use rustybuzz::{UnicodeBuffer, Feature};
-use ttf_parser::Tag;
-use std::cell::RefCell;
 use crate::interface::LayoutNode;
+use crate::style::ComputedStyle;
+use crate::text::builder::{InlineImageEntry, TextSpan};
+use rustybuzz::{Feature, UnicodeBuffer};
+use std::cell::RefCell;
+use std::sync::Arc;
+use ttf_parser::Tag;
 
 // Reuse buffer to avoid allocations in the tight loop
 thread_local! {
@@ -45,10 +45,12 @@ pub fn shape_text(
     let mut current_char_idx = 0;
 
     static FEATURES: std::sync::OnceLock<Vec<Feature>> = std::sync::OnceLock::new();
-    let features = FEATURES.get_or_init(|| vec![
-        Feature::new(Tag::from_bytes(b"liga"), 1, ..),
-        Feature::new(Tag::from_bytes(b"kern"), 1, ..)
-    ]);
+    let features = FEATURES.get_or_init(|| {
+        vec![
+            Feature::new(Tag::from_bytes(b"liga"), 1, ..),
+            Feature::new(Tag::from_bytes(b"kern"), 1, ..),
+        ]
+    });
 
     let mut last_style_ref: Option<&Arc<ComputedStyle>> = None;
     let mut last_font_data: Option<crate::fonts::FontData> = None;
@@ -57,8 +59,20 @@ pub fn shape_text(
         let span_len = span.text.len();
 
         if let Some(img_entry) = images.iter().find(|img| img.index == current_char_idx) {
-            let width = if let Some(petty_style::dimension::Dimension::Pt(w)) = img_entry.node.style().box_model.width { w } else { 0.0 };
-            let height = if let Some(petty_style::dimension::Dimension::Pt(h)) = img_entry.node.style().box_model.height { h } else { 0.0 };
+            let width = if let Some(petty_style::dimension::Dimension::Pt(w)) =
+                img_entry.node.style().box_model.width
+            {
+                w
+            } else {
+                0.0
+            };
+            let height = if let Some(petty_style::dimension::Dimension::Pt(h)) =
+                img_entry.node.style().box_model.height
+            {
+                h
+            } else {
+                0.0
+            };
 
             runs.push(ShapedRun {
                 glyphs: Vec::new(),
@@ -85,14 +99,16 @@ pub fn shape_text(
             if **last == *span.style {
                 last_font_data.clone()
             } else {
-                let fd = engine.get_font_for_style(&span.style)
+                let fd = engine
+                    .get_font_for_style(&span.style)
                     .or_else(|| engine.get_font_for_style(&engine.get_default_style()));
                 last_style_ref = Some(&span.style);
                 last_font_data = fd.clone();
                 fd
             }
         } else {
-            let fd = engine.get_font_for_style(&span.style)
+            let fd = engine
+                .get_font_for_style(&span.style)
                 .or_else(|| engine.get_font_for_style(&engine.get_default_style()));
             last_style_ref = Some(&span.style);
             last_font_data = fd.clone();
@@ -121,7 +137,8 @@ pub fn shape_text(
         let style_line_height = span.style.text.line_height;
         let baseline_offset = (style_line_height - (style_line_height - ascender)) / 2.0 + ascender;
 
-        let mut buffer = SCRATCH_BUFFER.with(|b| b.borrow_mut().take().unwrap_or_else(UnicodeBuffer::new));
+        let mut buffer =
+            SCRATCH_BUFFER.with(|b| b.borrow_mut().take().unwrap_or_else(UnicodeBuffer::new));
         buffer.push_str(span.text);
         buffer.guess_segment_properties();
 

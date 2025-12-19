@@ -1,9 +1,9 @@
-use petty_types::color::Color;
-use petty_style::font::FontWeight;
-use petty_style::text::TextAlign;
 use crate::builders::*;
 use crate::node::TemplateBuilder;
 use crate::style::StyledWidget;
+use petty_style::font::FontWeight;
+use petty_style::text::TextAlign;
+use petty_types::color::Color;
 
 // Semantic Text Elements
 pub fn h1(text: &str) -> Paragraph {
@@ -31,14 +31,10 @@ pub fn p(text: &str) -> Paragraph {
 }
 
 pub fn subtitle(text: &str) -> Paragraph {
-    Paragraph::new(text)
-        .font_size(10.0)
-        .color(Color::gray(102))
+    Paragraph::new(text).font_size(10.0).color(Color::gray(102))
 }
 
 // A simple container with right-aligned content
 pub fn align_right(child: impl TemplateBuilder + 'static) -> Block {
-    Block::new()
-        .text_align(TextAlign::Right)
-        .child(child)
+    Block::new().text_align(TextAlign::Right).child(child)
 }

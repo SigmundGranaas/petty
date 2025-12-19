@@ -1,8 +1,8 @@
+use crate::pattern::Pattern;
 use petty_style::dimension::Dimension;
 use petty_style::stylesheet::{ElementStyle, Stylesheet};
 use petty_template_core::TemplateFlags;
 use petty_xpath1::Expression;
-use crate::pattern::Pattern;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;

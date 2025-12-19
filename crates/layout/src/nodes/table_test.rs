@@ -1,7 +1,7 @@
 #![cfg(test)]
 
-use petty_idf::{IRNode, TableBody, TableCell, TableColumnDefinition, TableHeader, TableRow};
 use crate::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
+use petty_idf::{IRNode, TableBody, TableCell, TableColumnDefinition, TableHeader, TableRow};
 use petty_style::dimension::{Dimension, Margins, PageSize};
 use petty_style::stylesheet::{PageLayout, Stylesheet};
 use std::collections::HashMap;
@@ -108,11 +108,16 @@ fn test_table_splits_across_pages_and_repeats_header() {
     assert!(find_first_text_box_with_content(page1, "R3C1").is_none());
 
     let page2 = &pages[1];
-    assert!(find_first_text_box_with_content(page2, "Header 1").is_some(), "Header should repeat on page 2");
+    assert!(
+        find_first_text_box_with_content(page2, "Header 1").is_some(),
+        "Header should repeat on page 2"
+    );
     let r3c1 = find_first_text_box_with_content(page2, "R3C1").unwrap();
-    assert!((r3c1.y - (10.0 + 14.4)).abs() < 0.1, "R3C1 should appear after repeated header");
+    assert!(
+        (r3c1.y - (10.0 + 14.4)).abs() < 0.1,
+        "R3C1 should appear after repeated header"
+    );
 }
-
 
 #[test]
 fn test_table_colspan_and_rowspan() {
@@ -120,30 +125,70 @@ fn test_table_colspan_and_rowspan() {
     let table = IRNode::Table {
         meta: Default::default(),
         columns: vec![
-            TableColumnDefinition { width: Some(Dimension::Pt(100.0)), ..Default::default() },
-            TableColumnDefinition { width: Some(Dimension::Pt(100.0)), ..Default::default() },
-            TableColumnDefinition { width: Some(Dimension::Pt(100.0)), ..Default::default() },
+            TableColumnDefinition {
+                width: Some(Dimension::Pt(100.0)),
+                ..Default::default()
+            },
+            TableColumnDefinition {
+                width: Some(Dimension::Pt(100.0)),
+                ..Default::default()
+            },
+            TableColumnDefinition {
+                width: Some(Dimension::Pt(100.0)),
+                ..Default::default()
+            },
         ],
         header: None,
-        body: Box::new(TableBody { rows: vec![
-            // Row 1
-            TableRow { cells: vec![
-                TableCell { row_span: 2, children: vec![create_paragraph("A")], ..Default::default() },
-                TableCell { col_span: 2, children: vec![create_paragraph("B")], ..Default::default() },
-            ]},
-            // Row 2
-            TableRow { cells: vec![
-                // Cell "A" from row 1 occupies this slot
-                TableCell { children: vec![create_paragraph("C")], ..Default::default() },
-                TableCell { children: vec![create_paragraph("D")], ..Default::default() },
-            ]},
-            // Row 3
-            TableRow { cells: vec![
-                TableCell { children: vec![create_paragraph("E")], ..Default::default() },
-                TableCell { children: vec![create_paragraph("F")], ..Default::default() },
-                TableCell { children: vec![create_paragraph("G")], ..Default::default() },
-            ]}
-        ]}),
+        body: Box::new(TableBody {
+            rows: vec![
+                // Row 1
+                TableRow {
+                    cells: vec![
+                        TableCell {
+                            row_span: 2,
+                            children: vec![create_paragraph("A")],
+                            ..Default::default()
+                        },
+                        TableCell {
+                            col_span: 2,
+                            children: vec![create_paragraph("B")],
+                            ..Default::default()
+                        },
+                    ],
+                },
+                // Row 2
+                TableRow {
+                    cells: vec![
+                        // Cell "A" from row 1 occupies this slot
+                        TableCell {
+                            children: vec![create_paragraph("C")],
+                            ..Default::default()
+                        },
+                        TableCell {
+                            children: vec![create_paragraph("D")],
+                            ..Default::default()
+                        },
+                    ],
+                },
+                // Row 3
+                TableRow {
+                    cells: vec![
+                        TableCell {
+                            children: vec![create_paragraph("E")],
+                            ..Default::default()
+                        },
+                        TableCell {
+                            children: vec![create_paragraph("F")],
+                            ..Default::default()
+                        },
+                        TableCell {
+                            children: vec![create_paragraph("G")],
+                            ..Default::default()
+                        },
+                    ],
+                },
+            ],
+        }),
     };
     let (pages, _, _) = paginate_test_nodes(stylesheet, vec![table]).unwrap();
     let page1 = &pages[0];
@@ -157,15 +202,27 @@ fn test_table_colspan_and_rowspan() {
     // Row 1
     assert!((cell_a.x - 10.0).abs() < 0.1);
     assert!((cell_a.y - 10.0).abs() < 0.1);
-    assert!((cell_b.x - (10.0 + 100.0)).abs() < 0.1, "B should be in the second column");
+    assert!(
+        (cell_b.x - (10.0 + 100.0)).abs() < 0.1,
+        "B should be in the second column"
+    );
 
     // Row 2
     // C should be in the second column because A (rowspan=2) is in the first
     assert!((cell_c.x - (10.0 + 100.0)).abs() < 0.1);
-    assert!((cell_c.y - (10.0 + 14.4)).abs() < 0.1, "C should be on the second line");
+    assert!(
+        (cell_c.y - (10.0 + 14.4)).abs() < 0.1,
+        "C should be on the second line"
+    );
     assert!((cell_d.x - (10.0 + 200.0)).abs() < 0.1);
 
     // Row 3
-    assert!((cell_e.x - 10.0).abs() < 0.1, "E should be back in the first column");
-    assert!((cell_e.y - (10.0 + 14.4 * 2.0)).abs() < 0.1, "E should be on the third line");
+    assert!(
+        (cell_e.x - 10.0).abs() < 0.1,
+        "E should be back in the first column"
+    );
+    assert!(
+        (cell_e.y - (10.0 + 14.4 * 2.0)).abs() < 0.1,
+        "E should be on the third line"
+    );
 }

@@ -21,7 +21,9 @@ impl std::error::Error for ExecutorError {}
 
 impl ExecutorError {
     pub fn new(message: impl Into<String>) -> Self {
-        Self { message: message.into() }
+        Self {
+            message: message.into(),
+        }
     }
 }
 
@@ -190,9 +192,8 @@ mod tests {
     fn test_sync_executor_all_failures() {
         let executor = SyncExecutor::new();
         let items = vec![0, 0, 0];
-        let results: Vec<Result<i32, &str>> = executor.execute_all_fallible(items, |_| {
-            Err("always fails")
-        });
+        let results: Vec<Result<i32, &str>> =
+            executor.execute_all_fallible(items, |_| Err("always fails"));
         assert_eq!(results.len(), 3);
         assert!(results.iter().all(|r| r.is_err()));
     }

@@ -1,5 +1,5 @@
 //! Defines the core abstraction for a navigable, read-only data source tree.
-use std::hash::{Hash};
+use std::hash::Hash;
 
 /// A qualified name, consisting of an optional prefix and a local part.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -26,7 +26,9 @@ pub enum NodeType {
 /// source (XML, JSON VDOM, etc.) that implements it.
 ///
 /// `'a` is the lifetime of the underlying data source (e.g., the XML string).
-pub trait DataSourceNode<'a>: std::fmt::Debug + Clone + Copy + PartialEq + Eq + Hash + PartialOrd + Ord {
+pub trait DataSourceNode<'a>:
+    std::fmt::Debug + Clone + Copy + PartialEq + Eq + Hash + PartialOrd + Ord
+{
     /// The type of the node (Element, Text, Attribute, etc.).
     fn node_type(&self) -> NodeType;
 
@@ -59,9 +61,9 @@ pub trait DataSourceNode<'a>: std::fmt::Debug + Clone + Copy + PartialEq + Eq + 
 // Test utilities - publicly available for integration testing in downstream crates
 pub mod tests {
     use super::*;
+    use std::cmp::Ordering;
     use std::collections::HashMap;
     use std::hash::Hasher;
-    use std::cmp::Ordering;
 
     // --- Mock Implementation for TDD ---
 
@@ -129,19 +131,28 @@ pub mod tests {
         fn attributes(&self) -> Box<dyn Iterator<Item = Self> + 'a> {
             let tree = self.tree; // Re-borrow to help the lifetime checker
             let attribute_ids = tree.nodes[&self.id].attributes.clone();
-            Box::new(attribute_ids.into_iter().map(move |id| MockNode { id, tree }))
+            Box::new(
+                attribute_ids
+                    .into_iter()
+                    .map(move |id| MockNode { id, tree }),
+            )
         }
-
-
 
         fn children(&self) -> Box<dyn Iterator<Item = Self> + 'a> {
             let tree = self.tree; // Re-borrow to help the lifetime checker
             let children_ids = tree.nodes[&self.id].children.clone();
-            Box::new(children_ids.into_iter().map(move |id| MockNode { id, tree }))
+            Box::new(
+                children_ids
+                    .into_iter()
+                    .map(move |id| MockNode { id, tree }),
+            )
         }
 
         fn parent(&self) -> Option<Self> {
-            self.tree.parent_map.get(&self.id).map(|&pid| MockNode { id: pid, tree: self.tree })
+            self.tree.parent_map.get(&self.id).map(|&pid| MockNode {
+                id: pid,
+                tree: self.tree,
+            })
         }
     }
 
@@ -157,63 +168,140 @@ pub mod tests {
         let mut nodes = HashMap::new();
         let mut parent_map = HashMap::new();
 
-        nodes.insert(0, MockNodeData {
-            node_type: NodeType::Root, name: None,
-            value: "Hello World".to_string(), children: vec![1, 8, 5, 9, 6], attributes: vec![],
-        });
-        nodes.insert(1, MockNodeData {
-            node_type: NodeType::Element, name: Some(QName { prefix: None, local_part: "para" }),
-            value: "Hello".to_string(), children: vec![4], attributes: vec![2, 3],
-        });
+        nodes.insert(
+            0,
+            MockNodeData {
+                node_type: NodeType::Root,
+                name: None,
+                value: "Hello World".to_string(),
+                children: vec![1, 8, 5, 9, 6],
+                attributes: vec![],
+            },
+        );
+        nodes.insert(
+            1,
+            MockNodeData {
+                node_type: NodeType::Element,
+                name: Some(QName {
+                    prefix: None,
+                    local_part: "para",
+                }),
+                value: "Hello".to_string(),
+                children: vec![4],
+                attributes: vec![2, 3],
+            },
+        );
         parent_map.insert(1, 0);
 
-        nodes.insert(2, MockNodeData {
-            node_type: NodeType::Attribute, name: Some(QName { prefix: None, local_part: "id" }),
-            value: "p1".to_string(), children: vec![], attributes: vec![],
-        });
+        nodes.insert(
+            2,
+            MockNodeData {
+                node_type: NodeType::Attribute,
+                name: Some(QName {
+                    prefix: None,
+                    local_part: "id",
+                }),
+                value: "p1".to_string(),
+                children: vec![],
+                attributes: vec![],
+            },
+        );
         parent_map.insert(2, 1);
 
-        nodes.insert(3, MockNodeData {
-            node_type: NodeType::Attribute, name: Some(QName { prefix: Some("xml"), local_part: "lang" }),
-            value: "en".to_string(), children: vec![], attributes: vec![],
-        });
+        nodes.insert(
+            3,
+            MockNodeData {
+                node_type: NodeType::Attribute,
+                name: Some(QName {
+                    prefix: Some("xml"),
+                    local_part: "lang",
+                }),
+                value: "en".to_string(),
+                children: vec![],
+                attributes: vec![],
+            },
+        );
         parent_map.insert(3, 1);
 
-        nodes.insert(4, MockNodeData {
-            node_type: NodeType::Text, name: None,
-            value: "Hello".to_string(), children: vec![], attributes: vec![],
-        });
+        nodes.insert(
+            4,
+            MockNodeData {
+                node_type: NodeType::Text,
+                name: None,
+                value: "Hello".to_string(),
+                children: vec![],
+                attributes: vec![],
+            },
+        );
         parent_map.insert(4, 1);
 
-        nodes.insert(5, MockNodeData {
-            node_type: NodeType::Element, name: Some(QName { prefix: None, local_part: "div" }),
-            value: "".to_string(), children: vec![], attributes: vec![],
-        });
+        nodes.insert(
+            5,
+            MockNodeData {
+                node_type: NodeType::Element,
+                name: Some(QName {
+                    prefix: None,
+                    local_part: "div",
+                }),
+                value: "".to_string(),
+                children: vec![],
+                attributes: vec![],
+            },
+        );
         parent_map.insert(5, 0);
 
-        nodes.insert(6, MockNodeData {
-            node_type: NodeType::Element, name: Some(QName { prefix: None, local_part: "para" }),
-            value: "World".to_string(), children: vec![7], attributes: vec![],
-        });
+        nodes.insert(
+            6,
+            MockNodeData {
+                node_type: NodeType::Element,
+                name: Some(QName {
+                    prefix: None,
+                    local_part: "para",
+                }),
+                value: "World".to_string(),
+                children: vec![7],
+                attributes: vec![],
+            },
+        );
         parent_map.insert(6, 0);
 
-        nodes.insert(7, MockNodeData {
-            node_type: NodeType::Text, name: None,
-            value: "World".to_string(), children: vec![], attributes: vec![],
-        });
+        nodes.insert(
+            7,
+            MockNodeData {
+                node_type: NodeType::Text,
+                name: None,
+                value: "World".to_string(),
+                children: vec![],
+                attributes: vec![],
+            },
+        );
         parent_map.insert(7, 6);
 
-        nodes.insert(8, MockNodeData {
-            node_type: NodeType::Comment, name: None,
-            value: " comment node ".to_string(), children: vec![], attributes: vec![],
-        });
+        nodes.insert(
+            8,
+            MockNodeData {
+                node_type: NodeType::Comment,
+                name: None,
+                value: " comment node ".to_string(),
+                children: vec![],
+                attributes: vec![],
+            },
+        );
         parent_map.insert(8, 0);
 
-        nodes.insert(9, MockNodeData {
-            node_type: NodeType::ProcessingInstruction,
-            name: Some(QName { prefix: None, local_part: "pi-target" }),
-            value: "pi-value".to_string(), children: vec![], attributes: vec![],
-        });
+        nodes.insert(
+            9,
+            MockNodeData {
+                node_type: NodeType::ProcessingInstruction,
+                name: Some(QName {
+                    prefix: None,
+                    local_part: "pi-target",
+                }),
+                value: "pi-value".to_string(),
+                children: vec![],
+                attributes: vec![],
+            },
+        );
         parent_map.insert(9, 0);
 
         MockTree { nodes, parent_map }

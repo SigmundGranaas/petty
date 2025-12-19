@@ -1,8 +1,8 @@
-use petty_xpath1::datasource::{DataSourceNode, NodeType};
-use petty_xpath1::{XPathValue};
 use crate::ast::{PreparsedStyles, PreparsedTemplate};
 use crate::executor::{ExecutionError, TemplateExecutor};
 use crate::output::OutputBuilder;
+use petty_xpath1::XPathValue;
+use petty_xpath1::datasource::{DataSourceNode, NodeType};
 
 pub(crate) fn handle_copy_of<'s, 'a, N: DataSourceNode<'a> + 'a>(
     executor: &mut TemplateExecutor<'s, 'a, N>,
@@ -34,9 +34,17 @@ pub(crate) fn handle_copy<'s, 'a, N: DataSourceNode<'a> + 'a>(
 ) -> Result<(), ExecutionError> {
     match context_node.node_type() {
         NodeType::Element => {
-            let tag_name = context_node.name().map_or(b"" as &[u8], |q| q.local_part.as_bytes());
+            let tag_name = context_node
+                .name()
+                .map_or(b"" as &[u8], |q| q.local_part.as_bytes());
             executor.execute_start_tag(tag_name, styles, builder);
-            executor.execute_template(body, context_node, context_position, context_size, builder)?;
+            executor.execute_template(
+                body,
+                context_node,
+                context_position,
+                context_size,
+                builder,
+            )?;
             executor.execute_end_tag(tag_name, builder);
         }
         NodeType::Text | NodeType::Attribute => {
@@ -48,7 +56,13 @@ pub(crate) fn handle_copy<'s, 'a, N: DataSourceNode<'a> + 'a>(
         }
         NodeType::Root => {
             // Copying the root node just processes the children of the xsl:copy
-            executor.execute_template(body, context_node, context_position, context_size, builder)?;
+            executor.execute_template(
+                body,
+                context_node,
+                context_position,
+                context_size,
+                builder,
+            )?;
         }
         NodeType::Comment | NodeType::ProcessingInstruction => {
             // The output format (IDF) does not support comments or PIs, so this is a no-op.

@@ -4,9 +4,9 @@
 
 use petty_xpath1::datasource::{DataSourceNode, NodeType, QName};
 use serde_json::Value;
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-use std::cmp::Ordering;
 
 // --- VDOM Data Structures ---
 
@@ -79,7 +79,6 @@ impl<'a> JsonVDocument<'a> {
         self.nodes[0].children.push(doc_element_id);
     }
 
-
     fn build_recursive(&mut self, val: &'a Value, parent_id: usize, name: &'a str) -> usize {
         match val {
             Value::Object(obj) => {
@@ -87,7 +86,10 @@ impl<'a> JsonVDocument<'a> {
                 self.parent_map.insert(current_id, parent_id);
                 self.nodes.push(VNodeData {
                     node_type: NodeType::Element,
-                    name: Some(QName { prefix: None, local_part: name }),
+                    name: Some(QName {
+                        prefix: None,
+                        local_part: name,
+                    }),
                     value: String::new(), // Value is calculated on-demand
                     children: Vec::new(),
                     attributes: Vec::new(),
@@ -110,7 +112,10 @@ impl<'a> JsonVDocument<'a> {
                         self.parent_map.insert(container_id, current_id);
                         self.nodes.push(VNodeData {
                             node_type: NodeType::Element,
-                            name: Some(QName { prefix: None, local_part: key_str }),
+                            name: Some(QName {
+                                prefix: None,
+                                local_part: key_str,
+                            }),
                             value: String::new(), // Container value is calculated on-demand
                             children: vec![],
                             attributes: vec![],
@@ -126,7 +131,6 @@ impl<'a> JsonVDocument<'a> {
                                 self.nodes[container_id].children.push(item_id);
                             }
                         }
-
                     } else if !child_val.is_null() {
                         // Handle nested objects or primitives (non-null)
                         let child_id = self.build_recursive(child_val, current_id, key_str);
@@ -142,7 +146,10 @@ impl<'a> JsonVDocument<'a> {
                 self.parent_map.insert(current_id, parent_id);
                 self.nodes.push(VNodeData {
                     node_type: NodeType::Element,
-                    name: Some(QName { prefix: None, local_part: name }),
+                    name: Some(QName {
+                        prefix: None,
+                        local_part: name,
+                    }),
                     value: String::new(), // Value calculated on-demand
                     children: Vec::new(),
                     attributes: vec![],
@@ -163,8 +170,14 @@ impl<'a> JsonVDocument<'a> {
                 let current_id = self.nodes.len();
                 self.parent_map.insert(current_id, parent_id);
                 self.nodes.push(VNodeData {
-                    node_type: NodeType::Element, name: Some(QName { prefix: None, local_part: name }),
-                    value: String::new(), children: vec![], attributes: vec![],
+                    node_type: NodeType::Element,
+                    name: Some(QName {
+                        prefix: None,
+                        local_part: name,
+                    }),
+                    value: String::new(),
+                    children: vec![],
+                    attributes: vec![],
                 });
                 current_id
             }
@@ -182,7 +195,10 @@ impl<'a> JsonVDocument<'a> {
                 self.parent_map.insert(element_id, parent_id);
                 self.nodes.push(VNodeData {
                     node_type: NodeType::Element,
-                    name: Some(QName { prefix: None, local_part: name }),
+                    name: Some(QName {
+                        prefix: None,
+                        local_part: name,
+                    }),
                     value: owned_value_str.clone(), // Element's value is the primitive's value
                     children: vec![element_id + 1], // It will have one text node child
                     attributes: vec![],
@@ -192,15 +208,16 @@ impl<'a> JsonVDocument<'a> {
                 let text_id = self.nodes.len();
                 self.parent_map.insert(text_id, element_id);
                 self.nodes.push(VNodeData {
-                    node_type: NodeType::Text, name: None,
+                    node_type: NodeType::Text,
+                    name: None,
                     value: owned_value_str, // Text node's value is also the primitive's value
-                    children: vec![], attributes: vec![],
+                    children: vec![],
+                    attributes: vec![],
                 });
                 element_id // Return the ID of the element node
             }
         }
     }
-
 
     fn build_attribute(&mut self, val: &'a Value, parent_id: usize, name: &'a str) -> usize {
         let attr_id = self.nodes.len();
@@ -213,8 +230,13 @@ impl<'a> JsonVDocument<'a> {
         };
         self.nodes.push(VNodeData {
             node_type: NodeType::Attribute,
-            name: Some(QName { prefix: None, local_part: name }),
-            value: attr_value, children: vec![], attributes: vec![],
+            name: Some(QName {
+                prefix: None,
+                local_part: name,
+            }),
+            value: attr_value,
+            children: vec![],
+            attributes: vec![],
         });
         attr_id
     }
@@ -223,7 +245,9 @@ impl<'a> JsonVDocument<'a> {
 // --- DataSourceNode Trait Implementation ---
 
 impl<'a> PartialEq for JsonVNode<'a> {
-    fn eq(&self, other: &Self) -> bool { self.id == other.id }
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+    }
 }
 impl<'a> Eq for JsonVNode<'a> {}
 
@@ -239,18 +263,30 @@ impl<'a> Ord for JsonVNode<'a> {
 }
 
 impl<'a> Hash for JsonVNode<'a> {
-    fn hash<H: Hasher>(&self, state: &mut H) { self.id.hash(state); }
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.id.hash(state);
+    }
 }
 
 impl<'a> DataSourceNode<'a> for JsonVNode<'a> {
-    fn node_type(&self) -> NodeType { self.tree.nodes.get(self.id).map_or(NodeType::Text, |n| n.node_type) } // Default to Text if ID out of bounds
-    fn name(&self) -> Option<QName<'a>> { self.tree.nodes.get(self.id).and_then(|n| n.name) }
+    fn node_type(&self) -> NodeType {
+        self.tree
+            .nodes
+            .get(self.id)
+            .map_or(NodeType::Text, |n| n.node_type)
+    } // Default to Text if ID out of bounds
+    fn name(&self) -> Option<QName<'a>> {
+        self.tree.nodes.get(self.id).and_then(|n| n.name)
+    }
 
     fn string_value(&self) -> String {
         match self.node_type() {
             NodeType::Attribute | NodeType::Text => {
                 // The value is pre-stored for these simple node types.
-                self.tree.nodes.get(self.id).map_or(String::new(), |n| n.value.clone())
+                self.tree
+                    .nodes
+                    .get(self.id)
+                    .map_or(String::new(), |n| n.value.clone())
             }
             NodeType::Element | NodeType::Root => {
                 // Compute on-demand for elements and root by concatenating all descendant text nodes.
@@ -285,22 +321,42 @@ impl<'a> DataSourceNode<'a> for JsonVNode<'a> {
 
     fn attributes(&self) -> Box<dyn Iterator<Item = Self> + 'a> {
         let tree = self.tree; // Re-borrow to satisfy lifetime checker
-        let attribute_ids = self.tree.nodes.get(self.id).map_or(vec![], |n| n.attributes.clone());
-        Box::new(attribute_ids.into_iter().map(move |id| JsonVNode { id, tree }))
+        let attribute_ids = self
+            .tree
+            .nodes
+            .get(self.id)
+            .map_or(vec![], |n| n.attributes.clone());
+        Box::new(
+            attribute_ids
+                .into_iter()
+                .map(move |id| JsonVNode { id, tree }),
+        )
     }
 
     fn children(&self) -> Box<dyn Iterator<Item = Self> + 'a> {
         let tree = self.tree; // Re-borrow
-        let children_ids = self.tree.nodes.get(self.id).map_or(vec![], |n| n.children.clone());
+        let children_ids = self
+            .tree
+            .nodes
+            .get(self.id)
+            .map_or(vec![], |n| n.children.clone());
         Box::new(children_ids.into_iter().filter_map(move |id| {
             // Ensure child ID is valid before creating the node
-            if id < tree.nodes.len() { Some(JsonVNode { id, tree }) } else { None }
+            if id < tree.nodes.len() {
+                Some(JsonVNode { id, tree })
+            } else {
+                None
+            }
         }))
     }
 
-    fn parent(&self) -> Option<Self> { self.tree.parent_map.get(&self.id).map(|&pid| JsonVNode { id: pid, tree: self.tree }) }
+    fn parent(&self) -> Option<Self> {
+        self.tree.parent_map.get(&self.id).map(|&pid| JsonVNode {
+            id: pid,
+            tree: self.tree,
+        })
+    }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -327,13 +383,19 @@ mod tests {
         // Expected string value based on alphabetical order:
         // user -> name -> orders -> item -> amount -> id -> item -> amount -> id
         let expected_string_value = "John Doe100o1200o2";
-        assert_eq!(root.string_value(), expected_string_value, "Root string value mismatch");
-
+        assert_eq!(
+            root.string_value(),
+            expected_string_value,
+            "Root string value mismatch"
+        );
 
         let doc_element: JsonVNode<'_> = root.children().next().unwrap();
         assert_eq!(doc_element.name().unwrap().local_part, "user");
-        assert_eq!(doc_element.string_value(), expected_string_value, "User element string value mismatch");
-
+        assert_eq!(
+            doc_element.string_value(),
+            expected_string_value,
+            "User element string value mismatch"
+        );
 
         let mut attrs: Vec<_> = doc_element.attributes().collect();
         assert_eq!(attrs.len(), 1);
@@ -351,22 +413,34 @@ mod tests {
 
         let name_node = &user_children[0];
         assert_eq!(name_node.string_value(), "John Doe");
-        assert_eq!(name_node.children().next().unwrap().node_type(), NodeType::Text);
-
+        assert_eq!(
+            name_node.children().next().unwrap().node_type(),
+            NodeType::Text
+        );
 
         let orders_container = &user_children[1];
         // Expected container value: amount -> id -> amount -> id
-        assert_eq!(orders_container.string_value(), "100o1200o2", "Orders container string value mismatch");
-
+        assert_eq!(
+            orders_container.string_value(),
+            "100o1200o2",
+            "Orders container string value mismatch"
+        );
 
         // The children of the <orders> container are the <item> nodes (standard name).
         let order_items: Vec<_> = orders_container.children().collect();
         assert_eq!(order_items.len(), 2);
         assert_eq!(order_items[0].name().unwrap().local_part, "item"); // Standard name
-        assert_eq!(order_items[0].string_value(), "100o1", "First order item string value mismatch"); // amount then id
+        assert_eq!(
+            order_items[0].string_value(),
+            "100o1",
+            "First order item string value mismatch"
+        ); // amount then id
         assert_eq!(order_items[1].name().unwrap().local_part, "item"); // Standard name
-        assert_eq!(order_items[1].string_value(), "200o2", "Second order item string value mismatch"); // amount then id
-
+        assert_eq!(
+            order_items[1].string_value(),
+            "200o2",
+            "Second order item string value mismatch"
+        ); // amount then id
 
         // Check children of first order item (should be amount then id)
         let order1_children: Vec<_> = order_items[0].children().collect();
@@ -375,7 +449,6 @@ mod tests {
         assert_eq!(order1_children[0].string_value(), "100");
         assert_eq!(order1_children[1].name().unwrap().local_part, "id");
         assert_eq!(order1_children[1].string_value(), "o1");
-
 
         // Check children of second order item (should be amount then id)
         let order2_children: Vec<_> = order_items[1].children().collect();
@@ -421,6 +494,5 @@ mod tests {
         assert_eq!(items[0].string_value(), "rust");
         assert_eq!(items[1].string_value(), "xslt");
         assert_eq!(items[2].string_value(), "json");
-
     }
 }

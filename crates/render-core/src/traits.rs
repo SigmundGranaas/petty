@@ -10,7 +10,8 @@ use std::io::{Seek, Write};
 pub trait DocumentRenderer<W: Write + Seek + Send> {
     fn begin_document(&mut self, writer: W) -> Result<(), RenderError>;
 
-    fn add_resources(&mut self, resources: &HashMap<String, SharedData>) -> Result<(), RenderError>;
+    fn add_resources(&mut self, resources: &HashMap<String, SharedData>)
+    -> Result<(), RenderError>;
 
     fn render_page_content(
         &mut self,

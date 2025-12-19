@@ -62,13 +62,14 @@ impl FilesystemResourceProvider {
 
         // Try to canonicalize and verify it's within base
         if let Ok(canonical) = full_path.canonicalize()
-            && let Some(ref base) = self.canonical_base {
-                if canonical.starts_with(base) {
-                    return Some(canonical);
-                }
-                // Path escapes base directory - potential attack
-                return None;
+            && let Some(ref base) = self.canonical_base
+        {
+            if canonical.starts_with(base) {
+                return Some(canonical);
             }
+            // Path escapes base directory - potential attack
+            return None;
+        }
 
         // If canonicalization fails (file doesn't exist), do basic path component check
         // This prevents obvious traversal like "../../../etc/passwd"
@@ -85,23 +86,20 @@ impl FilesystemResourceProvider {
 
 impl ResourceProvider for FilesystemResourceProvider {
     fn load(&self, path: &str) -> Result<SharedResourceData, ResourceError> {
-        let full_path = self.resolve_path_safe(path)
-            .ok_or_else(|| ResourceError::NotFound(format!(
-                "{} (path traversal blocked)", path
-            )))?;
+        let full_path = self
+            .resolve_path_safe(path)
+            .ok_or_else(|| ResourceError::NotFound(format!("{} (path traversal blocked)", path)))?;
 
-        std::fs::read(&full_path)
-            .map(Arc::new)
-            .map_err(|e| {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    ResourceError::NotFound(path.to_string())
-                } else {
-                    ResourceError::LoadFailed {
-                        path: path.to_string(),
-                        message: e.to_string(),
-                    }
+        std::fs::read(&full_path).map(Arc::new).map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                ResourceError::NotFound(path.to_string())
+            } else {
+                ResourceError::LoadFailed {
+                    path: path.to_string(),
+                    message: e.to_string(),
                 }
-            })
+            }
+        })
     }
 
     fn exists(&self, path: &str) -> bool {

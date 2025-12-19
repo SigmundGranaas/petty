@@ -1,5 +1,5 @@
 //! Defines primitives for size, position, and spacing.
-use serde::{de, ser::SerializeMap, Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Deserializer, Serialize, Serializer, de, ser::SerializeMap};
 use std::hash::{Hash, Hasher};
 
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
@@ -31,7 +31,6 @@ impl Hash for Dimension {
 }
 
 impl Eq for Dimension {}
-
 
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct Margins {
@@ -84,31 +83,42 @@ impl Margins {
 
         // Try to find unit suffix
         if let Some(val) = input.strip_suffix("pt") {
-            return val.trim().parse::<f32>()
+            return val
+                .trim()
+                .parse::<f32>()
                 .map_err(|e| format!("Invalid number: {}", e));
         }
         if let Some(val) = input.strip_suffix("px") {
-            return val.trim().parse::<f32>()
+            return val
+                .trim()
+                .parse::<f32>()
                 .map_err(|e| format!("Invalid number: {}", e));
         }
         if let Some(val) = input.strip_suffix("in") {
-            return val.trim().parse::<f32>()
+            return val
+                .trim()
+                .parse::<f32>()
                 .map(|v| v * 72.0)
                 .map_err(|e| format!("Invalid number: {}", e));
         }
         if let Some(val) = input.strip_suffix("cm") {
-            return val.trim().parse::<f32>()
+            return val
+                .trim()
+                .parse::<f32>()
                 .map(|v| v * 28.35)
                 .map_err(|e| format!("Invalid number: {}", e));
         }
         if let Some(val) = input.strip_suffix("mm") {
-            return val.trim().parse::<f32>()
+            return val
+                .trim()
+                .parse::<f32>()
                 .map(|v| v * 2.835)
                 .map_err(|e| format!("Invalid number: {}", e));
         }
 
         // No unit, assume points
-        input.parse::<f32>()
+        input
+            .parse::<f32>()
             .map_err(|e| format!("Invalid number: {}", e))
     }
 
@@ -184,14 +194,16 @@ impl<'de> Deserialize<'de> for Margins {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Default)]
 pub enum PageSize {
     #[default]
     A4,
     Letter,
     Legal,
-    Custom { width: f32, height: f32 },
+    Custom {
+        width: f32,
+        height: f32,
+    },
 }
 
 impl Eq for PageSize {}
@@ -243,20 +255,24 @@ impl PageSize {
     pub fn set_width(&mut self, new_width: f32) {
         match self {
             PageSize::Custom { width, .. } => *width = new_width,
-            _ => *self = PageSize::Custom {
-                width: new_width,
-                height: self.dimensions_pt().1,
-            },
+            _ => {
+                *self = PageSize::Custom {
+                    width: new_width,
+                    height: self.dimensions_pt().1,
+                }
+            }
         }
     }
 
     pub fn set_height(&mut self, new_height: f32) {
         match self {
             PageSize::Custom { height, .. } => *height = new_height,
-            _ => *self = PageSize::Custom {
-                width: self.dimensions_pt().0,
-                height: new_height,
-            },
+            _ => {
+                *self = PageSize::Custom {
+                    width: self.dimensions_pt().0,
+                    height: new_height,
+                }
+            }
         }
     }
 
@@ -270,7 +286,6 @@ impl PageSize {
         }
     }
 }
-
 
 impl<'de> Deserialize<'de> for PageSize {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>

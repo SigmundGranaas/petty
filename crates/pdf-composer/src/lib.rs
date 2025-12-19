@@ -9,7 +9,7 @@ mod error;
 
 pub use error::ComposerError;
 
-use lopdf::{dictionary, Document, Object, ObjectId, Stream};
+use lopdf::{Document, Object, ObjectId, Stream, dictionary};
 use std::collections::HashMap;
 
 /// A helper struct to manage the state of copying objects between documents.
@@ -21,7 +21,11 @@ struct ObjectCopier<'a> {
 
 impl<'a> ObjectCopier<'a> {
     fn new(source_doc: &'a Document, target_doc: &'a mut Document) -> Self {
-        Self { source_doc, target_doc, id_map: HashMap::new() }
+        Self {
+            source_doc,
+            target_doc,
+            id_map: HashMap::new(),
+        }
     }
 
     /// Deep copies an object from the source document to the target document.
@@ -56,7 +60,6 @@ impl<'a> ObjectCopier<'a> {
 
         Ok(new_id)
     }
-
 
     /// Traverses an object and replaces any `Object::Reference` with a new ID
     /// from the target document by recursively calling `copy_object`.
@@ -100,7 +103,7 @@ impl<'a> ObjectCopier<'a> {
 /// * `target` - The document to merge into.
 /// * `source` - The document to take pages from.
 /// * `prepend` - If `true`, pages from `source` are added to the beginning.
-///               If `false`, they are appended.
+///   If `false`, they are appended.
 ///
 /// **Note:** This function does not yet adjust hyperlinks or outlines in the
 /// target document when prepending pages. This is a significant limitation
@@ -214,7 +217,7 @@ pub fn overlay_content(
 mod tests {
     use super::*;
     use lopdf::content::{Content, Operation};
-    use lopdf::{dictionary, Document, Object, StringFormat};
+    use lopdf::{Document, Object, StringFormat, dictionary};
 
     /// Creates a simple dummy PDF document with a specified number of pages.
     /// Each page has a unique text content "Page X".
@@ -345,8 +348,8 @@ mod tests {
                 Operation::new("ET", vec![]),
             ],
         }
-            .encode()
-            .unwrap();
+        .encode()
+        .unwrap();
 
         overlay_content(&mut doc, page_id, overlay_stream).unwrap();
 

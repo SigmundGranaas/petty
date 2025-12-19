@@ -1,12 +1,12 @@
 use crate::style::ComputedStyle;
 use crate::{
-    LayoutContext, LayoutEnvironment, LayoutError, LayoutNode, LayoutResult,
-    NodeState, ParagraphState
+    LayoutContext, LayoutEnvironment, LayoutError, LayoutNode, LayoutResult, NodeState,
+    ParagraphState,
 };
 // Use explicit geometry types from base to match Trait definition
-use petty_types::geometry::{BoxConstraints, Size};
 use crate::text::builder::{InlineImageEntry, TextSpan};
 use petty_style::dimension::Dimension;
+use petty_types::geometry::{BoxConstraints, Size};
 use std::sync::Arc;
 
 use super::layout::ParagraphLayout;
@@ -27,7 +27,11 @@ impl<'a> LayoutNode for ParagraphNode<'a> {
         self.style.as_ref()
     }
 
-    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<Size, LayoutError> {
+    fn measure(
+        &self,
+        env: &LayoutEnvironment,
+        constraints: BoxConstraints,
+    ) -> Result<Size, LayoutError> {
         let max_width = if constraints.has_bounded_width() {
             constraints.max_width
         } else {

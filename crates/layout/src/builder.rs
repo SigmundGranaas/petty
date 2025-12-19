@@ -1,9 +1,9 @@
+use crate::LayoutError;
 use crate::engine::{LayoutEngine, LayoutStore};
 use crate::nodes::RenderNode;
 use crate::style::ComputedStyle;
-use crate::LayoutError;
-use std::sync::Arc;
 use petty_idf::IRNode;
+use std::sync::Arc;
 
 /// Trait defining the interface for building a RenderNode from an IRNode.
 ///

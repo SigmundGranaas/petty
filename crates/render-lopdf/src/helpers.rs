@@ -3,15 +3,15 @@
 //! annotations and outlines using the `lopdf` library. These are decoupled
 // from the main renderer to be reusable by different generation strategies.
 
-use petty_layout::{LayoutElement, PositionedElement, ComputedStyle};
-use petty_render_core::{LaidOutSequence, Pass1Result, RenderError};
 use crate::writer::StreamingPdfWriter;
 use lopdf::content::{Content, Operation};
-use lopdf::{dictionary, Object, ObjectId, StringFormat};
+use lopdf::{Object, ObjectId, StringFormat, dictionary};
+use petty_layout::{ComputedStyle, LayoutElement, PositionedElement};
+use petty_render_core::{LaidOutSequence, Pass1Result, RenderError};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::{Seek, Write};
 use std::sync::Arc;
-use std::borrow::Cow;
 
 /// Creates all link annotations for the document based on the analysis pass results.
 ///
@@ -45,28 +45,34 @@ pub fn create_link_annotations<W: Write + Seek>(
 
                 if let Some(href_str) = href
                     && let Some(target_id) = href_str.strip_prefix('#')
-                        && let Some(anchor) = pass1_result.resolved_anchors.get(target_id)
-                            && anchor.global_page_index > 0 && anchor.global_page_index <= final_page_ids.len() {
-                                let page_annots = link_annots_by_page.entry(global_page_idx).or_default();
-                                let target_page_id = final_page_ids[anchor.global_page_index - 1];
-                                let y_dest = page_height - anchor.y_pos;
+                    && let Some(anchor) = pass1_result.resolved_anchors.get(target_id)
+                    && anchor.global_page_index > 0
+                    && anchor.global_page_index <= final_page_ids.len()
+                {
+                    let page_annots = link_annots_by_page.entry(global_page_idx).or_default();
+                    let target_page_id = final_page_ids[anchor.global_page_index - 1];
+                    let y_dest = page_height - anchor.y_pos;
 
-                                let dest = vec![Object::Reference(target_page_id), "FitH".into(), y_dest.into()];
-                                let action = dictionary! { "Type" => "Action", "S" => "GoTo", "D" => dest };
-                                let action_id = writer.buffer_object(action.into());
-                                let rect = vec![
-                                    el.x.into(),
-                                    (page_height - (el.y + el.height)).into(),
-                                    (el.x + el.width).into(),
-                                    (page_height - el.y).into(),
-                                ];
-                                let annot = dictionary! {
-                                    "Type" => "Annot", "Subtype" => "Link", "Rect" => rect,
-                                    "Border" => vec![0.into(), 0.into(), 0.into()], "A" => action_id,
-                                };
-                                let annot_id = writer.buffer_object(annot.into());
-                                page_annots.push(annot_id);
-                            }
+                    let dest = vec![
+                        Object::Reference(target_page_id),
+                        "FitH".into(),
+                        y_dest.into(),
+                    ];
+                    let action = dictionary! { "Type" => "Action", "S" => "GoTo", "D" => dest };
+                    let action_id = writer.buffer_object(action.into());
+                    let rect = vec![
+                        el.x.into(),
+                        (page_height - (el.y + el.height)).into(),
+                        (el.x + el.width).into(),
+                        (page_height - el.y).into(),
+                    ];
+                    let annot = dictionary! {
+                        "Type" => "Annot", "Subtype" => "Link", "Rect" => rect,
+                        "Border" => vec![0.into(), 0.into(), 0.into()], "A" => action_id,
+                    };
+                    let annot_id = writer.buffer_object(annot.into());
+                    page_annots.push(annot_id);
+                }
             }
         }
         global_page_idx_offset += seq.pages.len();
@@ -115,13 +121,21 @@ pub fn build_outlines<W: Write + Seek>(
             }
             let dest_page_id = final_page_ids[anchor.global_page_index - 1];
             let y_dest = page_height - anchor.y_pos;
-            let dest = vec![Object::Reference(dest_page_id), "FitH".into(), y_dest.into()];
+            let dest = vec![
+                Object::Reference(dest_page_id),
+                "FitH".into(),
+                y_dest.into(),
+            ];
 
             while level_stack.last().unwrap().0 >= entry.level {
                 level_stack.pop();
             }
             let parent_info = level_stack.last().unwrap();
-            let parent_idx = if parent_info.1 == usize::MAX { None } else { Some(parent_info.1) };
+            let parent_idx = if parent_info.1 == usize::MAX {
+                None
+            } else {
+                Some(parent_info.1)
+            };
             let new_item = FlatOutlineItem {
                 id: writer.new_object_id(),
                 title: entry.text.clone(),
@@ -143,7 +157,12 @@ pub fn build_outlines<W: Write + Seek>(
     for (i, flat_node) in flat_list.into_iter().enumerate().rev() {
         let mut children = children_map.remove(&i).unwrap_or_default();
         children.reverse();
-        let node = NodeOutlineItem { id: flat_node.id, title: flat_node.title, dest: flat_node.dest, children };
+        let node = NodeOutlineItem {
+            id: flat_node.id,
+            title: flat_node.title,
+            dest: flat_node.dest,
+            children,
+        };
         if let Some(parent_idx) = flat_node.parent_idx {
             children_map.entry(parent_idx).or_default().push(node);
         } else {
@@ -163,14 +182,22 @@ pub fn build_outlines<W: Write + Seek>(
         "Type" => "Outlines", "First" => first_id, "Last" => last_id, "Count" => root_items.len() as i64,
     }.into());
 
-    fn buffer_outline_level<W: Write + Seek>(items: &[NodeOutlineItem], parent_id: ObjectId, writer: &mut StreamingPdfWriter<W>) {
+    fn buffer_outline_level<W: Write + Seek>(
+        items: &[NodeOutlineItem],
+        parent_id: ObjectId,
+        writer: &mut StreamingPdfWriter<W>,
+    ) {
         for (i, item) in items.iter().enumerate() {
             let mut dict = dictionary! {
                 "Title" => Object::String(to_win_ansi(&item.title), StringFormat::Literal),
                 "Parent" => parent_id, "Dest" => item.dest.clone(),
             };
-            if i > 0 { dict.set("Prev", items[i - 1].id); }
-            if i < items.len() - 1 { dict.set("Next", items[i + 1].id); }
+            if i > 0 {
+                dict.set("Prev", items[i - 1].id);
+            }
+            if i < items.len() - 1 {
+                dict.set("Next", items[i + 1].id);
+            }
             if !item.children.is_empty() {
                 dict.set("First", item.children.first().unwrap().id);
                 dict.set("Last", item.children.last().unwrap().id);
@@ -183,7 +210,6 @@ pub fn build_outlines<W: Write + Seek>(
     buffer_outline_level(&root_items, outline_root_id, writer);
     Ok(Some(outline_root_id))
 }
-
 
 /// A simplified version of the page content rendering logic, extracted for reuse.
 pub fn render_elements_to_content(
@@ -201,13 +227,12 @@ pub fn render_elements_to_content(
 
 // --- Internal Page Drawing Context ---
 
+use once_cell::sync::Lazy;
 use petty_layout::{ImageElement, TextElement};
 use petty_style::font::FontWeight;
-use once_cell::sync::Lazy;
 use petty_types::color::Color;
 
 static DEFAULT_LOPDF_FONT_NAME: Lazy<String> = Lazy::new(|| "F1".to_string());
-
 
 struct PageContext<'a> {
     page_height: f32,
@@ -224,9 +249,16 @@ struct LopdfPageRenderState {
 
 impl<'a> PageContext<'a> {
     fn new(page_height: f32, font_map: &'a HashMap<String, String>) -> Self {
-        Self { page_height, content: Content { operations: vec![] }, state: Default::default(), font_map }
+        Self {
+            page_height,
+            content: Content { operations: vec![] },
+            state: Default::default(),
+            font_map,
+        }
     }
-    fn finish(self) -> Content { self.content }
+    fn finish(self) -> Content {
+        self.content
+    }
     fn draw_element(&mut self, el: &PositionedElement) -> Result<(), RenderError> {
         self.draw_background_and_borders(el)?;
         match &el.element {
@@ -241,19 +273,53 @@ impl<'a> PageContext<'a> {
         let x = el.x;
         let y = self.page_height - (el.y + el.height);
         if let Some(bg) = &style.misc.background_color {
-            self.content.operations.push(Operation::new("rg", vec![(bg.r as f32 / 255.0).into(), (bg.g as f32 / 255.0).into(), (bg.b as f32 / 255.0).into()]));
-            self.content.operations.push(Operation::new("re", vec![x.into(), y.into(), el.width.into(), el.height.into()]));
+            self.content.operations.push(Operation::new(
+                "rg",
+                vec![
+                    (bg.r as f32 / 255.0).into(),
+                    (bg.g as f32 / 255.0).into(),
+                    (bg.b as f32 / 255.0).into(),
+                ],
+            ));
+            self.content.operations.push(Operation::new(
+                "re",
+                vec![x.into(), y.into(), el.width.into(), el.height.into()],
+            ));
             self.content.operations.push(Operation::new("f", vec![]));
         }
         if let Some(border) = &style.border.bottom {
-            self.content.operations.push(Operation::new("w", vec![border.width.into()]));
-            self.content.operations.push(Operation::new("RG", vec![(border.color.r as f32 / 255.0).into(), (border.color.g as f32 / 255.0).into(), (border.color.b as f32 / 255.0).into()]));
-            if border.style == petty_style::BorderStyle::Dotted { self.content.operations.push(Operation::new("d", vec![vec![Object::Integer(1), Object::Integer(2)].into(), 0.into()])); }
+            self.content
+                .operations
+                .push(Operation::new("w", vec![border.width.into()]));
+            self.content.operations.push(Operation::new(
+                "RG",
+                vec![
+                    (border.color.r as f32 / 255.0).into(),
+                    (border.color.g as f32 / 255.0).into(),
+                    (border.color.b as f32 / 255.0).into(),
+                ],
+            ));
+            if border.style == petty_style::BorderStyle::Dotted {
+                self.content.operations.push(Operation::new(
+                    "d",
+                    vec![
+                        vec![Object::Integer(1), Object::Integer(2)].into(),
+                        0.into(),
+                    ],
+                ));
+            }
             let line_y = self.page_height - el.y - el.height;
-            self.content.operations.push(Operation::new("m", vec![el.x.into(), line_y.into()]));
-            self.content.operations.push(Operation::new("l", vec![(el.x + el.width).into(), line_y.into()]));
+            self.content
+                .operations
+                .push(Operation::new("m", vec![el.x.into(), line_y.into()]));
+            self.content.operations.push(Operation::new(
+                "l",
+                vec![(el.x + el.width).into(), line_y.into()],
+            ));
             self.content.operations.push(Operation::new("S", vec![]));
-            self.content.operations.push(Operation::new("d", vec![vec![].into(), 0.into()]));
+            self.content
+                .operations
+                .push(Operation::new("d", vec![vec![].into(), 0.into()]));
         }
         Ok(())
     }
@@ -266,25 +332,43 @@ impl<'a> PageContext<'a> {
     }
     fn set_font(&mut self, style: &Arc<ComputedStyle>) {
         let styled_font_name = Self::get_styled_font_name(style);
-        let internal_font_name = self.font_map
+        let internal_font_name = self
+            .font_map
             .get(styled_font_name.as_ref())
             .or_else(|| self.font_map.get(style.text.font_family.as_str()))
             .unwrap_or(&DEFAULT_LOPDF_FONT_NAME);
 
-        if self.state.font_name != *internal_font_name || self.state.font_size != style.text.font_size {
-            self.content.operations.push(Operation::new("Tf", vec![Object::Name(internal_font_name.as_bytes().to_vec()), style.text.font_size.into()]));
+        if self.state.font_name != *internal_font_name
+            || self.state.font_size != style.text.font_size
+        {
+            self.content.operations.push(Operation::new(
+                "Tf",
+                vec![
+                    Object::Name(internal_font_name.as_bytes().to_vec()),
+                    style.text.font_size.into(),
+                ],
+            ));
             self.state.font_name = internal_font_name.to_string();
             self.state.font_size = style.text.font_size;
         }
     }
     fn set_fill_color(&mut self, color: &Color) {
         if self.state.fill_color != *color {
-            self.content.operations.push(Operation::new("rg", vec![(color.r as f32 / 255.0).into(), (color.g as f32 / 255.0).into(), (color.b as f32 / 255.0).into()]));
+            self.content.operations.push(Operation::new(
+                "rg",
+                vec![
+                    (color.r as f32 / 255.0).into(),
+                    (color.g as f32 / 255.0).into(),
+                    (color.b as f32 / 255.0).into(),
+                ],
+            ));
             self.state.fill_color = color.clone();
         }
     }
     fn draw_text(&mut self, text: &TextElement, el: &PositionedElement) -> Result<(), RenderError> {
-        if text.content.trim().is_empty() { return Ok(()); }
+        if text.content.trim().is_empty() {
+            return Ok(());
+        }
         self.content.operations.push(Operation::new("BT", vec![]));
         self.set_font(&el.style);
         self.set_fill_color(&el.style.text.color);
@@ -297,38 +381,55 @@ impl<'a> PageContext<'a> {
         let baseline_y = el.y + (leading / 2.0) + ascent_approx;
 
         let pdf_y = self.page_height - baseline_y;
-        self.content.operations.push(Operation::new("Td", vec![el.x.into(), pdf_y.into()]));
-        self.content.operations.push(Operation::new("Tj", vec![Object::String(to_win_ansi(&text.content), StringFormat::Literal)]));
+        self.content
+            .operations
+            .push(Operation::new("Td", vec![el.x.into(), pdf_y.into()]));
+        self.content.operations.push(Operation::new(
+            "Tj",
+            vec![Object::String(
+                to_win_ansi(&text.content),
+                StringFormat::Literal,
+            )],
+        ));
         self.content.operations.push(Operation::new("ET", vec![]));
         Ok(())
     }
-    fn draw_image(&mut self, image: &ImageElement, _el: &PositionedElement) -> Result<(), RenderError> {
-        log::warn!("Images are not supported in the lopdf streaming renderer yet: {}", image.src);
+    fn draw_image(
+        &mut self,
+        image: &ImageElement,
+        _el: &PositionedElement,
+    ) -> Result<(), RenderError> {
+        log::warn!(
+            "Images are not supported in the lopdf streaming renderer yet: {}",
+            image.src
+        );
         Ok(())
     }
 }
 fn to_win_ansi(s: &str) -> Vec<u8> {
-    s.chars().map(|c| {
-        let code = c as u32;
-        if code <= 255 {
-            c as u8
-        } else {
-            // Map common Unicode characters to WinAnsi equivalents
-            match c {
-                '\u{2022}' => 0x95, // BULLET (•) -> WinAnsi bullet
-                '\u{2013}' => 0x96, // EN DASH (–)
-                '\u{2014}' => 0x97, // EM DASH (—)
-                '\u{2018}' => 0x91, // LEFT SINGLE QUOTATION MARK (')
-                '\u{2019}' => 0x92, // RIGHT SINGLE QUOTATION MARK (')
-                '\u{201C}' => 0x93, // LEFT DOUBLE QUOTATION MARK (")
-                '\u{201D}' => 0x94, // RIGHT DOUBLE QUOTATION MARK (")
-                '\u{2026}' => 0x85, // HORIZONTAL ELLIPSIS (…)
-                '\u{20AC}' => 0x80, // EURO SIGN (€)
-                '\u{25E6}' => b'o', // WHITE BULLET (◦) -> lowercase o
-                '\u{25AA}' => 0xA0, // BLACK SMALL SQUARE (▪) -> non-breaking space (fallback)
-                '\u{25CF}' => 0x95, // BLACK CIRCLE (●) -> bullet
-                _ => b'?'           // Unmapped character
+    s.chars()
+        .map(|c| {
+            let code = c as u32;
+            if code <= 255 {
+                c as u8
+            } else {
+                // Map common Unicode characters to WinAnsi equivalents
+                match c {
+                    '\u{2022}' => 0x95, // BULLET (•) -> WinAnsi bullet
+                    '\u{2013}' => 0x96, // EN DASH (–)
+                    '\u{2014}' => 0x97, // EM DASH (—)
+                    '\u{2018}' => 0x91, // LEFT SINGLE QUOTATION MARK (')
+                    '\u{2019}' => 0x92, // RIGHT SINGLE QUOTATION MARK (')
+                    '\u{201C}' => 0x93, // LEFT DOUBLE QUOTATION MARK (")
+                    '\u{201D}' => 0x94, // RIGHT DOUBLE QUOTATION MARK (")
+                    '\u{2026}' => 0x85, // HORIZONTAL ELLIPSIS (…)
+                    '\u{20AC}' => 0x80, // EURO SIGN (€)
+                    '\u{25E6}' => b'o', // WHITE BULLET (◦) -> lowercase o
+                    '\u{25AA}' => 0xA0, // BLACK SMALL SQUARE (▪) -> non-breaking space (fallback)
+                    '\u{25CF}' => 0x95, // BLACK CIRCLE (●) -> bullet
+                    _ => b'?',          // Unmapped character
+                }
             }
-        }
-    }).collect()
+        })
+        .collect()
 }

@@ -2,11 +2,11 @@
 //! It transforms the Serde-parsed AST into a validated, executable instruction set.
 
 use super::ast::{self, ControlNode, JsonNode, TemplateNode};
-use petty_idf::TableColumnDefinition;
-use petty_style::stylesheet::{ElementStyle, Stylesheet};
-use petty_jpath::{self, Expression};
 use crate::error::JsonTemplateError;
 use itertools::Itertools;
+use petty_idf::TableColumnDefinition;
+use petty_jpath::{self, Expression};
+use petty_style::stylesheet::{ElementStyle, Stylesheet};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -39,9 +39,9 @@ pub fn parse_expression_string(text: &str) -> Result<CompiledString, JsonTemplat
             parts.push(ExpressionPart::Static(text[last_end..start].to_string()));
         }
         let end_marker = "}}";
-        let end = text[start..]
-            .find(end_marker)
-            .ok_or_else(|| JsonTemplateError::TemplateParse("Unclosed {{ expression".to_string()))?;
+        let end = text[start..].find(end_marker).ok_or_else(|| {
+            JsonTemplateError::TemplateParse("Unclosed {{ expression".to_string())
+        })?;
         let inner = text[start + 2..start + end].trim();
 
         // Handle `this.` prefix for loop contexts to maintain compatibility.
@@ -64,26 +64,77 @@ pub fn parse_expression_string(text: &str) -> Result<CompiledString, JsonTemplat
 /// A pre-compiled, executable instruction. This is the output of the `Compiler`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum JsonInstruction {
-    Block { styles: CompiledStyles, children: Vec<JsonInstruction> },
-    FlexContainer { styles: CompiledStyles, children: Vec<JsonInstruction> },
-    List { styles: CompiledStyles, children: Vec<JsonInstruction> },
-    ListItem { styles: CompiledStyles, children: Vec<JsonInstruction> },
-    Paragraph { styles: CompiledStyles, children: Vec<JsonInstruction> },
-    Image { styles: CompiledStyles, src: CompiledString },
+    Block {
+        styles: CompiledStyles,
+        children: Vec<JsonInstruction>,
+    },
+    FlexContainer {
+        styles: CompiledStyles,
+        children: Vec<JsonInstruction>,
+    },
+    List {
+        styles: CompiledStyles,
+        children: Vec<JsonInstruction>,
+    },
+    ListItem {
+        styles: CompiledStyles,
+        children: Vec<JsonInstruction>,
+    },
+    Paragraph {
+        styles: CompiledStyles,
+        children: Vec<JsonInstruction>,
+    },
+    Image {
+        styles: CompiledStyles,
+        src: CompiledString,
+    },
     Table(CompiledTable),
-    Text { content: CompiledString },
-    StyledSpan { styles: CompiledStyles, children: Vec<JsonInstruction> },
-    Hyperlink { styles: CompiledStyles, href: CompiledString, children: Vec<JsonInstruction> },
-    PageReference { target_id: String },
-    InlineImage { styles: CompiledStyles, src: CompiledString },
+    Text {
+        content: CompiledString,
+    },
+    StyledSpan {
+        styles: CompiledStyles,
+        children: Vec<JsonInstruction>,
+    },
+    Hyperlink {
+        styles: CompiledStyles,
+        href: CompiledString,
+        children: Vec<JsonInstruction>,
+    },
+    PageReference {
+        target_id: String,
+    },
+    InlineImage {
+        styles: CompiledStyles,
+        src: CompiledString,
+    },
     LineBreak,
-    PageBreak { master_name: Option<String> },
-    RenderTemplate { name: String },
-    ForEach { select: Expression, body: Vec<JsonInstruction> },
-    If { test: Expression, then_branch: Vec<JsonInstruction>, else_branch: Vec<JsonInstruction> },
-    Heading { level: u8, styles: CompiledStyles, children: Vec<JsonInstruction> },
-    TableOfContents { styles: CompiledStyles },
-    IndexMarker { term: CompiledString },
+    PageBreak {
+        master_name: Option<String>,
+    },
+    RenderTemplate {
+        name: String,
+    },
+    ForEach {
+        select: Expression,
+        body: Vec<JsonInstruction>,
+    },
+    If {
+        test: Expression,
+        then_branch: Vec<JsonInstruction>,
+        else_branch: Vec<JsonInstruction>,
+    },
+    Heading {
+        level: u8,
+        styles: CompiledStyles,
+        children: Vec<JsonInstruction>,
+    },
+    TableOfContents {
+        styles: CompiledStyles,
+    },
+    IndexMarker {
+        term: CompiledString,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -113,9 +164,15 @@ impl<'a> Compiler<'a> {
         stylesheet: &'a Stylesheet,
         definitions: &'a HashMap<String, Vec<JsonInstruction>>,
     ) -> Self {
-        Self { stylesheet, definitions }
+        Self {
+            stylesheet,
+            definitions,
+        }
     }
-    pub fn compile(&self, root_node: &TemplateNode) -> Result<Vec<JsonInstruction>, JsonTemplateError> {
+    pub fn compile(
+        &self,
+        root_node: &TemplateNode,
+    ) -> Result<Vec<JsonInstruction>, JsonTemplateError> {
         self.compile_node(root_node)
     }
 
@@ -126,13 +183,23 @@ impl<'a> Compiler<'a> {
         }
     }
 
-    fn compile_control_node(&self, node: &ControlNode) -> Result<Vec<JsonInstruction>, JsonTemplateError> {
+    fn compile_control_node(
+        &self,
+        node: &ControlNode,
+    ) -> Result<Vec<JsonInstruction>, JsonTemplateError> {
         match node {
             ControlNode::Each { each, template } => {
                 let select = petty_jpath::parse_expression(each)?;
-                Ok(vec![JsonInstruction::ForEach { select, body: self.compile_node(template)? }])
+                Ok(vec![JsonInstruction::ForEach {
+                    select,
+                    body: self.compile_node(template)?,
+                }])
             }
-            ControlNode::If { test, then, else_branch } => {
+            ControlNode::If {
+                test,
+                then,
+                else_branch,
+            } => {
                 let test_expression = petty_jpath::parse_expression(test)?;
                 Ok(vec![JsonInstruction::If {
                     test: test_expression,
@@ -149,33 +216,81 @@ impl<'a> Compiler<'a> {
 
     fn compile_static_node(&self, node: &JsonNode) -> Result<JsonInstruction, JsonTemplateError> {
         match node {
-            JsonNode::Block(c) => Ok(JsonInstruction::Block { styles: self.compile_styles(&c.style_names, &c.style_override, c.id.clone())?, children: self.compile_children(&c.children)? }),
-            JsonNode::FlexContainer(c) => Ok(JsonInstruction::FlexContainer { styles: self.compile_styles(&c.style_names, &c.style_override, c.id.clone())?, children: self.compile_children(&c.children)? }),
-            JsonNode::List(c) => Ok(JsonInstruction::List { styles: self.compile_styles(&c.style_names, &c.style_override, c.id.clone())?, children: self.compile_children(&c.children)? }),
-            JsonNode::ListItem(c) => Ok(JsonInstruction::ListItem { styles: self.compile_styles(&c.style_names, &c.style_override, c.id.clone())?, children: self.compile_children(&c.children)? }),
-            JsonNode::Paragraph(p) => Ok(JsonInstruction::Paragraph { styles: self.compile_styles(&p.style_names, &p.style_override, p.id.clone())?, children: self.compile_children(&p.children)? }),
-            JsonNode::Image(i) => Ok(JsonInstruction::Image { styles: self.compile_styles(&i.style_names, &i.style_override, i.id.clone())?, src: parse_expression_string(&i.src)? }),
+            JsonNode::Block(c) => Ok(JsonInstruction::Block {
+                styles: self.compile_styles(&c.style_names, &c.style_override, c.id.clone())?,
+                children: self.compile_children(&c.children)?,
+            }),
+            JsonNode::FlexContainer(c) => Ok(JsonInstruction::FlexContainer {
+                styles: self.compile_styles(&c.style_names, &c.style_override, c.id.clone())?,
+                children: self.compile_children(&c.children)?,
+            }),
+            JsonNode::List(c) => Ok(JsonInstruction::List {
+                styles: self.compile_styles(&c.style_names, &c.style_override, c.id.clone())?,
+                children: self.compile_children(&c.children)?,
+            }),
+            JsonNode::ListItem(c) => Ok(JsonInstruction::ListItem {
+                styles: self.compile_styles(&c.style_names, &c.style_override, c.id.clone())?,
+                children: self.compile_children(&c.children)?,
+            }),
+            JsonNode::Paragraph(p) => Ok(JsonInstruction::Paragraph {
+                styles: self.compile_styles(&p.style_names, &p.style_override, p.id.clone())?,
+                children: self.compile_children(&p.children)?,
+            }),
+            JsonNode::Image(i) => Ok(JsonInstruction::Image {
+                styles: self.compile_styles(&i.style_names, &i.style_override, i.id.clone())?,
+                src: parse_expression_string(&i.src)?,
+            }),
             JsonNode::Table(t) => self.compile_table_node(t),
-            JsonNode::Heading(h) => Ok(JsonInstruction::Heading { level: h.level, styles: self.compile_styles(&h.style_names, &h.style_override, h.id.clone())?, children: self.compile_children(&h.children)? }),
-            JsonNode::TableOfContents(c) => Ok(JsonInstruction::TableOfContents { styles: self.compile_styles(&c.style_names, &c.style_override, c.id.clone())? }),
-            JsonNode::IndexMarker { term } => Ok(JsonInstruction::IndexMarker { term: parse_expression_string(term)? }),
-            JsonNode::Text { content } => Ok(JsonInstruction::Text { content: parse_expression_string(content)? }),
-            JsonNode::StyledSpan(c) => Ok(JsonInstruction::StyledSpan { styles: self.compile_styles(&c.style_names, &c.style_override, c.id.clone())?, children: self.compile_children(&c.children)? }),
-            JsonNode::Hyperlink(h) => Ok(JsonInstruction::Hyperlink { styles: self.compile_styles(&h.style_names, &h.style_override, h.id.clone())?, href: parse_expression_string(&h.href)?, children: self.compile_children(&h.children)? }),
-            JsonNode::PageReference { target_id } => Ok(JsonInstruction::PageReference { target_id: target_id.clone() }),
-            JsonNode::InlineImage(i) => Ok(JsonInstruction::InlineImage { styles: self.compile_styles(&i.style_names, &i.style_override, i.id.clone())?, src: parse_expression_string(&i.src)? }),
+            JsonNode::Heading(h) => Ok(JsonInstruction::Heading {
+                level: h.level,
+                styles: self.compile_styles(&h.style_names, &h.style_override, h.id.clone())?,
+                children: self.compile_children(&h.children)?,
+            }),
+            JsonNode::TableOfContents(c) => Ok(JsonInstruction::TableOfContents {
+                styles: self.compile_styles(&c.style_names, &c.style_override, c.id.clone())?,
+            }),
+            JsonNode::IndexMarker { term } => Ok(JsonInstruction::IndexMarker {
+                term: parse_expression_string(term)?,
+            }),
+            JsonNode::Text { content } => Ok(JsonInstruction::Text {
+                content: parse_expression_string(content)?,
+            }),
+            JsonNode::StyledSpan(c) => Ok(JsonInstruction::StyledSpan {
+                styles: self.compile_styles(&c.style_names, &c.style_override, c.id.clone())?,
+                children: self.compile_children(&c.children)?,
+            }),
+            JsonNode::Hyperlink(h) => Ok(JsonInstruction::Hyperlink {
+                styles: self.compile_styles(&h.style_names, &h.style_override, h.id.clone())?,
+                href: parse_expression_string(&h.href)?,
+                children: self.compile_children(&h.children)?,
+            }),
+            JsonNode::PageReference { target_id } => Ok(JsonInstruction::PageReference {
+                target_id: target_id.clone(),
+            }),
+            JsonNode::InlineImage(i) => Ok(JsonInstruction::InlineImage {
+                styles: self.compile_styles(&i.style_names, &i.style_override, i.id.clone())?,
+                src: parse_expression_string(&i.src)?,
+            }),
             JsonNode::LineBreak => Ok(JsonInstruction::LineBreak),
-            JsonNode::PageBreak { master_name } => Ok(JsonInstruction::PageBreak { master_name: master_name.clone() }),
+            JsonNode::PageBreak { master_name } => Ok(JsonInstruction::PageBreak {
+                master_name: master_name.clone(),
+            }),
             JsonNode::RenderTemplate { name } => {
                 if !self.definitions.contains_key(name) {
-                    return Err(JsonTemplateError::TemplateParse(format!("Defined template '{}' not found in stylesheet definitions.", name)));
+                    return Err(JsonTemplateError::TemplateParse(format!(
+                        "Defined template '{}' not found in stylesheet definitions.",
+                        name
+                    )));
                 }
                 Ok(JsonInstruction::RenderTemplate { name: name.clone() })
             }
         }
     }
 
-    fn compile_table_node(&self, table: &ast::JsonTable) -> Result<JsonInstruction, JsonTemplateError> {
+    fn compile_table_node(
+        &self,
+        table: &ast::JsonTable,
+    ) -> Result<JsonInstruction, JsonTemplateError> {
         let columns = table
             .columns
             .iter()
@@ -220,7 +335,11 @@ impl<'a> Compiler<'a> {
         &self,
         children: &[TemplateNode],
     ) -> Result<Vec<JsonInstruction>, JsonTemplateError> {
-        children.iter().map(|node| self.compile_node(node)).flatten_ok().collect()
+        children
+            .iter()
+            .map(|node| self.compile_node(node))
+            .flatten_ok()
+            .collect()
     }
 
     fn compile_styles(
@@ -237,7 +356,10 @@ impl<'a> Compiler<'a> {
             } else {
                 for name in name_str.split_whitespace().filter(|s| !s.is_empty()) {
                     let style = self.stylesheet.styles.get(name).cloned().ok_or_else(|| {
-                        JsonTemplateError::TemplateParse(format!("Style '{}' not found in stylesheet", name))
+                        JsonTemplateError::TemplateParse(format!(
+                            "Style '{}' not found in stylesheet",
+                            name
+                        ))
                     })?;
                     static_styles.push(style);
                 }
@@ -259,9 +381,9 @@ impl<'a> Compiler<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use petty_style::stylesheet::ElementStyle;
-    use petty_jpath::ast::Selection;
     use crate::ast::JsonParagraph;
+    use petty_jpath::ast::Selection;
+    use petty_style::stylesheet::ElementStyle;
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -269,13 +391,19 @@ mod tests {
         let mut styles = HashMap::new();
         styles.insert(
             "test_style".to_string(),
-            Arc::new(ElementStyle { font_size: Some(12.0), ..Default::default() }),
+            Arc::new(ElementStyle {
+                font_size: Some(12.0),
+                ..Default::default()
+            }),
         );
         let mut stylesheet = Stylesheet::default();
         stylesheet.styles = styles;
         let static_stylesheet: &'static Stylesheet = Box::leak(Box::new(stylesheet));
         let empty_defs = Box::leak(Box::new(HashMap::new()));
-        (Compiler::new(static_stylesheet, empty_defs), static_stylesheet.clone())
+        (
+            Compiler::new(static_stylesheet, empty_defs),
+            static_stylesheet.clone(),
+        )
     }
 
     #[test]
@@ -283,7 +411,9 @@ mod tests {
         let (compiler, _) = create_test_compiler();
         let node = TemplateNode::Static(JsonNode::Paragraph(JsonParagraph {
             style_names: vec!["test_style".to_string()],
-            children: vec![TemplateNode::Static(JsonNode::Text { content: "Hello".to_string() })],
+            children: vec![TemplateNode::Static(JsonNode::Text {
+                content: "Hello".to_string(),
+            })],
             ..Default::default()
         }));
         let result = compiler.compile(&node).unwrap();
@@ -307,7 +437,12 @@ mod tests {
         }));
         let result = compiler.compile(&node);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Style 'non_existent_style' not found"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("Style 'non_existent_style' not found")
+        );
     }
 
     #[test]
@@ -318,11 +453,15 @@ mod tests {
             "then": { "type": "Text", "content": "Then" },
             "else": { "type": "Text", "content": "Else" }
         }))
-            .unwrap();
+        .unwrap();
         let result = compiler.compile(&node).unwrap();
         assert_eq!(result.len(), 1);
         match &result[0] {
-            JsonInstruction::If { test, then_branch, else_branch } => {
+            JsonInstruction::If {
+                test,
+                then_branch,
+                else_branch,
+            } => {
                 assert!(matches!(test, Expression::Selection(Selection::Path(_))));
                 assert_eq!(then_branch.len(), 1);
                 assert_eq!(else_branch.len(), 1);

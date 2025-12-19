@@ -4,19 +4,19 @@
 
 pub mod ast;
 pub mod compiler;
+pub mod datasources;
+pub mod error;
 pub mod executor;
+pub mod idf_builder;
+pub mod output;
 pub mod parser;
 pub mod pattern;
 pub mod processor;
 pub mod util;
-pub mod output;
-pub mod idf_builder;
-pub mod datasources;
-pub mod error;
 
 mod compiler_handlers;
 mod executor_handlers;
 
-pub use error::{XsltError, Location};
-pub use processor::{XsltParser, XsltTemplate};
 pub use datasources::{DataSourceNode, NodeType, QName};
+pub use error::{Location, XsltError};
+pub use processor::{XsltParser, XsltTemplate};

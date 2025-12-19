@@ -1,19 +1,17 @@
-use petty_idf::{IRNode, InlineNode, TextStr};
+use super::RenderNode;
 use crate::engine::{LayoutEngine, LayoutStore};
-use petty_types::geometry::{self, BoxConstraints, Size};
 use crate::interface::{
     LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, ListItemState, NodeState,
 };
-use super::RenderNode;
-use crate::painting::box_painter::create_background_and_borders;
 use crate::nodes::list_utils::get_marker_text;
+use crate::painting::box_painter::create_background_and_borders;
 use crate::style::ComputedStyle;
-use crate::{
-    LayoutElement, LayoutError, PositionedElement, TextElement,
-};
+use crate::{LayoutElement, LayoutError, PositionedElement, TextElement};
+use petty_idf::{IRNode, InlineNode, TextStr};
 use petty_style::dimension::Dimension;
 use petty_style::list::ListStylePosition;
 use petty_style::text::TextDecoration;
+use petty_types::geometry::{self, BoxConstraints, Size};
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -58,17 +56,25 @@ impl<'a> ListItemNode<'a> {
 
         // For "Inside" positioning, modify the first paragraph to include the marker
         let mut children_to_process = ir_children.clone();
-        if style.list.style_position == ListStylePosition::Inside && !marker_text.is_empty()
+        if style.list.style_position == ListStylePosition::Inside
+            && !marker_text.is_empty()
             && let Some(first_child) = children_to_process.first_mut()
-                && let IRNode::Paragraph { children, .. } = first_child {
-                    let prefix = format!("{} ", marker_text);
-                    children.insert(0, InlineNode::Text(prefix));
-                }
+            && let IRNode::Paragraph { children, .. } = first_child
+        {
+            let prefix = format!("{} ", marker_text);
+            children.insert(0, InlineNode::Text(prefix));
+        }
 
         let mut children_vec = Vec::new();
         for child_ir in &children_to_process {
             if let IRNode::List { .. } = child_ir {
-                let list = super::list::ListNode::new_with_depth(child_ir, engine, style.clone(), depth + 1, store)?;
+                let list = super::list::ListNode::new_with_depth(
+                    child_ir,
+                    engine,
+                    style.clone(),
+                    depth + 1,
+                    store,
+                )?;
                 children_vec.push(RenderNode::List(store.bump.alloc(list)));
             } else {
                 children_vec.push(engine.build_layout_node_tree(child_ir, style.clone(), store)?);
@@ -91,7 +97,11 @@ impl<'a> LayoutNode for ListItemNode<'a> {
         self.style.as_ref()
     }
 
-    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<Size, LayoutError> {
+    fn measure(
+        &self,
+        env: &LayoutEnvironment,
+        constraints: BoxConstraints,
+    ) -> Result<Size, LayoutError> {
         let border_left = self.style.border_left_width();
         let border_right = self.style.border_right_width();
         const MARKER_SPACING_FACTOR: f32 = 0.4;
@@ -161,10 +171,7 @@ impl<'a> LayoutNode for ListItemNode<'a> {
 
         let (start_index, mut child_resume_state) = if let Some(state) = break_state {
             let list_state = state.as_list_item()?;
-            (
-                list_state.child_index,
-                list_state.child_state.map(|b| *b),
-            )
+            (list_state.child_index, list_state.child_state.map(|b| *b))
         } else {
             (0, None)
         };
@@ -175,35 +182,37 @@ impl<'a> LayoutNode for ListItemNode<'a> {
 
         let block_start_y_in_ctx = ctx.cursor_y();
 
-        let marker_width = ctx.env.engine.measure_text_width(self.marker_text, &self.style);
+        let marker_width = ctx
+            .env
+            .engine
+            .measure_text_width(self.marker_text, &self.style);
 
         // Draw outside marker on the first page only
-        if !self.marker_text.is_empty() && !is_continuation
-            && is_outside_marker {
-                let marker_available_height = self.style.text.line_height;
-                if marker_available_height > ctx.available_height() && !ctx.is_empty() {
-                    return Ok(LayoutResult::Break(NodeState::ListItem(ListItemState {
-                        child_index: 0,
-                        child_state: None,
-                    })));
-                }
-
-                let marker_box = PositionedElement {
-                    x: 0.0,
-                    y: self.style.border_top_width() + self.style.box_model.padding.top,
-                    width: marker_width,
-                    height: self.style.text.line_height,
-                    element: LayoutElement::Text(TextElement {
-                        content: self.marker_text.to_string(),
-                        href: None,
-                        text_decoration: TextDecoration::None,
-                    }),
-                    style: self.style.clone(),
-                };
-                // Marker is pushed absolute relative to current block start.
-                // push_element_at computes absolute position based on args + bounds.
-                ctx.push_element_at(marker_box, 0.0, block_start_y_in_ctx);
+        if !self.marker_text.is_empty() && !is_continuation && is_outside_marker {
+            let marker_available_height = self.style.text.line_height;
+            if marker_available_height > ctx.available_height() && !ctx.is_empty() {
+                return Ok(LayoutResult::Break(NodeState::ListItem(ListItemState {
+                    child_index: 0,
+                    child_state: None,
+                })));
             }
+
+            let marker_box = PositionedElement {
+                x: 0.0,
+                y: self.style.border_top_width() + self.style.box_model.padding.top,
+                width: marker_width,
+                height: self.style.text.line_height,
+                element: LayoutElement::Text(TextElement {
+                    content: self.marker_text.to_string(),
+                    href: None,
+                    text_decoration: TextDecoration::None,
+                }),
+                style: self.style.clone(),
+            };
+            // Marker is pushed absolute relative to current block start.
+            // push_element_at computes absolute position based on args + bounds.
+            ctx.push_element_at(marker_box, 0.0, block_start_y_in_ctx);
+        }
 
         let indent = if is_outside_marker && !self.marker_text.is_empty() {
             marker_width + self.style.text.font_size * MARKER_SPACING_FACTOR
@@ -234,11 +243,7 @@ impl<'a> LayoutNode for ListItemNode<'a> {
         for (i, child) in self.children.iter().enumerate().skip(start_index) {
             let child_constraints = BoxConstraints::tight_width(child_bounds.width);
 
-            let res = child.layout(
-                &mut child_ctx,
-                child_constraints,
-                child_resume_state.take(),
-            )?;
+            let res = child.layout(&mut child_ctx, child_constraints, child_resume_state.take())?;
 
             match res {
                 LayoutResult::Finished => {}

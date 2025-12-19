@@ -1,14 +1,17 @@
 //! Handlers for table-related XSL-FO and custom table elements.
 
-use petty_style::parsers::{self as style_parsers, run_parser};
 use crate::ast::{PreparsedTemplate, XsltInstruction};
 use crate::compiler::{BuilderState, CompilerBuilder};
 use crate::error::XsltError;
-use crate::util::{get_attr_owned_optional, get_line_col_from_pos, OwnedAttributes};
+use crate::util::{OwnedAttributes, get_attr_owned_optional, get_line_col_from_pos};
+use petty_style::parsers::{self as style_parsers, run_parser};
 
 impl CompilerBuilder {
     pub(crate) fn handle_table_start(&mut self, attrs: OwnedAttributes) {
-        self.state_stack.push(BuilderState::Table { attrs, columns: Vec::new() });
+        self.state_stack.push(BuilderState::Table {
+            attrs,
+            columns: Vec::new(),
+        });
     }
 
     pub(crate) fn handle_table_end(
@@ -18,7 +21,11 @@ impl CompilerBuilder {
         pos: usize,
         source: &str,
     ) -> Result<(), XsltError> {
-        if let BuilderState::Table { attrs, columns: col_strings } = current_state {
+        if let BuilderState::Table {
+            attrs,
+            columns: col_strings,
+        } = current_state
+        {
             let location = get_line_col_from_pos(source, pos).into();
             let mut header = None;
             let mut columns = Vec::new();
@@ -69,7 +76,9 @@ impl CompilerBuilder {
                 // Find the parent `Table` state on the stack and add the column width.
                 // It will be the state before the current `TableColumns` state.
                 let table_state_index = self.state_stack.len().saturating_sub(2);
-                if let Some(BuilderState::Table { columns, .. }) = self.state_stack.get_mut(table_state_index) {
+                if let Some(BuilderState::Table { columns, .. }) =
+                    self.state_stack.get_mut(table_state_index)
+                {
                     columns.push(w_str);
                 }
             }

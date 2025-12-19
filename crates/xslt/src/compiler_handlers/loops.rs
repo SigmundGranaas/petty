@@ -1,7 +1,9 @@
 use crate::ast::{PreparsedTemplate, SortDataType, SortKey, SortOrder, XsltInstruction};
 use crate::compiler::{BuilderState, CompilerBuilder};
 use crate::error::XsltError;
-use crate::util::{get_attr_owned_optional, get_attr_owned_required, get_line_col_from_pos, OwnedAttributes};
+use crate::util::{
+    OwnedAttributes, get_attr_owned_optional, get_attr_owned_required, get_line_col_from_pos,
+};
 
 impl CompilerBuilder {
     pub(crate) fn handle_sortable_start(&mut self, attrs: OwnedAttributes) {
@@ -20,14 +22,20 @@ impl CompilerBuilder {
     ) -> Result<(), XsltError> {
         let location = get_line_col_from_pos(source, pos).into();
 
-        let select_str = get_attr_owned_optional(&attrs, b"select")?.unwrap_or_else(|| ".".to_string());
+        let select_str =
+            get_attr_owned_optional(&attrs, b"select")?.unwrap_or_else(|| ".".to_string());
         let select_expr = self.parse_xpath_and_detect_features(&select_str)?;
 
-        if let Some(BuilderState::Sortable { sort_keys, saw_non_sort_child, .. }) = self.state_stack.last_mut()
+        if let Some(BuilderState::Sortable {
+            sort_keys,
+            saw_non_sort_child,
+            ..
+        }) = self.state_stack.last_mut()
         {
             if *saw_non_sort_child {
                 return Err(XsltError::TemplateStructure {
-                    message: "<xsl:sort> must appear before any other content in its parent.".to_string(),
+                    message: "<xsl:sort> must appear before any other content in its parent."
+                        .to_string(),
                     location,
                 });
             }
@@ -46,7 +54,9 @@ impl CompilerBuilder {
             });
         } else {
             return Err(XsltError::TemplateStructure {
-                message: "<xsl:sort> can only appear inside <xsl:for-each> or <xsl:apply-templates>.".to_string(),
+                message:
+                    "<xsl:sort> can only appear inside <xsl:for-each> or <xsl:apply-templates>."
+                        .to_string(),
                 location,
             });
         }
@@ -60,14 +70,12 @@ impl CompilerBuilder {
         pos: usize,
         source: &str,
     ) -> Result<(), XsltError> {
-        if let BuilderState::Sortable { attrs, sort_keys, .. } = current_state {
-            let select_str = get_attr_owned_required(
-                &attrs,
-                b"select",
-                b"xsl:for-each",
-                pos,
-                source,
-            )?;
+        if let BuilderState::Sortable {
+            attrs, sort_keys, ..
+        } = current_state
+        {
+            let select_str =
+                get_attr_owned_required(&attrs, b"select", b"xsl:for-each", pos, source)?;
             let instr = XsltInstruction::ForEach {
                 select: self.parse_xpath_and_detect_features(&select_str)?,
                 sort_keys,
@@ -80,7 +88,10 @@ impl CompilerBuilder {
         Ok(())
     }
 
-    pub(crate) fn handle_apply_templates_empty(&mut self, attrs: OwnedAttributes) -> Result<(), XsltError> {
+    pub(crate) fn handle_apply_templates_empty(
+        &mut self,
+        attrs: OwnedAttributes,
+    ) -> Result<(), XsltError> {
         let select_expr = if let Some(select_str) = get_attr_owned_optional(&attrs, b"select")? {
             Some(self.parse_xpath_and_detect_features(&select_str)?)
         } else {

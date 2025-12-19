@@ -2,8 +2,8 @@
 use super::compiler::StylesheetBuilder;
 use super::util::get_owned_attributes;
 use crate::error::XsltError;
-use quick_xml::events::{Event as XmlEvent};
 use quick_xml::Reader;
+use quick_xml::events::Event as XmlEvent;
 
 /// Drives the parsing process, calling builder methods for each significant XML event.
 pub fn parse_stylesheet_content(

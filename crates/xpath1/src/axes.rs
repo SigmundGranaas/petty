@@ -3,11 +3,7 @@
 use crate::datasource::DataSourceNode;
 use std::collections::HashSet;
 
-fn add_node<'a, N: DataSourceNode<'a>>(
-    node: N,
-    seen: &mut HashSet<N>,
-    results: &mut Vec<N>,
-) {
+fn add_node<'a, N: DataSourceNode<'a>>(node: N, seen: &mut HashSet<N>, results: &mut Vec<N>) {
     if seen.insert(node) {
         results.push(node);
     }
@@ -164,11 +160,10 @@ pub fn collect_preceding_nodes<'a, N: DataSourceNode<'a>>(
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::tests::{create_test_tree, MockNode};
+    use crate::datasource::tests::{MockNode, create_test_tree};
 
     #[test]
     fn test_collect_child() {

@@ -2,8 +2,10 @@
 
 use crate::ast::{Param, WithParam, XsltInstruction};
 use crate::compiler::{BuilderState, CompilerBuilder};
-use crate::util::{get_attr_owned_optional, get_attr_owned_required, get_line_col_from_pos, OwnedAttributes};
 use crate::error::XsltError;
+use crate::util::{
+    OwnedAttributes, get_attr_owned_optional, get_attr_owned_required, get_line_col_from_pos,
+};
 
 impl CompilerBuilder {
     pub(crate) fn handle_param(
@@ -29,7 +31,8 @@ impl CompilerBuilder {
             Ok(())
         } else {
             Err(XsltError::TemplateStructure {
-                message: "<xsl:param> can only appear at the top level of a named template.".to_string(),
+                message: "<xsl:param> can only appear at the top level of a named template."
+                    .to_string(),
                 location,
             })
         }
@@ -44,7 +47,8 @@ impl CompilerBuilder {
         let location = get_line_col_from_pos(source, pos).into();
 
         let p_name = get_attr_owned_required(&attrs, b"name", b"xsl:with-param", pos, source)?;
-        let select_str = get_attr_owned_required(&attrs, b"select", b"xsl:with-param", pos, source)?;
+        let select_str =
+            get_attr_owned_required(&attrs, b"select", b"xsl:with-param", pos, source)?;
         let select_expr = self.parse_xpath_and_detect_features(&select_str)?;
 
         // `with-param` can be a child of `call-template` or `apply-templates` (which uses the Sortable state)
@@ -70,13 +74,7 @@ impl CompilerBuilder {
         pos: usize,
         source: &str,
     ) -> Result<(), XsltError> {
-        let select_str = get_attr_owned_required(
-            &attrs,
-            b"select",
-            b"xsl:variable",
-            pos,
-            source,
-        )?;
+        let select_str = get_attr_owned_required(&attrs, b"select", b"xsl:variable", pos, source)?;
         let instr = XsltInstruction::Variable {
             name: get_attr_owned_required(&attrs, b"name", b"xsl:variable", pos, source)?,
             select: self.parse_xpath_and_detect_features(&select_str)?,

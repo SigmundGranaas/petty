@@ -1,10 +1,7 @@
 use crate::interface::{BlockState, NodeState};
 
 /// Wraps a generic child state into a BlockState for block-like containers.
-pub fn wrap_in_block_state(
-    child_index: usize,
-    child_state: NodeState,
-) -> NodeState {
+pub fn wrap_in_block_state(child_index: usize, child_state: NodeState) -> NodeState {
     NodeState::Block(BlockState {
         child_index,
         child_state: Some(Box::new(child_state)),

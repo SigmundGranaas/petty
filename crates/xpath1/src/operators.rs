@@ -66,7 +66,7 @@ fn evaluate_union<'a, N: DataSourceNode<'a> + 'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::tests::{create_test_tree, MockNode};
+    use crate::datasource::tests::{MockNode, create_test_tree};
 
     #[test]
     fn test_logical_operators() {
@@ -108,7 +108,14 @@ mod tests {
                 .to_number(),
             30.0
         );
-        assert!((evaluate(BinaryOperator::Divide, left.clone(), right.clone()).unwrap().to_number() - 3.333).abs() < 0.001);
+        assert!(
+            (evaluate(BinaryOperator::Divide, left.clone(), right.clone())
+                .unwrap()
+                .to_number()
+                - 3.333)
+                .abs()
+                < 0.001
+        );
         assert_eq!(
             evaluate(BinaryOperator::Modulo, left.clone(), right.clone())
                 .unwrap()
@@ -122,9 +129,13 @@ mod tests {
         let left_str = XPathValue::String::<MockNode>("hello".to_string());
         let right_str = XPathValue::String::<MockNode>("world".to_string());
         assert_eq!(
-            evaluate(BinaryOperator::NotEquals, left_str.clone(), right_str.clone())
-                .unwrap()
-                .to_bool(),
+            evaluate(
+                BinaryOperator::NotEquals,
+                left_str.clone(),
+                right_str.clone()
+            )
+            .unwrap()
+            .to_bool(),
             true
         );
         assert_eq!(

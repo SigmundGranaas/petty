@@ -1,3 +1,4 @@
+use super::PositionedElement;
 use super::fonts::SharedFontLibrary;
 use super::interface::{
     AnchorLocation, IndexEntry, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult,
@@ -5,30 +6,29 @@ use super::interface::{
 };
 use super::nodes::RenderNode;
 use super::style::{self, ComputedStyle};
-use super::PositionedElement;
-use petty_idf::{IRNode, TextStr};
-use crate::config::LayoutConfig;
 use crate::LayoutError;
-use petty_style::stylesheet::{ElementStyle, Stylesheet};
-use petty_style::font::{FontWeight, FontStyle};
-use petty_types::geometry::{self as geom, BoxConstraints};
 use crate::cache::{
-    LayoutCache, ThreadLocalCache, FontCacheKey, ShapingCacheKey, MultiSpanCacheKey
+    FontCacheKey, LayoutCache, MultiSpanCacheKey, ShapingCacheKey, ThreadLocalCache,
 };
-use crate::perf::{Profiler, NoOpProfiler, DebugProfiler};
+use crate::config::LayoutConfig;
 use crate::fonts::FontData;
+use crate::perf::{DebugProfiler, NoOpProfiler, Profiler};
 use crate::text::shaper::ShapedRun;
+use petty_idf::{IRNode, TextStr};
+use petty_style::font::{FontStyle, FontWeight};
+use petty_style::stylesheet::{ElementStyle, Stylesheet};
+use petty_types::geometry::{self as geom, BoxConstraints};
 
 use bumpalo::Bump;
+use std::cell::RefCell;
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 #[cfg(feature = "system-fonts")]
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Instant, Duration};
-use std::cell::RefCell;
-use std::hash::{Hash, Hasher};
-use std::collections::hash_map::DefaultHasher;
+use std::time::{Duration, Instant};
 
 pub struct LayoutStore {
     pub bump: Bump,
@@ -183,7 +183,8 @@ impl LayoutEngine {
         let start = Instant::now();
         let default_style = self.get_default_style();
         let res = crate::nodes::build_node_tree(ir_root, self, default_style, store);
-        self.profiler.record("LayoutEngine::build_render_tree", start.elapsed());
+        self.profiler
+            .record("LayoutEngine::build_render_tree", start.elapsed());
         res
     }
 
@@ -237,9 +238,10 @@ impl LayoutEngine {
 
         // 1. Check Global Cache
         if let Ok(cache) = self.cache.fonts.read()
-            && let Some(cached_result) = cache.get(&key) {
-                return cached_result.clone();
-            }
+            && let Some(cached_result) = cache.get(&key)
+        {
+            return cached_result.clone();
+        }
 
         // 2. Resolve & Cache
         let font_data = self.font_library.resolve_font_data(style).ok();
@@ -258,9 +260,10 @@ impl LayoutEngine {
         let key = (text.to_string(), style_hash);
 
         if let Ok(cache) = self.cache.measurements.read()
-            && let Some(&width) = cache.get(&key) {
-                return width;
-            }
+            && let Some(&width) = cache.get(&key)
+        {
+            return width;
+        }
 
         let font_data = match self.get_font_for_style(style) {
             Some(d) => d,
@@ -297,7 +300,12 @@ impl LayoutEngine {
     ) -> Result<Vec<RenderNode<'a>>, LayoutError> {
         let mut nodes = Vec::with_capacity(ir_children.len());
         for child_ir in ir_children {
-            nodes.push(crate::nodes::build_node_tree(child_ir, self, parent_style.clone(), store)?);
+            nodes.push(crate::nodes::build_node_tree(
+                child_ir,
+                self,
+                parent_style.clone(),
+                store,
+            )?);
         }
         Ok(nodes)
     }
@@ -313,10 +321,11 @@ impl LayoutEngine {
 
     pub fn get_cached_shaping_run(&self, key: &ShapingCacheKey) -> Option<Arc<Vec<ShapedRun>>> {
         if let Ok(cache) = self.cache.shaping.read()
-            && let Some(run) = cache.get(key) {
-                self.profiler.count_hit();
-                return Some(run.clone());
-            }
+            && let Some(run) = cache.get(key)
+        {
+            self.profiler.count_hit();
+            return Some(run.clone());
+        }
         None
     }
 
@@ -327,12 +336,16 @@ impl LayoutEngine {
         }
     }
 
-    pub fn get_cached_multi_span_run(&self, key: &MultiSpanCacheKey) -> Option<Arc<Vec<ShapedRun>>> {
+    pub fn get_cached_multi_span_run(
+        &self,
+        key: &MultiSpanCacheKey,
+    ) -> Option<Arc<Vec<ShapedRun>>> {
         if let Ok(cache) = self.cache.multi_span.read()
-            && let Some(run) = cache.get(key) {
-                self.profiler.count_hit();
-                return Some(run.clone());
-            }
+            && let Some(run) = cache.get(key)
+        {
+            self.profiler.count_hit();
+            return Some(run.clone());
+        }
         None
     }
 
@@ -360,37 +373,45 @@ impl<'a> Iterator for PaginationIterator<'a> {
     type Item = Result<PageOutput, LayoutError>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        if self.finished { return None; }
+        if self.finished {
+            return None;
+        }
 
         let start = Instant::now();
 
-        let result = loop {
+        let result = (|| {
             const MAX_PAGES: usize = 500;
             self.page_count += 1;
             if self.page_count > MAX_PAGES {
                 self.finished = true;
-                break Some(Err(LayoutError::Generic(format!("Page limit exceeded ({})", MAX_PAGES))));
+                return Some(Err(LayoutError::Generic(format!(
+                    "Page limit exceeded ({})",
+                    MAX_PAGES
+                ))));
             }
 
             let master_name = match &self.current_master_name {
                 Some(n) => n,
                 None => {
                     self.finished = true;
-                    break Some(Err(LayoutError::Generic("No page master".into())));
+                    return Some(Err(LayoutError::Generic("No page master".into())));
                 }
             };
             let page_layout = match self.stylesheet.page_masters.get(master_name) {
                 Some(l) => l,
                 None => {
                     self.finished = true;
-                    break Some(Err(LayoutError::Generic("Page master not found".into())));
+                    return Some(Err(LayoutError::Generic("Page master not found".into())));
                 }
             };
 
             let (w, h) = page_layout.size.dimensions_pt();
             let m = page_layout.margins.clone().unwrap_or_default();
             let bounds = geom::Rect {
-                x: m.left, y: m.top, width: w - m.left - m.right, height: h - m.top - m.bottom
+                x: m.left,
+                y: m.top,
+                width: w - m.left - m.right,
+                height: h - m.top - m.bottom,
             };
 
             let mut elements = Vec::new();
@@ -404,31 +425,52 @@ impl<'a> Iterator for PaginationIterator<'a> {
                 cache: &self.thread_cache.node_layouts,
             };
 
-            let mut ctx = LayoutContext::new(env, bounds, self.arena, &mut elements, &mut anchors, &mut indices);
+            let mut ctx = LayoutContext::new(
+                env,
+                bounds,
+                self.arena,
+                &mut elements,
+                &mut anchors,
+                &mut indices,
+            );
             let constraints = BoxConstraints::tight_width(bounds.width);
 
-            let layout_res = self.root_node.layout(&mut ctx, constraints, self.current_state.take());
+            let layout_res =
+                self.root_node
+                    .layout(&mut ctx, constraints, self.current_state.take());
 
-            break match layout_res {
+            match layout_res {
                 Ok(LayoutResult::Finished) => {
                     self.finished = true;
-                    Some(Ok(PageOutput { elements, anchors, index_entries: indices, page_number: self.page_count }))
+                    Some(Ok(PageOutput {
+                        elements,
+                        anchors,
+                        index_entries: indices,
+                        page_number: self.page_count,
+                    }))
                 }
                 Ok(LayoutResult::Break(next)) => {
                     if let Some(Some(nm)) = self.root_node.check_for_page_break() {
                         self.current_master_name = Some(nm.to_string());
                     }
                     self.current_state = Some(next);
-                    Some(Ok(PageOutput { elements, anchors, index_entries: indices, page_number: self.page_count }))
+                    Some(Ok(PageOutput {
+                        elements,
+                        anchors,
+                        index_entries: indices,
+                        page_number: self.page_count,
+                    }))
                 }
                 Err(e) => {
                     self.finished = true;
                     Some(Err(e))
                 }
-            };
-        };
+            }
+        })();
 
-        self.engine.profiler.record("PageLayout::generate_page", start.elapsed());
+        self.engine
+            .profiler
+            .record("PageLayout::generate_page", start.elapsed());
 
         result
     }

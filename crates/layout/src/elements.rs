@@ -1,8 +1,8 @@
 // src/core/layout/elements.rs
 
-use petty_types::geometry;
 use crate::style::ComputedStyle;
 use petty_style::text::TextDecoration;
+use petty_types::geometry;
 use std::sync::Arc;
 
 /// A simple, geometry-aware data structure representing a single drawable item.

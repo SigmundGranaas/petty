@@ -13,30 +13,30 @@ pub mod paragraph;
 pub mod table;
 
 #[cfg(test)]
-mod block_test;
-#[cfg(test)]
 mod block_split_test;
 #[cfg(test)]
-mod flex_test;
+mod block_test;
 #[cfg(test)]
 mod flex_break_test;
+#[cfg(test)]
+mod flex_test;
 #[cfg(test)]
 mod image_test;
 #[cfg(test)]
 mod index_marker_test;
 #[cfg(test)]
-mod table_test;
-#[cfg(test)]
 mod list_test;
+#[cfg(test)]
+mod table_test;
 // Removed text_test from here as it resides in layout/mod.rs
 
 use petty_idf::{IRNode, TextStr};
 // Use geometry types from base to ensure consistency across trait impls
-use petty_types::geometry::{BoxConstraints, Size};
-use crate::interface::{LayoutContext, LayoutNode, LayoutResult, NodeState};
-use crate::{LayoutEnvironment, LayoutError, LayoutEngine};
 use crate::engine::LayoutStore;
+use crate::interface::{LayoutContext, LayoutNode, LayoutResult, NodeState};
 use crate::style::ComputedStyle;
+use crate::{LayoutEngine, LayoutEnvironment, LayoutError};
+use petty_types::geometry::{BoxConstraints, Size};
 
 // Import specific nodes
 use self::block::BlockNode;
@@ -59,7 +59,6 @@ pub fn build_node_tree<'a>(
     parent_style: Arc<ComputedStyle>,
     store: &'a LayoutStore,
 ) -> Result<RenderNode<'a>, LayoutError> {
-
     match node {
         IRNode::Root(_) => BlockNode::build(node, engine, parent_style, store),
         IRNode::Block { .. } => BlockNode::build(node, engine, parent_style, store),

@@ -3,19 +3,16 @@
 //! This module provides backward compatibility by re-exporting types from
 //! petty-template-core and providing adapters for PipelineError.
 
+use crate::error::PipelineError;
 use crate::idf::IRNode;
 use crate::style_types::stylesheet::Stylesheet;
-use crate::error::PipelineError;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 // Re-export core types from petty-template-core
 pub use petty_template_core::{
-    DataSourceFormat,
-    ExecutionConfig,
-    TemplateFlags,
-    TemplateFeatures as CoreTemplateFeatures,
+    DataSourceFormat, ExecutionConfig, TemplateFeatures as CoreTemplateFeatures, TemplateFlags,
 };
 
 // Re-export TemplateError for use by parser implementations
@@ -40,7 +37,8 @@ impl TemplateFeatures {
             .role_templates
             .into_iter()
             .map(|(name, template)| {
-                let wrapped: Arc<dyn CompiledTemplate> = Arc::new(CompiledTemplateAdapter::new(template));
+                let wrapped: Arc<dyn CompiledTemplate> =
+                    Arc::new(CompiledTemplateAdapter::new(template));
                 (name, wrapped)
             })
             .collect();

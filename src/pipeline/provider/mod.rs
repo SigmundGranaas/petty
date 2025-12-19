@@ -1,6 +1,6 @@
-use petty_core::error::PipelineError;
 use crate::pipeline::api::PreparedDataSources;
 use crate::pipeline::context::PipelineContext;
+use petty_core::error::PipelineError;
 use serde_json::Value;
 
 pub mod metadata;

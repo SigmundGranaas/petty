@@ -18,11 +18,9 @@ pub struct EvaluationContext<'a> {
 pub fn evaluate(expr: &Expression, e_ctx: &EvaluationContext) -> Result<Value, JPathError> {
     match expr {
         Expression::Literal(val) => Ok(val.clone()),
-        Expression::Selection(sel) => {
-            Ok(select_first(sel, e_ctx.context_node, e_ctx.variables)
-                .cloned()
-                .unwrap_or(Value::Null))
-        }
+        Expression::Selection(sel) => Ok(select_first(sel, e_ctx.context_node, e_ctx.variables)
+            .cloned()
+            .unwrap_or(Value::Null)),
         Expression::FunctionCall { name, args } => {
             let function = e_ctx
                 .functions

@@ -1,6 +1,6 @@
 //! Defines the registry and built-in implementations for JPath functions.
 use super::engine::EvaluationContext;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::collections::HashMap;
 
 /// The signature for a custom JPath function implementation.
@@ -14,7 +14,9 @@ pub struct FunctionRegistry {
 impl FunctionRegistry {
     /// Creates a new, empty function registry.
     pub fn new() -> Self {
-        Self { functions: HashMap::new() }
+        Self {
+            functions: HashMap::new(),
+        }
     }
 
     /// Registers a new function.
@@ -41,11 +43,17 @@ fn to_string(v: &Value) -> String {
 // --- Built-in Function Implementations ---
 
 fn upper(_e_ctx: &EvaluationContext, args: Vec<Value>) -> Value {
-    args.first().and_then(|v| v.as_str()).map(|s| s.to_uppercase().into()).unwrap_or(Value::Null)
+    args.first()
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_uppercase().into())
+        .unwrap_or(Value::Null)
 }
 
 fn lower(_e_ctx: &EvaluationContext, args: Vec<Value>) -> Value {
-    args.first().and_then(|v| v.as_str()).map(|s| s.to_lowercase().into()).unwrap_or(Value::Null)
+    args.first()
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_lowercase().into())
+        .unwrap_or(Value::Null)
 }
 
 fn concat(_e_ctx: &EvaluationContext, args: Vec<Value>) -> Value {

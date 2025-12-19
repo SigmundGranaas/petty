@@ -1,14 +1,14 @@
 //! A dedicated engine for parsing and evaluating XSLT `match` patterns.
-use petty_xpath1::datasource::{DataSourceNode, NodeType};
-use petty_xpath1::ast::{NodeTest, NodeTypeTest};
-use petty_xpath1::parser as xpath_parser;
 use crate::error::XsltError;
+use nom::IResult;
 use nom::branch::alt;
 use nom::bytes::complete::tag;
 use nom::combinator::map;
 use nom::multi::{separated_list0, separated_list1};
 use nom::sequence::preceded;
-use nom::IResult;
+use petty_xpath1::ast::{NodeTest, NodeTypeTest};
+use petty_xpath1::datasource::{DataSourceNode, NodeType};
+use petty_xpath1::parser as xpath_parser;
 use std::fmt;
 
 /// Represents a single location step in a match pattern (e.g., `foo`, `*`, `text()`).
@@ -39,7 +39,6 @@ impl fmt::Display for Pattern {
     }
 }
 
-
 /// A single location path within a pattern, e.g., "/doc/section/para".
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct LocationPathPattern {
@@ -56,7 +55,8 @@ impl Pattern {
 
 impl LocationPathPattern {
     fn matches<'a, N: DataSourceNode<'a>>(&self, node: N, root: N) -> bool {
-        if self.is_absolute && self.steps.is_empty() { // Special case for "/"
+        if self.is_absolute && self.steps.is_empty() {
+            // Special case for "/"
             return node == root;
         }
 
@@ -95,7 +95,10 @@ impl MatchStep {
             }
             MatchAxis::Child => {
                 // Child axis in patterns can match elements, text nodes, and the root.
-                if node_type != NodeType::Element && node_type != NodeType::Text && node_type != NodeType::Root {
+                if node_type != NodeType::Element
+                    && node_type != NodeType::Text
+                    && node_type != NodeType::Root
+                {
                     return false;
                 }
             }
@@ -109,7 +112,7 @@ impl MatchStep {
                 } else {
                     true
                 }
-            },
+            }
             NodeTest::Name(test_name) => name.is_some_and(|q| q.local_part == test_name),
             NodeTest::NodeType(ntt) => match ntt {
                 NodeTypeTest::Text => node_type == NodeType::Text,
@@ -125,27 +128,42 @@ impl MatchStep {
 
 pub fn parse(text: &str) -> Result<Pattern, XsltError> {
     match pattern_parser(text.trim()) {
-        Ok(("", paths)) => Ok(Pattern { paths, original_text: text.to_string() }),
-        Ok((rem, _)) => Err(XsltError::XPathParse(text.to_string(), format!("Unconsumed input in pattern: {}", rem))),
+        Ok(("", paths)) => Ok(Pattern {
+            paths,
+            original_text: text.to_string(),
+        }),
+        Ok((rem, _)) => Err(XsltError::XPathParse(
+            text.to_string(),
+            format!("Unconsumed input in pattern: {}", rem),
+        )),
         Err(e) => Err(XsltError::XPathParse(text.to_string(), e.to_string())),
     }
 }
 
 fn step_parser(input: &str) -> IResult<&str, MatchStep> {
     let (remaining_input, node_test) = alt((
-        map(preceded(tag("@"), xpath_parser::node_test), |nt| (nt, MatchAxis::Attribute)),
+        map(preceded(tag("@"), xpath_parser::node_test), |nt| {
+            (nt, MatchAxis::Attribute)
+        }),
         map(xpath_parser::node_test, |nt| (nt, MatchAxis::Child)),
     ))(input)?;
 
-    Ok((remaining_input, MatchStep { axis: node_test.1, node_test: node_test.0 }))
+    Ok((
+        remaining_input,
+        MatchStep {
+            axis: node_test.1,
+            node_test: node_test.0,
+        },
+    ))
 }
 
 fn path_parser(input: &str) -> IResult<&str, LocationPathPattern> {
-    let (remaining, is_absolute) = if let Ok((rem, _)) = tag::<&str, &str, nom::error::Error<&str>>("/")(input) {
-        (rem, true)
-    } else {
-        (input, false)
-    };
+    let (remaining, is_absolute) =
+        if let Ok((rem, _)) = tag::<&str, &str, nom::error::Error<&str>>("/")(input) {
+            (rem, true)
+        } else {
+            (input, false)
+        };
 
     let (remaining, steps) = if is_absolute {
         // An absolute path can be just `/` (no steps) or have subsequent steps like `/*` or `/root/item`
@@ -165,7 +183,7 @@ fn pattern_parser(input: &str) -> IResult<&str, Vec<LocationPathPattern>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use petty_xpath1::datasource::tests::{create_test_tree, MockNode, MockTree};
+    use petty_xpath1::datasource::tests::{MockNode, MockTree, create_test_tree};
 
     fn get_node<'a>(tree: &'a MockTree<'a>, id: usize) -> MockNode<'a> {
         MockNode { id, tree }
@@ -205,7 +223,6 @@ mod tests {
         assert!(!pattern.matches(root_node, root_node));
         assert!(!pattern.matches(text_node, root_node));
     }
-
 
     #[test]
     fn test_path_match() {

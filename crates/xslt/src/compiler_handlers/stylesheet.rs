@@ -1,11 +1,11 @@
 //! Handlers for top-level XSLT stylesheet elements and simple literal instructions.
 
-use petty_style::stylesheet::PageLayout;
-use petty_style::parsers::{parse_page_size, parse_length, parse_shorthand_margins, run_parser};
 use crate::ast::XsltInstruction;
 use crate::compiler::{BuilderState, CompilerBuilder};
 use crate::error::{Location, XsltError};
-use crate::util::{get_attr_owned_optional, get_attr_owned_required, OwnedAttributes};
+use crate::util::{OwnedAttributes, get_attr_owned_optional, get_attr_owned_required};
+use petty_style::parsers::{parse_length, parse_page_size, parse_shorthand_margins, run_parser};
+use petty_style::stylesheet::PageLayout;
 use quick_xml::events::BytesStart;
 use std::str::from_utf8;
 
@@ -43,10 +43,9 @@ impl CompilerBuilder {
                 _ => {}
             }
         }
-        self.stylesheet.page_masters.insert(
-            master_name.unwrap_or_else(|| "default".to_string()),
-            page,
-        );
+        self.stylesheet
+            .page_masters
+            .insert(master_name.unwrap_or_else(|| "default".to_string()), page);
         Ok(())
     }
 
@@ -73,13 +72,7 @@ impl CompilerBuilder {
         pos: usize,
         source: &str,
     ) -> Result<(), XsltError> {
-        let select_str = get_attr_owned_required(
-            &attrs,
-            b"select",
-            b"xsl:value-of",
-            pos,
-            source,
-        )?;
+        let select_str = get_attr_owned_required(&attrs, b"select", b"xsl:value-of", pos, source)?;
         let instr = XsltInstruction::ValueOf {
             select: self.parse_xpath_and_detect_features(&select_str)?,
         };
@@ -95,13 +88,7 @@ impl CompilerBuilder {
         pos: usize,
         source: &str,
     ) -> Result<(), XsltError> {
-        let select_str = get_attr_owned_required(
-            &attrs,
-            b"select",
-            b"xsl:copy-of",
-            pos,
-            source,
-        )?;
+        let select_str = get_attr_owned_required(&attrs, b"select", b"xsl:copy-of", pos, source)?;
         let instr = XsltInstruction::CopyOf {
             select: self.parse_xpath_and_detect_features(&select_str)?,
         };

@@ -1,5 +1,5 @@
-use petty_idf::TableColumnDefinition;
 use crate::{LayoutEnvironment, LayoutError};
+use petty_idf::TableColumnDefinition;
 use petty_style::dimension::Dimension;
 use std::time::Instant;
 
@@ -75,7 +75,9 @@ impl<'a> TableSolver<'a> {
         // If no auto columns, we are done
         if auto_indices.is_empty() {
             let duration = start.elapsed();
-            self.env.engine.record_perf("TableSolver::resolve_widths", duration);
+            self.env
+                .engine
+                .record_perf("TableSolver::resolve_widths", duration);
             return Ok(widths);
         }
 
@@ -85,12 +87,10 @@ impl<'a> TableSolver<'a> {
         // Limit sampling to avoid performance cliff on massive tables
         const AUTO_LAYOUT_SAMPLE_LIMIT: usize = 100;
 
-        let mut row_count = 0;
-        for row in rows {
+        for (row_count, row) in rows.into_iter().enumerate() {
             if row_count >= AUTO_LAYOUT_SAMPLE_LIMIT {
                 break;
             }
-            row_count += 1;
 
             let mut col_cursor = 0;
             for cell in row {
@@ -100,8 +100,8 @@ impl<'a> TableSolver<'a> {
 
                 let colspan = cell.colspan();
                 // Only measure if this cell spans an auto column
-                let involves_auto_col = (col_cursor..(col_cursor + colspan))
-                    .any(|idx| auto_indices.contains(&idx));
+                let involves_auto_col =
+                    (col_cursor..(col_cursor + colspan)).any(|idx| auto_indices.contains(&idx));
 
                 if involves_auto_col {
                     let m_start = Instant::now();
@@ -133,7 +133,8 @@ impl<'a> TableSolver<'a> {
                     // Expand: Distribute extra space proportionally
                     let extra_space = remaining_width - total_preferred;
                     for &i in &auto_indices {
-                        widths[i] = preferred_widths[i] + extra_space * (preferred_widths[i] / total_preferred);
+                        widths[i] = preferred_widths[i]
+                            + extra_space * (preferred_widths[i] / total_preferred);
                     }
                 } else {
                     // Shrink: Scale down proportionally to fit
@@ -152,8 +153,12 @@ impl<'a> TableSolver<'a> {
         }
 
         let duration = start.elapsed();
-        self.env.engine.record_perf("TableSolver::resolve_widths", duration);
-        self.env.engine.record_perf("TableSolver::resolve_widths::measure_content", measure_time);
+        self.env
+            .engine
+            .record_perf("TableSolver::resolve_widths", duration);
+        self.env
+            .engine
+            .record_perf("TableSolver::resolve_widths::measure_content", measure_time);
 
         Ok(widths)
     }

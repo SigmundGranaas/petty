@@ -28,13 +28,17 @@ pub fn get_marker_text(style: &Arc<ComputedStyle>, index: usize, depth: usize) -
 }
 
 pub fn int_to_lower_alpha(n: usize) -> String {
-    if n == 0 { return "a".to_string(); }
+    if n == 0 {
+        return "a".to_string();
+    }
     let mut s = String::new();
     let mut num = n - 1;
     loop {
         s.insert(0, (b'a' + (num % 26) as u8) as char);
         num /= 26;
-        if num == 0 { break; }
+        if num == 0 {
+            break;
+        }
         num -= 1;
     }
     s
@@ -45,12 +49,23 @@ pub fn int_to_upper_alpha(n: usize) -> String {
 }
 
 pub fn int_to_lower_roman(n: usize) -> String {
-    if n == 0 { return String::new(); }
+    if n == 0 {
+        return String::new();
+    }
     let mut num = n;
     let values = [
-        (1000, "m"), (900, "cm"), (500, "d"), (400, "cd"),
-        (100, "c"), (90, "xc"), (50, "l"), (40, "xl"),
-        (10, "x"), (9, "ix"), (5, "v"), (4, "iv"),
+        (1000, "m"),
+        (900, "cm"),
+        (500, "d"),
+        (400, "cd"),
+        (100, "c"),
+        (90, "xc"),
+        (50, "l"),
+        (40, "xl"),
+        (10, "x"),
+        (9, "ix"),
+        (5, "v"),
+        (4, "iv"),
         (1, "i"),
     ];
     let mut result = String::new();

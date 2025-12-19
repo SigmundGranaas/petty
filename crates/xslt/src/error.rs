@@ -1,5 +1,5 @@
-use thiserror::Error;
 use petty_template_core::TemplateError;
+use thiserror::Error;
 
 #[derive(Debug, Clone)]
 pub struct Location {
@@ -84,17 +84,18 @@ impl From<XsltError> for TemplateError {
             XsltError::XPath(e) => TemplateError::ExecutionError(e.to_string()),
             XsltError::Compilation(s) => TemplateError::ParseError(s),
             XsltError::Execution(s) => TemplateError::ExecutionError(s),
-            XsltError::InvalidStyle { property, message } => {
-                TemplateError::ParseError(format!("Invalid style property '{}': {}", property, message))
-            }
+            XsltError::InvalidStyle { property, message } => TemplateError::ParseError(format!(
+                "Invalid style property '{}': {}",
+                property, message
+            )),
             XsltError::TemplateParse(s) => TemplateError::ParseError(s),
             XsltError::TemplateRender(s) => TemplateError::ExecutionError(s),
             XsltError::XPathParse(expr, msg) => {
                 TemplateError::ParseError(format!("XPath parse error in '{}': {}", expr, msg))
             }
-            XsltError::TemplateStructure { message, location } => {
-                TemplateError::ParseError(format!("Template structure error at {}: {}", location, message))
-            }
+            XsltError::TemplateStructure { message, location } => TemplateError::ParseError(
+                format!("Template structure error at {}: {}", location, message),
+            ),
             XsltError::TemplateSyntax { msg, location } => {
                 TemplateError::ParseError(format!("Template syntax error at {}: {}", location, msg))
             }

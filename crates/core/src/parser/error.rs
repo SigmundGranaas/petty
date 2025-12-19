@@ -62,10 +62,7 @@ pub enum ParseError {
     },
 
     #[error("Template structure error at {location}: {message}")]
-    TemplateStructure {
-        message: String,
-        location: Location,
-    },
+    TemplateStructure { message: String, location: Location },
 
     #[error("Template rendering error (e.g., Handlebars): {0}")]
     TemplateRender(String),

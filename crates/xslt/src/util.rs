@@ -1,6 +1,6 @@
-use crate::error::{Location, XsltError};
 use crate::ast::{AttributeValueTemplate, AvtPart};
 use crate::compiler::CompilerBuilder;
+use crate::error::{Location, XsltError};
 use quick_xml::events::BytesStart;
 use std::collections::HashMap;
 
@@ -9,12 +9,37 @@ pub(super) type OwnedAttributes = Vec<(Vec<u8>, Vec<u8>)>;
 // A list of all known XSL-FO and CSS properties.
 // This is used to separate styling attributes from regular attributes.
 const STYLE_PROPERTIES: &[&[u8]] = &[
-    b"font-family", b"font-size", b"font-weight", b"font-style", b"line-height",
-    b"text-align", b"color", b"background-color", b"border", b"border-top", b"border-bottom",
-    b"margin", b"margin-top", b"margin-right", b"margin-bottom", b"margin-left",
-    b"padding", b"padding-top", b"padding-right", b"padding-bottom", b"padding-left",
-    b"width", b"height", b"list-style-type", b"flex-direction", b"flex-wrap",
-    b"justify-content", b"align-items", b"flex-grow", b"flex-shrink", b"flex-basis",
+    b"font-family",
+    b"font-size",
+    b"font-weight",
+    b"font-style",
+    b"line-height",
+    b"text-align",
+    b"color",
+    b"background-color",
+    b"border",
+    b"border-top",
+    b"border-bottom",
+    b"margin",
+    b"margin-top",
+    b"margin-right",
+    b"margin-bottom",
+    b"margin-left",
+    b"padding",
+    b"padding-top",
+    b"padding-right",
+    b"padding-bottom",
+    b"padding-left",
+    b"width",
+    b"height",
+    b"list-style-type",
+    b"flex-direction",
+    b"flex-wrap",
+    b"justify-content",
+    b"align-items",
+    b"flex-grow",
+    b"flex-shrink",
+    b"flex-basis",
     b"align-self",
 ];
 
@@ -24,7 +49,10 @@ pub(crate) fn get_non_style_attributes(
 ) -> Result<HashMap<String, AttributeValueTemplate>, XsltError> {
     let mut non_style_attrs = HashMap::new();
     for (key, value) in attrs {
-        if key.as_slice() == b"style" || key.as_slice() == b"use-attribute-sets" || STYLE_PROPERTIES.contains(&key.as_slice()) {
+        if key.as_slice() == b"style"
+            || key.as_slice() == b"use-attribute-sets"
+            || STYLE_PROPERTIES.contains(&key.as_slice())
+        {
             continue;
         }
         let value_str = std::str::from_utf8(value)?;
@@ -55,7 +83,10 @@ pub(crate) fn get_line_col_from_pos(xml_str: &str, pos: usize) -> (usize, usize)
 }
 
 /// Parses an Attribute Value Template string like "Hello {user/name}" into parts.
-pub(crate) fn parse_avt(builder: &mut CompilerBuilder, text: &str) -> Result<AttributeValueTemplate, XsltError> {
+pub(crate) fn parse_avt(
+    builder: &mut CompilerBuilder,
+    text: &str,
+) -> Result<AttributeValueTemplate, XsltError> {
     if !text.contains('{') {
         return Ok(AttributeValueTemplate::Static(text.to_string()));
     }
@@ -68,7 +99,9 @@ pub(crate) fn parse_avt(builder: &mut CompilerBuilder, text: &str) -> Result<Att
             continue;
         }
         if start > last_end {
-            parts.push(AvtPart::Static(text[last_end..start].replace("{{", "{").replace("}}", "}")));
+            parts.push(AvtPart::Static(
+                text[last_end..start].replace("{{", "{").replace("}}", "}"),
+            ));
         }
         let end_marker = "}";
         let end = text[start..]
@@ -81,7 +114,9 @@ pub(crate) fn parse_avt(builder: &mut CompilerBuilder, text: &str) -> Result<Att
         last_end = start + end + 1;
     }
     if last_end < text.len() {
-        parts.push(AvtPart::Static(text[last_end..].replace("{{", "{").replace("}}", "}")));
+        parts.push(AvtPart::Static(
+            text[last_end..].replace("{{", "{").replace("}}", "}"),
+        ));
     }
 
     Ok(AttributeValueTemplate::Dynamic(parts))

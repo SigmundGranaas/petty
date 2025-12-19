@@ -1,7 +1,9 @@
-use petty_style::stylesheet::ElementStyle;
-use petty_json_template::ast::{JsonHyperlink, JsonImage, JsonInlineContainer, JsonNode, TemplateNode};
 use crate::node::TemplateBuilder;
 use crate::style::impl_styled_widget;
+use petty_json_template::ast::{
+    JsonHyperlink, JsonImage, JsonInlineContainer, JsonNode, TemplateNode,
+};
+use petty_style::stylesheet::ElementStyle;
 
 /// Builder for an inline `<Text>` node.
 #[derive(Clone)]

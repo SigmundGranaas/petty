@@ -114,7 +114,9 @@ impl InMemoryResourceProvider {
     /// Returns `ResourceError::LoadFailed` if the internal lock is poisoned.
     pub fn add(&self, path: impl Into<String>, data: Vec<u8>) -> Result<(), ResourceError> {
         let path_string = path.into();
-        let mut resources = self.resources.write()
+        let mut resources = self
+            .resources
+            .write()
             .map_err(|_| ResourceError::LoadFailed {
                 path: path_string.clone(),
                 message: "resource store lock poisoned".to_string(),
@@ -128,9 +130,15 @@ impl InMemoryResourceProvider {
     /// # Errors
     ///
     /// Returns `ResourceError::LoadFailed` if the internal lock is poisoned.
-    pub fn add_shared(&self, path: impl Into<String>, data: SharedResourceData) -> Result<(), ResourceError> {
+    pub fn add_shared(
+        &self,
+        path: impl Into<String>,
+        data: SharedResourceData,
+    ) -> Result<(), ResourceError> {
         let path_string = path.into();
-        let mut resources = self.resources.write()
+        let mut resources = self
+            .resources
+            .write()
             .map_err(|_| ResourceError::LoadFailed {
                 path: path_string.clone(),
                 message: "resource store lock poisoned".to_string(),
@@ -172,7 +180,9 @@ impl InMemoryResourceProvider {
 
 impl ResourceProvider for InMemoryResourceProvider {
     fn load(&self, path: &str) -> Result<SharedResourceData, ResourceError> {
-        let resources = self.resources.read()
+        let resources = self
+            .resources
+            .read()
             .map_err(|_| ResourceError::LoadFailed {
                 path: path.to_string(),
                 message: "resource store lock poisoned".to_string(),
@@ -184,7 +194,8 @@ impl ResourceProvider for InMemoryResourceProvider {
     }
 
     fn exists(&self, path: &str) -> bool {
-        self.resources.read()
+        self.resources
+            .read()
             .map(|r| r.contains_key(path))
             .unwrap_or(false)
     }
@@ -289,7 +300,9 @@ mod tests {
     fn test_in_memory_provider_add_shared() {
         let provider = InMemoryResourceProvider::new();
         let shared_data = Arc::new(vec![1, 2, 3, 4, 5]);
-        provider.add_shared("shared.bin", shared_data.clone()).unwrap();
+        provider
+            .add_shared("shared.bin", shared_data.clone())
+            .unwrap();
 
         let loaded = provider.load("shared.bin").unwrap();
         assert_eq!(&*loaded, &*shared_data);

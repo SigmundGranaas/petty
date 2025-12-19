@@ -1,7 +1,7 @@
 #![cfg(test)]
 
-use petty_idf::{IRNode, InlineNode, NodeMetadata};
 use crate::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
+use petty_idf::{IRNode, InlineNode, NodeMetadata};
 use petty_style::dimension::{Margins, PageSize};
 use petty_style::stylesheet::{ElementStyle, PageLayout, Stylesheet};
 use petty_style::text::TextAlign;
@@ -14,7 +14,10 @@ fn test_text_wrapping() {
         page_masters: HashMap::from([(
             "master".to_string(),
             PageLayout {
-                size: PageSize::Custom { width: 220.0, height: 500.0 },
+                size: PageSize::Custom {
+                    width: 220.0,
+                    height: 500.0,
+                },
                 margins: Some(Margins::all(10.0)),
                 ..Default::default()
             },
@@ -36,7 +39,10 @@ fn test_text_wrapping() {
 
     let has_second_line = page1.iter().any(|el| (el.y - second_line_y).abs() < 0.1);
 
-    assert!(has_second_line, "Paragraph should have wrapped to a second line.");
+    assert!(
+        has_second_line,
+        "Paragraph should have wrapped to a second line."
+    );
 }
 
 #[test]
@@ -45,7 +51,10 @@ fn test_text_alignment_center() {
         page_masters: HashMap::from([(
             "master".to_string(),
             PageLayout {
-                size: PageSize::Custom { width: 500.0, height: 500.0 },
+                size: PageSize::Custom {
+                    width: 500.0,
+                    height: 500.0,
+                },
                 margins: Some(Margins::all(10.0)), // content width 480
                 ..Default::default()
             },
@@ -100,7 +109,10 @@ fn test_text_justification() {
                 // With width=150, content_width=130.
                 // width("First word on this ") is ~85pt. "+ justified" is ~50pt. Total ~135pt > 130.
                 // So the line wrap will be before "justified", making "this" the last word on the line.
-                size: PageSize::Custom { width: 150.0, height: 500.0 },
+                size: PageSize::Custom {
+                    width: 150.0,
+                    height: 500.0,
+                },
                 margins: Some(Margins::all(10.0)),
                 ..Default::default()
             },
@@ -110,9 +122,15 @@ fn test_text_justification() {
     };
     let content_width = 130.0;
     let text = "First word on this justified line.";
-    let style_override = ElementStyle { text_align: Some(TextAlign::Justify), ..Default::default() };
+    let style_override = ElementStyle {
+        text_align: Some(TextAlign::Justify),
+        ..Default::default()
+    };
     let para = IRNode::Paragraph {
-        meta: NodeMetadata { style_override: Some(style_override), ..Default::default() },
+        meta: NodeMetadata {
+            style_override: Some(style_override),
+            ..Default::default()
+        },
         children: vec![InlineNode::Text(text.to_string())],
     };
     let nodes = vec![para];
@@ -131,18 +149,28 @@ fn test_text_justification() {
 
     // End of last word at right margin
     let end_x = word4.x + word4.width;
-    assert!((end_x - (10.0 + content_width)).abs() < 1.0, "Last word should end at right margin. Got {}", end_x);
+    assert!(
+        (end_x - (10.0 + content_width)).abs() < 1.0,
+        "Last word should end at right margin. Got {}",
+        end_x
+    );
 
     // Spaces are stretched
     let engine = crate::test_utils::create_test_engine();
     let style = engine.get_default_style();
     let normal_space_width = engine.measure_text_width(" ", &style);
     let space1_width = word2.x - (word1.x + word1.width);
-    assert!(space1_width > normal_space_width, "Space should be stretched.");
+    assert!(
+        space1_width > normal_space_width,
+        "Space should be stretched."
+    );
 
     // Last line is not justified
     let last_line_word = find_first_text_box_with_content(page1, "justified").unwrap();
-    assert!((last_line_word.x - 10.0).abs() < 0.1, "Last line should be left-aligned.");
+    assert!(
+        (last_line_word.x - 10.0).abs() < 0.1,
+        "Last line should be left-aligned."
+    );
 }
 
 #[test]
@@ -154,7 +182,10 @@ fn test_widow_control() {
         page_masters: HashMap::from([(
             "master".to_string(),
             PageLayout {
-                size: PageSize::Custom { width: 500.0, height: 70.0 },
+                size: PageSize::Custom {
+                    width: 500.0,
+                    height: 70.0,
+                },
                 margins: Some(Margins::all(10.0)), // content height = 50
                 ..Default::default()
             },
@@ -165,8 +196,18 @@ fn test_widow_control() {
 
     // Use the helper which correctly creates LineBreak nodes
     let mut para = create_paragraph("Line 1\nLine 2\nLine 3\nLine 4");
-    if let IRNode::Paragraph { meta: NodeMetadata{ ref mut style_override, ..}, .. } = para {
-        *style_override = Some(ElementStyle { widows: Some(2), ..Default::default() });
+    if let IRNode::Paragraph {
+        meta: NodeMetadata {
+            ref mut style_override,
+            ..
+        },
+        ..
+    } = para
+    {
+        *style_override = Some(ElementStyle {
+            widows: Some(2),
+            ..Default::default()
+        });
     } else {
         panic!("Expected a paragraph node");
     }
@@ -200,7 +241,10 @@ fn test_orphan_control() {
         page_masters: HashMap::from([(
             "master".to_string(),
             PageLayout {
-                size: PageSize::Custom { width: 500.0, height: 70.0 }, // content height = 50
+                size: PageSize::Custom {
+                    width: 500.0,
+                    height: 70.0,
+                }, // content height = 50
                 margins: Some(Margins::all(10.0)),
                 ..Default::default()
             },
@@ -210,8 +254,19 @@ fn test_orphan_control() {
     };
 
     let mut para2 = create_paragraph("Orphan 1\nOrphan 2\nOrphan 3");
-    if let IRNode::Paragraph { meta: NodeMetadata {ref mut style_override, .. } , .. } = para2 {
-        *style_override = Some(ElementStyle { orphans: Some(2), widows: Some(1), ..Default::default() });
+    if let IRNode::Paragraph {
+        meta: NodeMetadata {
+            ref mut style_override,
+            ..
+        },
+        ..
+    } = para2
+    {
+        *style_override = Some(ElementStyle {
+            orphans: Some(2),
+            widows: Some(1),
+            ..Default::default()
+        });
     } else {
         panic!("Expected a paragraph node");
     }
@@ -227,11 +282,17 @@ fn test_orphan_control() {
 
     let page1 = &pages[0];
     assert!(find_first_text_box_with_content(page1, "Before 2").is_some());
-    assert!(find_first_text_box_with_content(page1, "Orphan 1").is_none(), "Orphan control should have pushed the second paragraph");
+    assert!(
+        find_first_text_box_with_content(page1, "Orphan 1").is_none(),
+        "Orphan control should have pushed the second paragraph"
+    );
 
     let page2 = &pages[1];
     assert!(find_first_text_box_with_content(page2, "Orphan 1").is_some());
     assert!(find_first_text_box_with_content(page2, "Orphan 3").is_some());
     let orphan1 = find_first_text_box_with_content(page2, "Orphan 1").unwrap();
-    assert_eq!(orphan1.y, 10.0, "Second paragraph should start at the top of page 2");
+    assert_eq!(
+        orphan1.y, 10.0,
+        "Second paragraph should start at the top of page 2"
+    );
 }

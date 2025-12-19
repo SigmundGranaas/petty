@@ -5,9 +5,9 @@
 //! - String dimensions: `"fontSize": "24pt"`
 //! - Kebab-case or camelCase field names
 
-use petty_style::stylesheet::ElementStyle;
-use petty_style::{FontWeight, TextAlign, Border, BorderStyle};
 use petty_style::dimension::Margins;
+use petty_style::stylesheet::ElementStyle;
+use petty_style::{Border, BorderStyle, FontWeight, TextAlign};
 use petty_types::Color;
 use serde::{Deserialize, Deserializer};
 use serde_json::Value;
@@ -22,24 +22,23 @@ fn parse_dimension(value: &Value) -> Option<f32> {
             let s = s.trim();
 
             // Try to extract the numeric part and unit
-            let numeric_part = s.chars()
+            let numeric_part = s
+                .chars()
                 .take_while(|c| c.is_numeric() || *c == '.' || *c == '-')
                 .collect::<String>();
 
-            if let Ok(value) = numeric_part.parse::<f32>() {
-                // For now, assume all units are in points
-                // Future: properly convert cm, mm, in, etc. to points
-                Some(value)
-            } else {
-                None
-            }
+            // For now, assume all units are in points
+            // Future: properly convert cm, mm, in, etc. to points
+            numeric_part.parse::<f32>().ok()
         }
         _ => None,
     }
 }
 
 /// Deserialize a HashMap<String, ElementStyle> with flexible value parsing
-pub fn deserialize_styles<'de, D>(deserializer: D) -> Result<HashMap<String, ElementStyle>, D::Error>
+pub fn deserialize_styles<'de, D>(
+    deserializer: D,
+) -> Result<HashMap<String, ElementStyle>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -47,8 +46,9 @@ where
     let mut styles = HashMap::new();
 
     for (name, style_value) in raw_styles {
-        let style = parse_element_style(&style_value)
-            .map_err(|e| serde::de::Error::custom(format!("Failed to parse style '{}': {}", name, e)))?;
+        let style = parse_element_style(&style_value).map_err(|e| {
+            serde::de::Error::custom(format!("Failed to parse style '{}': {}", name, e))
+        })?;
         styles.insert(name, style);
     }
 
@@ -57,7 +57,8 @@ where
 
 /// Parse a single ElementStyle from a JSON value with flexible field parsing
 fn parse_element_style(value: &Value) -> Result<ElementStyle, String> {
-    let obj = value.as_object()
+    let obj = value
+        .as_object()
         .ok_or_else(|| "Style must be an object".to_string())?;
 
     let mut style = ElementStyle::default();
@@ -93,9 +94,10 @@ fn parse_element_style(value: &Value) -> Result<ElementStyle, String> {
             }
             "color" => {
                 if let Some(s) = val.as_str()
-                    && let Ok(color) = parse_color(s) {
-                        style.color = Some(color);
-                    }
+                    && let Ok(color) = parse_color(s)
+                {
+                    style.color = Some(color);
+                }
             }
             "text_align" | "textalign" => {
                 if let Some(s) = val.as_str() {
@@ -169,29 +171,32 @@ fn parse_element_style(value: &Value) -> Result<ElementStyle, String> {
             }
             "background_color" | "backgroundcolor" => {
                 if let Some(s) = val.as_str()
-                    && let Ok(color) = parse_color(s) {
-                        style.background_color = Some(color);
-                    }
+                    && let Ok(color) = parse_color(s)
+                {
+                    style.background_color = Some(color);
+                }
             }
             "border_top" | "bordertop" | "border" => {
                 // Parse "1pt solid #cccccc" style borders
                 if let Some(s) = val.as_str()
-                    && let Ok(border) = parse_border(s) {
-                        if normalized_key.contains("top") || normalized_key == "border" {
-                            style.border_top = Some(border.clone());
-                        }
-                        if normalized_key == "border" {
-                            style.border_bottom = Some(border.clone());
-                            style.border_left = Some(border.clone());
-                            style.border_right = Some(border);
-                        }
+                    && let Ok(border) = parse_border(s)
+                {
+                    if normalized_key.contains("top") || normalized_key == "border" {
+                        style.border_top = Some(border.clone());
                     }
+                    if normalized_key == "border" {
+                        style.border_bottom = Some(border.clone());
+                        style.border_left = Some(border.clone());
+                        style.border_right = Some(border);
+                    }
+                }
             }
             "border_bottom" | "borderbottom" => {
                 if let Some(s) = val.as_str()
-                    && let Ok(border) = parse_border(s) {
-                        style.border_bottom = Some(border);
-                    }
+                    && let Ok(border) = parse_border(s)
+                {
+                    style.border_bottom = Some(border);
+                }
             }
             _ => {
                 // Ignore unknown fields for forward compatibility
@@ -231,11 +236,36 @@ fn parse_color(s: &str) -> Result<Color, String> {
     } else {
         // Named colors
         match s.to_lowercase().as_str() {
-            "black" => Ok(Color { r: 0, g: 0, b: 0, a: 1.0 }),
-            "white" => Ok(Color { r: 255, g: 255, b: 255, a: 1.0 }),
-            "red" => Ok(Color { r: 255, g: 0, b: 0, a: 1.0 }),
-            "green" => Ok(Color { r: 0, g: 128, b: 0, a: 1.0 }),
-            "blue" => Ok(Color { r: 0, g: 0, b: 255, a: 1.0 }),
+            "black" => Ok(Color {
+                r: 0,
+                g: 0,
+                b: 0,
+                a: 1.0,
+            }),
+            "white" => Ok(Color {
+                r: 255,
+                g: 255,
+                b: 255,
+                a: 1.0,
+            }),
+            "red" => Ok(Color {
+                r: 255,
+                g: 0,
+                b: 0,
+                a: 1.0,
+            }),
+            "green" => Ok(Color {
+                r: 0,
+                g: 128,
+                b: 0,
+                a: 1.0,
+            }),
+            "blue" => Ok(Color {
+                r: 0,
+                g: 0,
+                b: 255,
+                a: 1.0,
+            }),
             _ => Err(format!("Unknown color name: {}", s)),
         }
     }
@@ -251,7 +281,12 @@ fn parse_border(s: &str) -> Result<Border, String> {
 
     let mut width = 1.0;
     let mut style = BorderStyle::Solid;
-    let mut color = Color { r: 0, g: 0, b: 0, a: 1.0 };
+    let mut color = Color {
+        r: 0,
+        g: 0,
+        b: 0,
+        a: 1.0,
+    };
 
     for part in parts {
         // Try to parse as dimension (width)
@@ -274,7 +309,11 @@ fn parse_border(s: &str) -> Result<Border, String> {
         }
     }
 
-    Ok(Border { width, style, color })
+    Ok(Border {
+        width,
+        style,
+        color,
+    })
 }
 
 #[cfg(test)]

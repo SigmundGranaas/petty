@@ -1,16 +1,21 @@
 use clap::Parser;
 use petty::{PdfBackend, PipelineBuilder, PipelineError};
+use rand::SeedableRng;
 use rand::prelude::*;
 use rand::rngs::StdRng;
-use rand::SeedableRng;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::env;
 use std::time::Instant;
 
 const MOCK_USERS: &[&str] = &["Alice", "Bob", "Charlie", "Diana", "Eve", "Frank"];
 const MOCK_ITEMS: &[&str] = &[
-    "Standard Service Fee", "Premium Support Package", "Data Processing Unit",
-    "Cloud Storage (1TB)", "API Access Key", "Consulting Hour", "Hardware Rental",
+    "Standard Service Fee",
+    "Premium Support Package",
+    "Data Processing Unit",
+    "Cloud Storage (1TB)",
+    "API Access Key",
+    "Consulting Hour",
+    "Hardware Rental",
 ];
 
 #[derive(Parser, Debug)]
@@ -68,12 +73,16 @@ fn main() -> Result<(), PipelineError> {
 
     // Initialize the logger.
     if env::var("RUST_LOG").is_err() {
-        unsafe { env::set_var("RUST_LOG", "petty=info"); }
+        unsafe {
+            env::set_var("RUST_LOG", "petty=info");
+        }
     }
     env_logger::init();
 
     if cfg!(debug_assertions) {
-        println!("\nWARNING: Running in debug build. For accurate results, run with `--release`.\n");
+        println!(
+            "\nWARNING: Running in debug build. For accurate results, run with `--release`.\n"
+        );
     }
 
     let args = Args::parse();

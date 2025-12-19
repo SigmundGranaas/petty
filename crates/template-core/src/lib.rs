@@ -37,14 +37,12 @@ pub enum TemplateError {
 }
 
 /// Specifies the format of the input data source.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DataSourceFormat {
     #[default]
     Xml,
     Json,
 }
-
 
 /// Configuration for an execution run.
 #[derive(Debug, Clone, Default)]

@@ -1,5 +1,5 @@
-use petty_json_template::ast::{ControlNode, TemplateNode};
 use crate::node::TemplateBuilder;
+use petty_json_template::ast::{ControlNode, TemplateNode};
 
 /// Builder for an `{{#if}}` control flow block.
 #[derive(Clone)]

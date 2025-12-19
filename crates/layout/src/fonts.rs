@@ -152,10 +152,9 @@ impl SharedFontLibrary {
     /// Only available with the `system-fonts` feature enabled.
     #[cfg(feature = "system-fonts")]
     pub fn with_system_fonts(self, enable: bool) -> Self {
-        if enable
-            && let Ok(mut db) = self.db.write() {
-                db.load_system_fonts();
-            }
+        if enable && let Ok(mut db) = self.db.write() {
+            db.load_system_fonts();
+        }
         self
     }
 
@@ -178,7 +177,9 @@ impl SharedFontLibrary {
             let faces: Vec<_> = db.faces().collect();
             if let Some(face_info) = faces.last() {
                 let ps_name = face_info.post_script_name.clone();
-                let family = face_info.families.first()
+                let family = face_info
+                    .families
+                    .first()
                     .map(|(name, _)| name.clone())
                     .unwrap_or_else(|| "Unknown".to_string());
 
@@ -200,12 +201,21 @@ impl SharedFontLibrary {
                     fontdb::Style::Oblique => FontStyle::Italic,
                 };
 
-                log::debug!("Font metadata from fontdb: family='{}', ps_name='{}', weight={:?}, style={:?}",
-                           family, ps_name, weight, style);
+                log::debug!(
+                    "Font metadata from fontdb: family='{}', ps_name='{}', weight={:?}, style={:?}",
+                    family,
+                    ps_name,
+                    weight,
+                    style
+                );
 
                 // CRITICAL FIX: Register the font for PDF embedding with the SAME PostScript name
                 // that fontdb uses, so they match during PDF generation
-                log::debug!("Registering font '{}' (family: {}) for PDF embedding", ps_name, family);
+                log::debug!(
+                    "Registering font '{}' (family: {}) for PDF embedding",
+                    ps_name,
+                    family
+                );
                 let font_data = Arc::new(FontInstance::new(Arc::new(data)));
 
                 if let Ok(mut registry) = self.font_registry.write() {
@@ -218,7 +228,11 @@ impl SharedFontLibrary {
                             style,
                             data: font_data,
                         });
-                        log::debug!("Font '{}' registered successfully. Registry now has {} fonts", ps_name, registry.len());
+                        log::debug!(
+                            "Font '{}' registered successfully. Registry now has {} fonts",
+                            ps_name,
+                            registry.len()
+                        );
                     } else {
                         log::debug!("Font '{}' already registered", ps_name);
                     }
@@ -253,10 +267,10 @@ impl SharedFontLibrary {
     pub fn load_fallback_font(&self) {
         // Try multiple paths for fonts - supports workspace root and nested crate directories
         let font_paths = [
-            "assets/fonts/Helvetica.ttf",           // From workspace root
-            "../assets/fonts/Helvetica.ttf",        // From petty-core or single-level crate
-            "../../assets/fonts/Helvetica.ttf",     // From crates/*/
-            "../../../assets/fonts/Helvetica.ttf",  // From deeper nesting
+            "assets/fonts/Helvetica.ttf",          // From workspace root
+            "../assets/fonts/Helvetica.ttf",       // From petty-core or single-level crate
+            "../../assets/fonts/Helvetica.ttf",    // From crates/*/
+            "../../../assets/fonts/Helvetica.ttf", // From deeper nesting
         ];
         let mut loaded_regular = false;
         for path in &font_paths {
@@ -278,10 +292,10 @@ impl SharedFontLibrary {
         }
 
         let bold_paths = [
-            "assets/fonts/helvetica-bold.ttf",           // From workspace root
-            "../assets/fonts/helvetica-bold.ttf",        // From petty-core or single-level crate
-            "../../assets/fonts/helvetica-bold.ttf",     // From crates/*/
-            "../../../assets/fonts/helvetica-bold.ttf",  // From deeper nesting
+            "assets/fonts/helvetica-bold.ttf",          // From workspace root
+            "../assets/fonts/helvetica-bold.ttf",       // From petty-core or single-level crate
+            "../../assets/fonts/helvetica-bold.ttf",    // From crates/*/
+            "../../../assets/fonts/helvetica-bold.ttf", // From deeper nesting
         ];
         let mut loaded_bold = false;
         for path in &bold_paths {
@@ -318,22 +332,31 @@ impl SharedFontLibrary {
     /// # Errors
     ///
     /// Returns `FontError::NotFound` if no matching font is found in any source.
-    pub fn resolve_font_data(&self, style: &ComputedStyle) -> Result<FontData, petty_traits::FontError> {
+    pub fn resolve_font_data(
+        &self,
+        style: &ComputedStyle,
+    ) -> Result<FontData, petty_traits::FontError> {
         let family = style.text.font_family.as_str();
         let weight = style.text.font_weight.clone();
         let font_style = style.text.font_style.clone();
 
-        log::debug!("Resolving font: family='{}', weight={:?}, style={:?}", family, weight, font_style);
+        log::debug!(
+            "Resolving font: family='{}', weight={:?}, style={:?}",
+            family,
+            weight,
+            font_style
+        );
 
         let cache_key = FontCacheKey::new(family, weight.clone(), font_style.clone());
 
         // Fast path: check unified cache
         {
             if let Ok(cache) = self.font_data_cache.read()
-                && let Some(data) = cache.get(&cache_key) {
-                    log::debug!("  → Found in cache");
-                    return Ok(data.clone());
-                }
+                && let Some(data) = cache.get(&cache_key)
+            {
+                log::debug!("  → Found in cache");
+                return Ok(data.clone());
+            }
         }
 
         // Try external provider first
@@ -389,59 +412,79 @@ impl SharedFontLibrary {
         };
 
         let id = {
-            let db = self.db.read()
+            let db = self
+                .db
+                .read()
                 .map_err(|_| petty_traits::FontError::LoadFailed {
                     path: family.to_string(),
                     message: "fontdb lock poisoned".to_string(),
                 })?;
-            db.query(&query).or_else(|| {
-                log::debug!("  → Primary query failed, trying SansSerif fallback");
-                db.query(&fontdb::Query {
-                    families: &[fontdb::Family::SansSerif],
-                    weight: fontdb_weight,
-                    stretch: fontdb::Stretch::Normal,
-                    style: fontdb_style,
+            db.query(&query)
+                .or_else(|| {
+                    log::debug!("  → Primary query failed, trying SansSerif fallback");
+                    db.query(&fontdb::Query {
+                        families: &[fontdb::Family::SansSerif],
+                        weight: fontdb_weight,
+                        stretch: fontdb::Stretch::Normal,
+                        style: fontdb_style,
+                    })
                 })
-            }).ok_or_else(|| {
-                log::warn!("  → FONT NOT FOUND in fontdb: {} {:?} {:?}", family, weight, font_style);
-                petty_traits::FontError::NotFound {
-                    family: family.to_string(),
-                    weight: weight.clone(),
-                    style: font_style.clone(),
-                }
-            })?
+                .ok_or_else(|| {
+                    log::warn!(
+                        "  → FONT NOT FOUND in fontdb: {} {:?} {:?}",
+                        family,
+                        weight,
+                        font_style
+                    );
+                    petty_traits::FontError::NotFound {
+                        family: family.to_string(),
+                        weight: weight.clone(),
+                        style: font_style.clone(),
+                    }
+                })?
         };
 
         log::debug!("  → Found in fontdb: ID={:?}", id);
 
         // Load data from fontdb
-        let db = self.db.read()
+        let db = self
+            .db
+            .read()
             .map_err(|_| petty_traits::FontError::LoadFailed {
                 path: family.to_string(),
                 message: "fontdb lock poisoned".to_string(),
             })?;
-        let face_info = db.face(id)
+        let face_info = db
+            .face(id)
             .ok_or_else(|| petty_traits::FontError::NotFound {
                 family: family.to_string(),
                 weight: weight.clone(),
                 style: font_style.clone(),
             })?;
 
-        log::debug!("  → Matched font: {:?} ({})", face_info.families, face_info.post_script_name);
+        log::debug!(
+            "  → Matched font: {:?} ({})",
+            face_info.families,
+            face_info.post_script_name
+        );
 
         let font_bytes: SharedFontData = match &face_info.source {
             fontdb::Source::Binary(data) => {
-                log::debug!("  → Loading from binary ({} bytes)", data.as_ref().as_ref().len());
+                log::debug!(
+                    "  → Loading from binary ({} bytes)",
+                    data.as_ref().as_ref().len()
+                );
                 Arc::new(data.as_ref().as_ref().to_vec())
             }
             #[cfg(not(target_arch = "wasm32"))]
             fontdb::Source::File(path) => {
                 log::debug!("  → Loading from file: {}", path.display());
-                Arc::new(std::fs::read(path)
-                    .map_err(|e| petty_traits::FontError::LoadFailed {
+                Arc::new(
+                    std::fs::read(path).map_err(|e| petty_traits::FontError::LoadFailed {
                         path: path.display().to_string(),
                         message: e.to_string(),
-                    })?)
+                    })?,
+                )
             }
             #[cfg(target_arch = "wasm32")]
             fontdb::Source::File(path) => {
@@ -450,9 +493,11 @@ impl SharedFontLibrary {
                     message: "file system not available on WASM".to_string(),
                 });
             }
-            _ => return Err(petty_traits::FontError::InvalidData(
-                "unsupported font source type".to_string()
-            )),
+            _ => {
+                return Err(petty_traits::FontError::InvalidData(
+                    "unsupported font source type".to_string(),
+                ));
+            }
         };
 
         // Get postscript name for registry
@@ -481,10 +526,18 @@ impl SharedFontLibrary {
         style: &FontStyle,
     ) -> Result<FontData, petty_traits::FontError> {
         // Try to extract postscript name from font data
-        let postscript_name = self.extract_postscript_name(&font_bytes)
+        let postscript_name = self
+            .extract_postscript_name(&font_bytes)
             .unwrap_or_else(|| format!("{}-{:?}-{:?}", family, weight, style));
 
-        self.cache_font_data_with_psname(cache_key, font_bytes, family, weight, style, postscript_name)
+        self.cache_font_data_with_psname(
+            cache_key,
+            font_bytes,
+            family,
+            weight,
+            style,
+            postscript_name,
+        )
     }
 
     fn cache_font_data_with_psname(
@@ -506,7 +559,10 @@ impl SharedFontLibrary {
         // Register for PDF embedding
         if let Ok(mut registry) = self.font_registry.write() {
             // Check if already registered
-            if !registry.iter().any(|f| f.postscript_name == postscript_name) {
+            if !registry
+                .iter()
+                .any(|f| f.postscript_name == postscript_name)
+            {
                 registry.push(FontFaceInfo {
                     postscript_name,
                     family: family.to_string(),
@@ -526,25 +582,34 @@ impl SharedFontLibrary {
         let face = ttf_parser::Face::parse(data, 0).ok()?;
 
         // Try PostScript name first (nameID 6)
-        if let Some(ps_name) = face.names().into_iter()
+        if let Some(ps_name) = face
+            .names()
+            .into_iter()
             .find(|n| n.name_id == ttf_parser::name_id::POST_SCRIPT_NAME)
-            .and_then(|n| n.to_string()) {
+            .and_then(|n| n.to_string())
+        {
             log::debug!("Found PostScript name (ID 6): {}", ps_name);
             return Some(ps_name);
         }
 
         // Fallback to Full Font Name (nameID 4)
-        if let Some(full_name) = face.names().into_iter()
+        if let Some(full_name) = face
+            .names()
+            .into_iter()
             .find(|n| n.name_id == ttf_parser::name_id::FULL_NAME)
-            .and_then(|n| n.to_string()) {
+            .and_then(|n| n.to_string())
+        {
             log::debug!("Using Full Name (ID 4) as fallback: {}", full_name);
-            return Some(full_name.replace(" ", ""));  // Remove spaces for PostScript compatibility
+            return Some(full_name.replace(" ", "")); // Remove spaces for PostScript compatibility
         }
 
         // Last resort: Family name (nameID 1)
-        if let Some(family) = face.names().into_iter()
+        if let Some(family) = face
+            .names()
+            .into_iter()
             .find(|n| n.name_id == ttf_parser::name_id::FAMILY)
-            .and_then(|n| n.to_string()) {
+            .and_then(|n| n.to_string())
+        {
             log::debug!("Using Family Name (ID 1) as fallback: {}", family);
             return Some(family.replace(" ", ""));
         }
@@ -557,14 +622,17 @@ impl SharedFontLibrary {
     ///
     /// This is used by PDF renderers to enumerate fonts for embedding.
     pub fn registered_fonts(&self) -> Vec<FontFaceInfo> {
-        self.font_registry.read()
+        self.font_registry
+            .read()
             .map(|r| r.clone())
             .unwrap_or_default()
     }
 
     /// Returns font face info by postscript name.
     pub fn get_font_by_postscript_name(&self, name: &str) -> Option<FontFaceInfo> {
-        self.font_registry.read().ok()?
+        self.font_registry
+            .read()
+            .ok()?
             .iter()
             .find(|f| f.postscript_name == name)
             .cloned()
@@ -610,7 +678,14 @@ mod tests {
     fn test_font_library_with_provider() {
         let provider = InMemoryFontProvider::new();
         // Add a fake font (won't actually work for shaping, but tests the plumbing)
-        provider.add_font("TestFont", FontWeight::Regular, FontStyle::Normal, vec![0, 1, 2, 3]).unwrap();
+        provider
+            .add_font(
+                "TestFont",
+                FontWeight::Regular,
+                FontStyle::Normal,
+                vec![0, 1, 2, 3],
+            )
+            .unwrap();
 
         let library = SharedFontLibrary::from_provider(Arc::new(provider));
 

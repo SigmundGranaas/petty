@@ -1,11 +1,11 @@
-use petty_idf::IRNode;
+use super::node::ParagraphNode;
+use crate::LayoutError;
 use crate::engine::{LayoutEngine, LayoutStore};
 use crate::nodes::RenderNode;
 use crate::style::ComputedStyle;
 use crate::text::builder::TextBuilder;
-use crate::LayoutError;
+use petty_idf::IRNode;
 use std::sync::Arc;
-use super::node::ParagraphNode;
 
 impl<'a> ParagraphNode<'a> {
     pub fn build(

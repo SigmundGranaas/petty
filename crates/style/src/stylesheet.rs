@@ -1,12 +1,12 @@
 //! Defines the top-level stylesheet structure that holds all styling information.
 
 use super::border::Border;
-use petty_types::Color;
 use super::dimension::{Dimension, Margins, PageSize};
 use super::flex::{AlignItems, AlignSelf, FlexDirection, FlexWrap, JustifyContent};
 use super::font::{FontStyle, FontWeight};
 use super::list::{ListStylePosition, ListStyleType};
 use super::text::{TextAlign, TextDecoration};
+use petty_types::Color;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -1,9 +1,9 @@
+use crate::LayoutError;
 use crate::cache::{MultiSpanCacheKey, ShapingCacheKey};
 use crate::interface::{LayoutContext, LayoutEnvironment};
+use crate::text::shaper::{ShapedRun, shape_text};
+use crate::text::wrapper::{LineLayout, break_lines, render_lines};
 use crate::{LayoutResult, NodeState, ParagraphState};
-use crate::text::shaper::{shape_text, ShapedRun};
-use crate::text::wrapper::{break_lines, render_lines, LineLayout};
-use crate::LayoutError;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -42,12 +42,19 @@ impl<'a> ParagraphNode<'a> {
     pub(super) fn resolve_shaping(&self, env: &LayoutEnvironment) -> Arc<Vec<ShapedRun>> {
         let shape_key = self.get_shaping_cache_key();
 
-        if let Some(runs) = env.cache.borrow().get(&shape_key).and_then(|v| v.downcast_ref::<Arc<Vec<ShapedRun>>>()) {
+        if let Some(runs) = env
+            .cache
+            .borrow()
+            .get(&shape_key)
+            .and_then(|v| v.downcast_ref::<Arc<Vec<ShapedRun>>>())
+        {
             return runs.clone();
         }
 
         let runs = self.compute_shaped_runs(env.engine);
-        env.cache.borrow_mut().insert(shape_key, Box::new(runs.clone()));
+        env.cache
+            .borrow_mut()
+            .insert(shape_key, Box::new(runs.clone()));
         runs
     }
 
@@ -98,20 +105,32 @@ impl<'a> ParagraphNode<'a> {
         &self,
         env: &LayoutEnvironment,
         shaped_runs: &Arc<Vec<ShapedRun>>,
-        width: f32
+        width: f32,
     ) -> Arc<ParagraphLayout> {
-        let layout_key = self.get_layout_cache_key(if width.is_finite() { Some(width) } else { None });
+        let layout_key =
+            self.get_layout_cache_key(if width.is_finite() { Some(width) } else { None });
 
-        if let Some(layout) = env.cache.borrow().get(&layout_key).and_then(|v| v.downcast_ref::<Arc<ParagraphLayout>>()) {
+        if let Some(layout) = env
+            .cache
+            .borrow()
+            .get(&layout_key)
+            .and_then(|v| v.downcast_ref::<Arc<ParagraphLayout>>())
+        {
             return layout.clone();
         }
 
         let layout = self.compute_layout(shaped_runs, width);
-        env.cache.borrow_mut().insert(layout_key, Box::new(layout.clone()));
+        env.cache
+            .borrow_mut()
+            .insert(layout_key, Box::new(layout.clone()));
         layout
     }
 
-    fn compute_layout(&self, shaped_runs: &Arc<Vec<ShapedRun>>, max_width: f32) -> Arc<ParagraphLayout> {
+    fn compute_layout(
+        &self,
+        shaped_runs: &Arc<Vec<ShapedRun>>,
+        max_width: f32,
+    ) -> Arc<ParagraphLayout> {
         let lines = break_lines(shaped_runs, max_width, &self.style, self.full_text);
 
         let total_height = lines.iter().map(|l| l.height).sum();
@@ -173,12 +192,15 @@ impl<'a> ParagraphNode<'a> {
         let mut lines_final = lines_to_render;
 
         // 1. Orphan check
-        if start_line_index == 0 && lines_final < orphans && lines_final < total_lines
-            && !ctx.is_at_page_top() {
-                return Ok(LayoutResult::Break(NodeState::Paragraph(ParagraphState {
-                    scroll_offset: 0.0,
-                })));
-            }
+        if start_line_index == 0
+            && lines_final < orphans
+            && lines_final < total_lines
+            && !ctx.is_at_page_top()
+        {
+            return Ok(LayoutResult::Break(NodeState::Paragraph(ParagraphState {
+                scroll_offset: 0.0,
+            })));
+        }
 
         // 2. Widow check
         if split && lines_remaining > 0 && lines_remaining < widows {
@@ -223,7 +245,14 @@ impl<'a> ParagraphNode<'a> {
         for i in 0..lines_final {
             let line_idx = start_line_index + i;
             let line = &layout.lines[line_idx];
-            render_lines(ctx, line, &layout.shaped_runs, rendered_height_actual, self.links, self.full_text);
+            render_lines(
+                ctx,
+                line,
+                &layout.shaped_runs,
+                rendered_height_actual,
+                self.links,
+                self.full_text,
+            );
             rendered_height_actual += line.height;
         }
 

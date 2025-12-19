@@ -1,8 +1,8 @@
 #[cfg(test)]
 mod tests {
-    use petty_idf::IRNode;
-    use crate::test_utils::{create_paragraph, paginate_test_nodes};
     use crate::LayoutElement;
+    use crate::test_utils::{create_paragraph, paginate_test_nodes};
+    use petty_idf::IRNode;
     use petty_style::dimension::{Margins, PageSize};
     use petty_style::stylesheet::{PageLayout, Stylesheet};
     use std::collections::HashMap;
@@ -31,16 +31,17 @@ mod tests {
         // Not produce 1 page per word.
 
         let stylesheet = Stylesheet {
-            page_masters: HashMap::from([
-                (
-                    "master".to_string(),
-                    PageLayout {
-                        size: PageSize::Custom { width: 300.0, height: 100.0 }, // Small page
-                        margins: Some(Margins::all(0.0)),
-                        ..Default::default()
-                    },
-                )
-            ]),
+            page_masters: HashMap::from([(
+                "master".to_string(),
+                PageLayout {
+                    size: PageSize::Custom {
+                        width: 300.0,
+                        height: 100.0,
+                    }, // Small page
+                    margins: Some(Margins::all(0.0)),
+                    ..Default::default()
+                },
+            )]),
             default_page_master_name: Some("master".to_string()),
             ..Default::default()
         };
@@ -54,7 +55,7 @@ mod tests {
         // Label: "Category:"
         // Value: "Skill 1, Skill 2, Skill 3..." (Long enough to wrap)
         let label = create_block(vec![create_paragraph("Category:")]);
-        
+
         let skills_text = "Skill A, Skill B, Skill C, Skill D, Skill E, Skill F";
         let value = create_block(vec![create_paragraph(skills_text)]);
 

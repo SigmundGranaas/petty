@@ -1,10 +1,10 @@
 // src/pipeline/worker.rs
 
+use log::{debug, info, trace};
+use petty_core::error::PipelineError;
 use petty_core::idf::{IRNode, InlineNode, SharedData};
 use petty_core::layout::{IndexEntry, LayoutEngine, LayoutStore};
 use petty_core::style_types::stylesheet::Stylesheet;
-use petty_core::error::PipelineError;
-use log::{debug, info, trace};
 use petty_core::traits::ResourceProvider;
 use rand::Rng;
 use serde_json::Value;
@@ -31,7 +31,11 @@ pub(super) fn finish_layout_and_resource_loading(
     ensure_heading_ids(&mut ir_nodes_with_ids);
     let tree = IRNode::Root(ir_nodes_with_ids);
     if prep_start.elapsed().as_millis() > 1 {
-        trace!("[WORKER-{}] IR Prep took {:?}", worker_id, prep_start.elapsed());
+        trace!(
+            "[WORKER-{}] IR Prep took {:?}",
+            worker_id,
+            prep_start.elapsed()
+        );
     }
 
     if debug_mode {
@@ -41,7 +45,11 @@ pub(super) fn finish_layout_and_resource_loading(
     let resource_start = Instant::now();
     let resources = collect_and_load_resources(&tree, resource_provider)?;
     if resource_start.elapsed().as_millis() > 5 {
-        debug!("[WORKER-{}] Resource load took {:?}", worker_id, resource_start.elapsed());
+        debug!(
+            "[WORKER-{}] Resource load took {:?}",
+            worker_id,
+            resource_start.elapsed()
+        );
     }
 
     let mut toc_entries = Vec::new();
@@ -59,7 +67,11 @@ pub(super) fn finish_layout_and_resource_loading(
         .build_render_tree(&tree, &store)
         .map_err(|e| PipelineError::Layout(e.to_string()))?;
     if build_tree_start.elapsed().as_millis() > 1 {
-        trace!("[WORKER-{}] Build Render Tree took {:?}", worker_id, build_tree_start.elapsed());
+        trace!(
+            "[WORKER-{}] Build Render Tree took {:?}",
+            worker_id,
+            build_tree_start.elapsed()
+        );
     }
 
     let iterator = layout_engine
@@ -84,7 +96,12 @@ pub(super) fn finish_layout_and_resource_loading(
     if layout_total.as_millis() > 50 {
         debug!(
             "[WORKER-{}] Layout total: {:?} for {} pages ({:?}/page avg)",
-            worker_id, layout_total, pages_count, layout_total.checked_div(pages_count as u32).unwrap_or(layout_total)
+            worker_id,
+            layout_total,
+            pages_count,
+            layout_total
+                .checked_div(pages_count as u32)
+                .unwrap_or(layout_total)
         );
         // FIX: Dump stats when layout is slow to identify bottleneck
         layout_engine.dump_stats(worker_id);
@@ -92,7 +109,10 @@ pub(super) fn finish_layout_and_resource_loading(
 
     let total_dur = total_start.elapsed();
     if total_dur.as_millis() > 50 {
-        info!("[WORKER-{}] Total Sequence Time: {:?} (Layout: {:?})", worker_id, total_dur, layout_total);
+        info!(
+            "[WORKER-{}] Total Sequence Time: {:?} (Layout: {:?})",
+            worker_id, total_dur, layout_total
+        );
     }
 
     Ok(LaidOutSequence {
@@ -144,15 +164,21 @@ fn ensure_heading_ids(nodes: &mut [IRNode]) {
 
 fn collect_toc_entries(node: &IRNode, entries: &mut Vec<TocEntry>) {
     match node {
-        IRNode::Heading { meta, level, children, .. } => {
+        IRNode::Heading {
+            meta,
+            level,
+            children,
+            ..
+        } => {
             if *level > 0
-                && let Some(id) = &meta.id {
-                    entries.push(TocEntry {
-                        level: *level,
-                        text: extract_text_from_inlines(children),
-                        target_id: id.clone(),
-                    });
-                }
+                && let Some(id) = &meta.id
+            {
+                entries.push(TocEntry {
+                    level: *level,
+                    text: extract_text_from_inlines(children),
+                    target_id: id.clone(),
+                });
+            }
         }
         IRNode::Root(children)
         | IRNode::Block { children, .. }

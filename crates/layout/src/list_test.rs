@@ -2,8 +2,8 @@
 #![cfg(test)]
 
 use super::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
-use petty_idf::{IRNode, NodeMetadata};
 use crate::{LayoutElement, TextElement};
+use petty_idf::{IRNode, NodeMetadata};
 use petty_style::dimension::{Margins, PageSize};
 use petty_style::list::{ListStylePosition, ListStyleType};
 use petty_style::stylesheet::{ElementStyle, PageLayout, Stylesheet};
@@ -34,7 +34,6 @@ fn create_list(children: Vec<IRNode>, style: Option<ElementStyle>, start: Option
     }
 }
 
-
 fn get_text_content(element: &LayoutElement) -> &str {
     if let LayoutElement::Text(TextElement { content, .. }) = element {
         content
@@ -46,10 +45,16 @@ fn get_text_content(element: &LayoutElement) -> &str {
 #[test]
 fn test_unordered_list_layout() {
     let mut stylesheet = Stylesheet::default();
-    stylesheet.page_masters.insert("master".to_string(), PageLayout::default());
+    stylesheet
+        .page_masters
+        .insert("master".to_string(), PageLayout::default());
     stylesheet.default_page_master_name = Some("master".to_string());
 
-    let nodes = vec![create_list(vec![create_list_item("Item 1"), create_list_item("Item 2")], None, None)];
+    let nodes = vec![create_list(
+        vec![create_list_item("Item 1"), create_list_item("Item 2")],
+        None,
+        None,
+    )];
 
     let (mut pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page = pages.remove(0);
@@ -82,14 +87,20 @@ fn test_unordered_list_layout() {
 #[test]
 fn test_ordered_list_layout() {
     let mut stylesheet = Stylesheet::default();
-    stylesheet.page_masters.insert("master".to_string(), PageLayout::default());
+    stylesheet
+        .page_masters
+        .insert("master".to_string(), PageLayout::default());
     stylesheet.default_page_master_name = Some("master".to_string());
 
     let style = ElementStyle {
         list_style_type: Some(ListStyleType::Decimal),
         ..Default::default()
     };
-    let nodes = vec![create_list(vec![create_list_item("First"), create_list_item("Second")], Some(style), None)];
+    let nodes = vec![create_list(
+        vec![create_list_item("First"), create_list_item("Second")],
+        Some(style),
+        None,
+    )];
 
     let (mut pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page = pages.remove(0);
@@ -105,11 +116,12 @@ fn test_ordered_list_layout() {
     assert!(page[2].y > page[0].y);
 }
 
-
 #[test]
 fn test_nested_ordered_list_numbering_cycles_correctly() {
     let mut stylesheet = Stylesheet::default();
-    stylesheet.page_masters.insert("master".to_string(), PageLayout::default());
+    stylesheet
+        .page_masters
+        .insert("master".to_string(), PageLayout::default());
     stylesheet.default_page_master_name = Some("master".to_string());
 
     let nested_list = create_list(
@@ -124,7 +136,10 @@ fn test_nested_ordered_list_numbering_cycles_correctly() {
         None,
     );
 
-    let top_list_style = ElementStyle { list_style_type: Some(ListStyleType::Decimal), ..Default::default() };
+    let top_list_style = ElementStyle {
+        list_style_type: Some(ListStyleType::Decimal),
+        ..Default::default()
+    };
     let nodes = vec![create_list(
         vec![
             create_list_item("Item 1"),
@@ -134,7 +149,6 @@ fn test_nested_ordered_list_numbering_cycles_correctly() {
         Some(top_list_style),
         None,
     )];
-
 
     let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
@@ -149,9 +163,15 @@ fn test_nested_ordered_list_numbering_cycles_correctly() {
     // Check horizontal alignment and indentation
     assert_eq!(marker1.x, marker2.x);
     assert_eq!(marker1.x, marker3.x);
-    assert!(marker2a.x > marker1.x, "Nested list 'a.' should be indented");
+    assert!(
+        marker2a.x > marker1.x,
+        "Nested list 'a.' should be indented"
+    );
     assert_eq!(marker2a.x, marker2b.x);
-    assert!(marker2bi.x > marker2a.x, "Deeply nested list 'i.' should be further indented");
+    assert!(
+        marker2bi.x > marker2a.x,
+        "Deeply nested list 'i.' should be further indented"
+    );
 
     // Check vertical stacking order
     assert!(marker2.y > marker1.y);
@@ -164,14 +184,20 @@ fn test_nested_ordered_list_numbering_cycles_correctly() {
 #[test]
 fn test_list_style_position_inside() {
     let mut stylesheet = Stylesheet::default();
-    stylesheet.page_masters.insert("master".to_string(), PageLayout::default());
+    stylesheet
+        .page_masters
+        .insert("master".to_string(), PageLayout::default());
     stylesheet.default_page_master_name = Some("master".to_string());
 
     let style = ElementStyle {
         list_style_position: Some(ListStylePosition::Inside),
         ..Default::default()
     };
-    let nodes = vec![create_list(vec![create_list_item("Item 1")], Some(style), None)];
+    let nodes = vec![create_list(
+        vec![create_list_item("Item 1")],
+        Some(style),
+        None,
+    )];
 
     let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
@@ -189,15 +215,31 @@ fn test_list_style_position_inside() {
 #[test]
 fn test_ordered_list_upper_alpha_roman() {
     let mut stylesheet = Stylesheet::default();
-    stylesheet.page_masters.insert("master".to_string(), PageLayout::default());
+    stylesheet
+        .page_masters
+        .insert("master".to_string(), PageLayout::default());
     stylesheet.default_page_master_name = Some("master".to_string());
 
-    let style_ua = Some(ElementStyle { list_style_type: Some(ListStyleType::UpperAlpha), ..Default::default() });
-    let style_ur = Some(ElementStyle { list_style_type: Some(ListStyleType::UpperRoman), ..Default::default() });
+    let style_ua = Some(ElementStyle {
+        list_style_type: Some(ListStyleType::UpperAlpha),
+        ..Default::default()
+    });
+    let style_ur = Some(ElementStyle {
+        list_style_type: Some(ListStyleType::UpperRoman),
+        ..Default::default()
+    });
 
     let nodes = vec![
-        create_list(vec![create_list_item("A"), create_list_item("B")], style_ua, None),
-        create_list(vec![create_list_item("I"), create_list_item("II")], style_ur, None),
+        create_list(
+            vec![create_list_item("A"), create_list_item("B")],
+            style_ua,
+            None,
+        ),
+        create_list(
+            vec![create_list_item("I"), create_list_item("II")],
+            style_ur,
+            None,
+        ),
     ];
 
     let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
@@ -212,11 +254,20 @@ fn test_ordered_list_upper_alpha_roman() {
 #[test]
 fn test_ordered_list_start_attribute() {
     let mut stylesheet = Stylesheet::default();
-    stylesheet.page_masters.insert("master".to_string(), PageLayout::default());
+    stylesheet
+        .page_masters
+        .insert("master".to_string(), PageLayout::default());
     stylesheet.default_page_master_name = Some("master".to_string());
 
-    let style = Some(ElementStyle { list_style_type: Some(ListStyleType::Decimal), ..Default::default() });
-    let nodes = vec![create_list(vec![create_list_item("Third"), create_list_item("Fourth")], style, Some(3))];
+    let style = Some(ElementStyle {
+        list_style_type: Some(ListStyleType::Decimal),
+        ..Default::default()
+    });
+    let nodes = vec![create_list(
+        vec![create_list_item("Third"), create_list_item("Fourth")],
+        style,
+        Some(3),
+    )];
 
     let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
@@ -231,7 +282,10 @@ fn test_list_with_complex_item_splits_correctly() {
         page_masters: HashMap::from([(
             "master".to_string(),
             PageLayout {
-                size: PageSize::Custom { width: 500.0, height: 80.0 }, // content height ~60
+                size: PageSize::Custom {
+                    width: 500.0,
+                    height: 80.0,
+                }, // content height ~60
                 margins: Some(Margins::all(10.0)),
                 ..Default::default()
             },
@@ -242,11 +296,18 @@ fn test_list_with_complex_item_splits_correctly() {
     // Line height is 14.4. 60 / 14.4 = 4.16. 4 lines fit.
     // The default `widows: 2` would cause a premature break. We set it to 1 to test
     // the pure pagination logic.
-    let style_override = Some(ElementStyle { widows: Some(1), ..Default::default() });
+    let style_override = Some(ElementStyle {
+        widows: Some(1),
+        ..Default::default()
+    });
     let mut p1 = create_paragraph("Line 1\nLine 2");
     let mut p2 = create_paragraph("Line 3\nLine 4\nLine 5");
-    if let IRNode::Paragraph { meta, .. } = &mut p1 { meta.style_override = style_override.clone(); }
-    if let IRNode::Paragraph { meta, .. } = &mut p2 { meta.style_override = style_override; }
+    if let IRNode::Paragraph { meta, .. } = &mut p1 {
+        meta.style_override = style_override.clone();
+    }
+    if let IRNode::Paragraph { meta, .. } = &mut p2 {
+        meta.style_override = style_override;
+    }
 
     let complex_item = create_list_item_with_children(vec![p1, p2]);
     let nodes = vec![create_list(vec![complex_item], None, None)];
@@ -255,12 +316,24 @@ fn test_list_with_complex_item_splits_correctly() {
     assert_eq!(pages.len(), 2, "Expected list item to split across pages");
 
     let page1 = &pages[0];
-    assert!(find_first_text_box_with_content(page1, "•").is_some(), "Marker should be on page 1");
-    assert!(find_first_text_box_with_content(page1, "Line 4").is_some(), "Line 4 should be on page 1");
-    assert!(find_first_text_box_with_content(page1, "Line 5").is_none(), "Line 5 should not be on page 1");
+    assert!(
+        find_first_text_box_with_content(page1, "•").is_some(),
+        "Marker should be on page 1"
+    );
+    assert!(
+        find_first_text_box_with_content(page1, "Line 4").is_some(),
+        "Line 4 should be on page 1"
+    );
+    assert!(
+        find_first_text_box_with_content(page1, "Line 5").is_none(),
+        "Line 5 should not be on page 1"
+    );
 
     let page2 = &pages[1];
-    assert!(find_first_text_box_with_content(page2, "•").is_none(), "Marker should NOT be repeated on page 2");
+    assert!(
+        find_first_text_box_with_content(page2, "•").is_none(),
+        "Marker should NOT be repeated on page 2"
+    );
     let line5 = find_first_text_box_with_content(page2, "Line 5").unwrap();
     assert_eq!(line5.y, 10.0, "Line 5 should be at the top of page 2");
 }

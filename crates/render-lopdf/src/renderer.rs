@@ -1,11 +1,11 @@
 // src/render/lopdf_renderer.rs
-use petty_render_core::{DocumentRenderer, RenderError};
+use crate::helpers;
 use crate::writer::StreamingPdfWriter;
+use lopdf::{Dictionary, Object, ObjectId, dictionary};
 use petty_idf::SharedData;
 use petty_layout::{LayoutEngine, PositionedElement};
+use petty_render_core::{DocumentRenderer, RenderError};
 use petty_style::stylesheet::Stylesheet;
-use crate::helpers;
-use lopdf::{dictionary, Dictionary, Object, ObjectId};
 use std::any::Any;
 use std::collections::HashMap;
 use std::io::{Cursor, Seek, Write};
@@ -70,12 +70,7 @@ impl<W: Write + Seek + Send> LopdfRenderer<W> {
         if !annotations.is_empty() {
             page_dict.set(
                 "Annots",
-                Object::Array(
-                    annotations
-                        .into_iter()
-                        .map(Object::Reference)
-                        .collect(),
-                ),
+                Object::Array(annotations.into_iter().map(Object::Reference).collect()),
             );
         }
 
@@ -139,12 +134,8 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> 
             .writer
             .as_mut()
             .ok_or_else(|| RenderError::Other("Document not started".into()))?;
-        let content = helpers::render_elements_to_content(
-            elements,
-            font_map,
-            page_width,
-            page_height,
-        )?;
+        let content =
+            helpers::render_elements_to_content(elements, font_map, page_width, page_height)?;
         // Use write_content_stream to stream immediately
         let content_id = writer.write_content_stream(content)?;
         Ok(content_id)
@@ -172,12 +163,7 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> 
         if !annotations.is_empty() {
             page_dict.set(
                 "Annots",
-                Object::Array(
-                    annotations
-                        .into_iter()
-                        .map(Object::Reference)
-                        .collect(),
-                ),
+                Object::Array(annotations.into_iter().map(Object::Reference).collect()),
             );
         }
 

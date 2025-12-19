@@ -1,6 +1,6 @@
-use petty_xpath1::datasource::DataSourceNode;
-use petty_xpath1::{XPathValue};
 use crate::executor::{ExecutionError, TemplateExecutor};
+use petty_xpath1::XPathValue;
+use petty_xpath1::datasource::DataSourceNode;
 
 pub(crate) fn handle_variable<'s, 'a, N: DataSourceNode<'a> + 'a>(
     executor: &mut TemplateExecutor<'s, 'a, N>,

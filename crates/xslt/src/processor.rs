@@ -1,14 +1,14 @@
-use super::{ast, compiler};
 use super::executor::{self, ExecutionError};
-use petty_idf::IRNode;
-use petty_style::stylesheet::Stylesheet;
-use crate::error::XsltError;
-use petty_template_core::{
-    CompiledTemplate, DataSourceFormat, ExecutionConfig, TemplateParser,
-    TemplateFeatures, TemplateFlags, TemplateError,
-};
+use super::{ast, compiler};
 use crate::datasources::json::JsonVDocument;
 use crate::datasources::xml::XmlDocument;
+use crate::error::XsltError;
+use petty_idf::IRNode;
+use petty_style::stylesheet::Stylesheet;
+use petty_template_core::{
+    CompiledTemplate, DataSourceFormat, ExecutionConfig, TemplateError, TemplateFeatures,
+    TemplateFlags, TemplateParser,
+};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -27,14 +27,19 @@ pub struct XsltTemplate {
 }
 
 impl CompiledTemplate for XsltTemplate {
-    fn execute(&self, data_source_str: &str, config: ExecutionConfig) -> Result<Vec<IRNode>, TemplateError> {
+    fn execute(
+        &self,
+        data_source_str: &str,
+        config: ExecutionConfig,
+    ) -> Result<Vec<IRNode>, TemplateError> {
         let mut builder = super::idf_builder::IdfBuilder::new();
         match config.format {
             DataSourceFormat::Xml => {
                 let doc = XmlDocument::parse(data_source_str)
                     .map_err(|e: roxmltree::Error| XsltError::from(e))?;
                 let root_node = doc.root_node();
-                let mut executor = executor::TemplateExecutor::new(&self.compiled, root_node, config.strict)?;
+                let mut executor =
+                    executor::TemplateExecutor::new(&self.compiled, root_node, config.strict)?;
                 executor.execute_with_mode(self.entry_mode.as_deref(), &mut builder)?;
             }
             DataSourceFormat::Json => {
@@ -42,7 +47,8 @@ impl CompiledTemplate for XsltTemplate {
                     .map_err(|e: serde_json::Error| XsltError::from(e))?;
                 let doc = JsonVDocument::new(&json_data);
                 let root_node = doc.root_node();
-                let mut executor = executor::TemplateExecutor::new(&self.compiled, root_node, config.strict)?;
+                let mut executor =
+                    executor::TemplateExecutor::new(&self.compiled, root_node, config.strict)?;
                 executor.execute_with_mode(self.entry_mode.as_deref(), &mut builder)?;
             }
         }
@@ -98,7 +104,6 @@ impl TemplateParser for XsltParser {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -143,7 +148,6 @@ mod tests {
 
     const TEST_JSON_DATA: &str = r#"{ "users": [ {"name": "Alice"}, {"name": "Bob"} ] }"#;
 
-
     #[test]
     fn test_explicit_format_selection() {
         let xslt = r#"<xsl:stylesheet version="1.0" xmlns:xsl="http://www.w3.org/1999/XSL/Transform">
@@ -155,17 +159,30 @@ mod tests {
         let compiled = compiled_bundle.main_template;
 
         // Correctly process JSON with JSON format
-        let json_config = ExecutionConfig { format: DataSourceFormat::Json, ..Default::default() };
+        let json_config = ExecutionConfig {
+            format: DataSourceFormat::Json,
+            ..Default::default()
+        };
         let result_json = compiled.execute(TEST_JSON_DATA, json_config).unwrap();
         assert_eq!(result_json[0].get_text_content(), "Alice");
 
         // Fail to process JSON with XML format
-        let xml_config = ExecutionConfig { format: DataSourceFormat::Xml, ..Default::default() };
+        let xml_config = ExecutionConfig {
+            format: DataSourceFormat::Xml,
+            ..Default::default()
+        };
         assert!(compiled.execute(TEST_JSON_DATA, xml_config).is_err());
 
         // Fail to process XML with JSON format
-        let json_config_for_xml = ExecutionConfig { format: DataSourceFormat::Json, ..Default::default() };
-        assert!(compiled.execute(TEST_XML_DATA_FOR_COMPLEX, json_config_for_xml).is_err());
+        let json_config_for_xml = ExecutionConfig {
+            format: DataSourceFormat::Json,
+            ..Default::default()
+        };
+        assert!(
+            compiled
+                .execute(TEST_XML_DATA_FOR_COMPLEX, json_config_for_xml)
+                .is_err()
+        );
     }
 
     #[test]
@@ -179,15 +196,26 @@ mod tests {
         let compiled = parser.parse(xslt, PathBuf::new()).unwrap().main_template;
 
         // Non-strict mode: succeeds, outputs empty string
-        let non_strict_config = ExecutionConfig { format: DataSourceFormat::Xml, strict: false };
+        let non_strict_config = ExecutionConfig {
+            format: DataSourceFormat::Xml,
+            strict: false,
+        };
         let result_non_strict = compiled.execute(data, non_strict_config).unwrap();
         assert!(result_non_strict[0].get_text_content().is_empty());
 
         // Strict mode: fails
-        let strict_config = ExecutionConfig { format: DataSourceFormat::Xml, strict: true };
+        let strict_config = ExecutionConfig {
+            format: DataSourceFormat::Xml,
+            strict: true,
+        };
         let result_strict = compiled.execute(data, strict_config);
         assert!(result_strict.is_err());
-        assert!(result_strict.unwrap_err().to_string().contains("Reference to undeclared variable: $undeclared"));
+        assert!(
+            result_strict
+                .unwrap_err()
+                .to_string()
+                .contains("Reference to undeclared variable: $undeclared")
+        );
     }
 
     #[test]
@@ -206,21 +234,37 @@ mod tests {
         let compiled = parser.parse(xslt, PathBuf::new()).unwrap().main_template;
 
         // Non-strict mode: succeeds
-        let non_strict_config = ExecutionConfig { format: DataSourceFormat::Xml, strict: false };
+        let non_strict_config = ExecutionConfig {
+            format: DataSourceFormat::Xml,
+            strict: false,
+        };
         assert!(compiled.execute(data, non_strict_config).is_ok());
 
         // Strict mode: fails
-        let strict_config = ExecutionConfig { format: DataSourceFormat::Xml, strict: true };
+        let strict_config = ExecutionConfig {
+            format: DataSourceFormat::Xml,
+            strict: true,
+        };
         let result_strict = compiled.execute(data, strict_config);
         assert!(result_strict.is_err());
-        assert!(result_strict.unwrap_err().to_string().contains("undeclared parameter: 'undeclared'"));
+        assert!(
+            result_strict
+                .unwrap_err()
+                .to_string()
+                .contains("undeclared parameter: 'undeclared'")
+        );
     }
 
     #[test]
     fn test_xslt_processor_with_control_flow() {
         let parser = XsltParser;
-        let compiled = parser.parse(COMPLEX_XSLT, PathBuf::new()).unwrap().main_template;
-        let result_tree = compiled.execute(TEST_XML_DATA_FOR_COMPLEX, ExecutionConfig::default()).unwrap();
+        let compiled = parser
+            .parse(COMPLEX_XSLT, PathBuf::new())
+            .unwrap()
+            .main_template;
+        let result_tree = compiled
+            .execute(TEST_XML_DATA_FOR_COMPLEX, ExecutionConfig::default())
+            .unwrap();
 
         assert_eq!(result_tree.len(), 1, "Expected a single root block node");
         let root_block = &result_tree[0];
@@ -269,9 +313,18 @@ mod tests {
         };
 
         assert_eq!(root_children.len(), 3);
-        assert_eq!(root_children[0].get_text_content().trim(), "Unary minus: -2");
-        assert_eq!(root_children[1].get_text_content().trim(), "Preceding sibling: 3");
-        assert_eq!(root_children[2].get_text_content().trim(), "Lang check: true");
+        assert_eq!(
+            root_children[0].get_text_content().trim(),
+            "Unary minus: -2"
+        );
+        assert_eq!(
+            root_children[1].get_text_content().trim(),
+            "Preceding sibling: 3"
+        );
+        assert_eq!(
+            root_children[2].get_text_content().trim(),
+            "Lang check: true"
+        );
     }
 
     #[test]
@@ -317,9 +370,15 @@ mod tests {
             _ => panic!("Expected root block"),
         };
         assert_eq!(root_children.len(), 3);
-        assert_eq!(root_children[0].get_text_content().trim(), "Category B: Item 1");
+        assert_eq!(
+            root_children[0].get_text_content().trim(),
+            "Category B: Item 1"
+        );
         assert_eq!(root_children[1].get_text_content().trim(), "Other: Item 2");
-        assert_eq!(root_children[2].get_text_content().trim(), "Category A: Item 3");
+        assert_eq!(
+            root_children[2].get_text_content().trim(),
+            "Category A: Item 3"
+        );
     }
 
     #[test]
@@ -406,7 +465,7 @@ mod tests {
             InlineNode::Hyperlink { href, children, .. } => {
                 assert_eq!(href, "https://example.com");
                 children[0].get_text_content()
-            },
+            }
             _ => panic!("Expected hyperlink"),
         };
         assert_eq!(link1, "Example");
@@ -419,7 +478,7 @@ mod tests {
             InlineNode::Hyperlink { href, children, .. } => {
                 assert_eq!(href, "https://petty.rs");
                 children[0].get_text_content()
-            },
+            }
             _ => panic!("Expected hyperlink"),
         };
         assert_eq!(link2, "Petty");
@@ -466,9 +525,15 @@ mod tests {
         };
         assert_eq!(content_children.len(), 2);
         assert!(matches!(&content_children[0], IRNode::Paragraph { .. }));
-        assert_eq!(content_children[0].get_text_content().trim(), "This is the first paragraph.");
+        assert_eq!(
+            content_children[0].get_text_content().trim(),
+            "This is the first paragraph."
+        );
         assert!(matches!(&content_children[1], IRNode::Block { .. }));
-        assert_eq!(content_children[1].get_text_content().trim(), "This is a div, which becomes a block.");
+        assert_eq!(
+            content_children[1].get_text_content().trim(),
+            "This is a div, which becomes a block."
+        );
     }
 
     #[test]
@@ -502,9 +567,15 @@ mod tests {
         assert_eq!(root_children.len(), 3);
         assert_eq!(root_children[0].get_text_content().trim(), "Hello World");
         assert!(matches!(&root_children[1], IRNode::Paragraph { .. }));
-        assert_eq!(root_children[1].get_text_content().trim(), "This is the first paragraph.");
+        assert_eq!(
+            root_children[1].get_text_content().trim(),
+            "This is the first paragraph."
+        );
         assert!(matches!(&root_children[2], IRNode::Block { .. }));
-        assert_eq!(root_children[2].get_text_content().trim(), "This is a div, which becomes a block.");
+        assert_eq!(
+            root_children[2].get_text_content().trim(),
+            "This is a div, which becomes a block."
+        );
     }
 
     #[test]
@@ -540,26 +611,32 @@ mod tests {
 
         let data_node_children = match &result_tree[0] {
             IRNode::Block { children, .. } => children,
-            _ => panic!("Expected copied <data> to be a block")
+            _ => panic!("Expected copied <data> to be a block"),
         };
         // Inside <data> is the copied <wrapper>
         assert_eq!(data_node_children.len(), 1);
 
         let wrapper_node_children = match &data_node_children[0] {
             IRNode::Block { children, .. } => children,
-            _ => panic!("Expected copied <wrapper> to be a block")
+            _ => panic!("Expected copied <wrapper> to be a block"),
         };
         // Inside <wrapper> are the processed <item> and the copied <another>
         assert_eq!(wrapper_node_children.len(), 2);
 
         // The <item> was transformed into a <p>
-        assert!(matches!(&wrapper_node_children[0], IRNode::Paragraph { .. }));
-        assert_eq!(wrapper_node_children[0].get_text_content().trim(), "Processed item: A");
+        assert!(matches!(
+            &wrapper_node_children[0],
+            IRNode::Paragraph { .. }
+        ));
+        assert_eq!(
+            wrapper_node_children[0].get_text_content().trim(),
+            "Processed item: A"
+        );
 
         // The <another> was copied as-is
         let another_node_children = match &wrapper_node_children[1] {
             IRNode::Block { children, .. } => children,
-            _ => panic!("Expected copied <another> to be a block")
+            _ => panic!("Expected copied <another> to be a block"),
         };
         assert_eq!(another_node_children[0].get_text_content().trim(), "B");
     }
@@ -600,7 +677,7 @@ mod tests {
         match &para_children[0] {
             InlineNode::Hyperlink { href, .. } => {
                 assert_eq!(href, "https://example.com/123");
-            },
+            }
             _ => panic!("Expected hyperlink"),
         };
     }
@@ -715,8 +792,14 @@ mod tests {
         let features = parser.parse(xslt, PathBuf::new()).unwrap();
         let flags = features.main_template.features();
 
-        assert!(flags.uses_index_function, "uses_index_function should be true");
-        assert!(flags.has_table_of_contents, "has_table_of_contents should be true");
+        assert!(
+            flags.uses_index_function,
+            "uses_index_function should be true"
+        );
+        assert!(
+            flags.has_table_of_contents,
+            "has_table_of_contents should be true"
+        );
         assert_eq!(features.role_templates.len(), 0);
     }
 
@@ -758,22 +841,37 @@ mod tests {
         assert!(features.role_templates.contains_key("table-of-contents"));
 
         // 2. Execute main template
-        let main_result = features.main_template.execute("<data/>", ExecutionConfig::default()).unwrap();
+        let main_result = features
+            .main_template
+            .execute("<data/>", ExecutionConfig::default())
+            .unwrap();
         assert_eq!(main_result[0].get_text_content(), "Main Content");
 
         // 3. Execute 'page-header' role template
         let header_template = features.role_templates.get("page-header").unwrap();
         let header_data = r#"{ "page_number": 5, "page_count": 10 }"#;
-        let header_config = ExecutionConfig { format: DataSourceFormat::Json, ..Default::default() };
+        let header_config = ExecutionConfig {
+            format: DataSourceFormat::Json,
+            ..Default::default()
+        };
         let header_result = header_template.execute(header_data, header_config).unwrap();
-        assert_eq!(header_result[0].get_text_content(), "Page Header for page 5 of 10");
+        assert_eq!(
+            header_result[0].get_text_content(),
+            "Page Header for page 5 of 10"
+        );
 
         // 4. Execute 'table-of-contents' role template
         let toc_template = features.role_templates.get("table-of-contents").unwrap();
         let toc_data = r#"{ "headings": [ { "text": "Chapter 1", "page_number": 1 } ] }"#;
-        let toc_config = ExecutionConfig { format: DataSourceFormat::Json, ..Default::default() };
+        let toc_config = ExecutionConfig {
+            format: DataSourceFormat::Json,
+            ..Default::default()
+        };
         let toc_result = toc_template.execute(toc_data, toc_config).unwrap();
-        assert_eq!(toc_result[0].get_text_content().trim(), "Chapter 1 ...... 1");
+        assert_eq!(
+            toc_result[0].get_text_content().trim(),
+            "Chapter 1 ...... 1"
+        );
     }
 
     // Helper to get all text from an IRNode for simple assertions
@@ -792,8 +890,7 @@ mod tests {
                         s.push_str(&child.get_text_content());
                     }
                 }
-                IRNode::Paragraph { children, .. }
-                | IRNode::Heading { children, .. } => {
+                IRNode::Paragraph { children, .. } | IRNode::Heading { children, .. } => {
                     for inline in children {
                         s.push_str(&inline.get_text_content());
                     }

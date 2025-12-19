@@ -12,7 +12,6 @@ pub enum FlexDirection {
     ColumnReverse,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
 #[derive(Default)]
@@ -22,7 +21,6 @@ pub enum FlexWrap {
     Wrap,
     WrapReverse,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
@@ -37,7 +35,6 @@ pub enum JustifyContent {
     SpaceEvenly,
 }
 
-
 /// Note: `baseline` alignment is not yet supported and will be treated as `flex-start`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
@@ -50,7 +47,6 @@ pub enum AlignItems {
     Center,
     Baseline,
 }
-
 
 /// Note: `baseline` alignment is not yet supported and will be treated as `flex-start`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -65,4 +61,3 @@ pub enum AlignSelf {
     Center,
     Baseline,
 }
-

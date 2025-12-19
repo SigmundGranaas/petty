@@ -18,11 +18,13 @@ pub mod cache;
 // Existing modules
 pub(crate) mod engine;
 pub use self::engine::{LayoutEngine, LayoutStore};
-pub use self::interface::{AnchorLocation, IndexEntry, LayoutContext, LayoutEnvironment, NodeState};
+pub use self::interface::{
+    AnchorLocation, IndexEntry, LayoutContext, LayoutEnvironment, NodeState,
+};
 
-mod elements;
 pub mod builder;
 pub mod config;
+mod elements;
 pub mod fonts;
 pub mod interface;
 pub mod node_kind;
@@ -36,18 +38,17 @@ pub mod painting;
 pub mod text;
 
 // Re-exports for convenience within the layout crate
+pub use self::config::LayoutConfig;
 pub use self::elements::{ImageElement, LayoutElement, PositionedElement, TextElement};
 pub use self::fonts::{FontFaceInfo, SharedFontLibrary};
 pub use self::style::ComputedStyle;
-pub use self::config::LayoutConfig;
 
 // Re-export geometry types used by nodes from base to prevent type mismatches
-pub use petty_types::geometry::{BoxConstraints, Size, Rect};
+pub use petty_types::geometry::{BoxConstraints, Rect, Size};
 
 // Re-export interface types used by nodes
 pub use self::interface::{
-    LayoutResult, LayoutNode,
-    BlockState, FlexState, ListItemState, ParagraphState, TableState
+    BlockState, FlexState, LayoutNode, LayoutResult, ListItemState, ParagraphState, TableState,
 };
 
 #[cfg(test)]

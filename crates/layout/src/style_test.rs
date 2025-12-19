@@ -1,9 +1,9 @@
-use crate::style::{compute_style, get_default_style, ComputedStyle};
-use petty_types::color::Color;
+use crate::style::{ComputedStyle, compute_style, get_default_style};
 use petty_style::dimension::{Dimension, Margins};
 use petty_style::font::FontWeight;
 use petty_style::stylesheet::ElementStyle;
 use petty_style::text::TextAlign;
+use petty_types::color::Color;
 use std::sync::Arc;
 
 #[test]
@@ -12,7 +12,12 @@ fn test_style_inheritance() {
     parent_data.text.font_family = Arc::new("Times New Roman".to_string());
     parent_data.text.font_size = 20.0;
     parent_data.text.line_height = 24.0;
-    parent_data.text.color = Color { r: 10, g: 20, b: 30, a: 1.0 };
+    parent_data.text.color = Color {
+        r: 10,
+        g: 20,
+        b: 30,
+        a: 1.0,
+    };
     parent_data.text.text_align = TextAlign::Center;
     let parent_arc = Arc::new(ComputedStyle::new(parent_data));
 
@@ -21,7 +26,15 @@ fn test_style_inheritance() {
     assert_eq!(*computed.text.font_family, "Times New Roman");
     assert_eq!(computed.text.font_size, 20.0);
     assert_eq!(computed.text.line_height, 24.0);
-    assert_eq!(computed.text.color, Color { r: 10, g: 20, b: 30, a: 1.0 });
+    assert_eq!(
+        computed.text.color,
+        Color {
+            r: 10,
+            g: 20,
+            b: 30,
+            a: 1.0
+        }
+    );
     assert_eq!(computed.text.text_align, TextAlign::Center);
 }
 
@@ -31,7 +44,12 @@ fn test_style_non_inheritance() {
     parent_data.box_model.margin = Margins::all(50.0);
     parent_data.box_model.padding = Margins::all(30.0);
     parent_data.box_model.width = Some(Dimension::Pt(100.0));
-    parent_data.misc.background_color = Some(Color { r: 255, g: 0, b: 0, a: 1.0 });
+    parent_data.misc.background_color = Some(Color {
+        r: 255,
+        g: 0,
+        b: 0,
+        a: 1.0,
+    });
     let parent_arc = Arc::new(ComputedStyle::new(parent_data));
 
     let computed = compute_style(&[], None, &parent_arc);
@@ -73,12 +91,17 @@ fn test_style_cascade_precedence() {
     // 1. Parent Style
     let mut parent_data = get_default_style().inner.clone();
     parent_data.text.font_size = 10.0; // P: 10
-    parent_data.text.color = Color { r: 255, g: 0, b: 0, a: 1.0 }; // P: Red
+    parent_data.text.color = Color {
+        r: 255,
+        g: 0,
+        b: 0,
+        a: 1.0,
+    }; // P: Red
     let parent_arc = Arc::new(ComputedStyle::new(parent_data));
 
     // 2. Named Style Set 1
     let named_style_1 = Arc::new(ElementStyle {
-        font_size: Some(20.0), // N1: 20
+        font_size: Some(20.0),               // N1: 20
         font_weight: Some(FontWeight::Bold), // N1: Bold
         ..Default::default()
     });
@@ -91,7 +114,12 @@ fn test_style_cascade_precedence() {
 
     // 4. Inline Override (highest precedence)
     let style_override = ElementStyle {
-        color: Some(Color { r: 0, g: 0, b: 255, a: 1.0 }), // I: Blue
+        color: Some(Color {
+            r: 0,
+            g: 0,
+            b: 255,
+            a: 1.0,
+        }), // I: Blue
         font_size: Some(40.0), // I: 40
         ..Default::default()
     };
@@ -103,7 +131,15 @@ fn test_style_cascade_precedence() {
     assert_eq!(computed.text.font_size, 40.0);
 
     // color is defined in Parent (Red) and Inline (Blue). Inline should win.
-    assert_eq!(computed.text.color, Color { r: 0, g: 0, b: 255, a: 1.0 });
+    assert_eq!(
+        computed.text.color,
+        Color {
+            r: 0,
+            g: 0,
+            b: 255,
+            a: 1.0
+        }
+    );
 
     // font_weight is only defined in Named Style 1. It should be applied.
     assert_eq!(computed.text.font_weight, FontWeight::Bold);

@@ -1,16 +1,16 @@
 // Processor that implements TemplateParser trait for JSON templates
-use petty_template_core::{
-    TemplateParser, TemplateFeatures, TemplateFlags, CompiledTemplate,
-    ExecutionConfig, TemplateError,
-};
-use petty_idf::IRNode;
-use petty_style::stylesheet::Stylesheet;
-use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::collections::HashMap;
 use crate::ast::JsonTemplateFile;
 use crate::compiler::{Compiler, JsonInstruction};
 use crate::executor::TemplateExecutor;
+use petty_idf::IRNode;
+use petty_style::stylesheet::Stylesheet;
+use petty_template_core::{
+    CompiledTemplate, ExecutionConfig, TemplateError, TemplateFeatures, TemplateFlags,
+    TemplateParser,
+};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 /// JSON template parser
 pub struct JsonParser;
@@ -34,7 +34,8 @@ impl CompiledTemplate for CompiledJsonTemplate {
             .map_err(|e| TemplateError::ParseError(format!("JSON parse error: {}", e)))?;
 
         let mut executor = TemplateExecutor::new(&self.stylesheet, &self.definitions);
-        executor.build_tree(&self.instructions, &data)
+        executor
+            .build_tree(&self.instructions, &data)
             .map_err(|e: crate::error::JsonTemplateError| -> TemplateError { e.into() })
     }
 
@@ -85,14 +86,16 @@ impl TemplateParser for JsonParser {
         let empty_defs = HashMap::new();
         for (name, template_node) in template_file._stylesheet.definitions {
             let compiler = Compiler::new(&stylesheet, &empty_defs);
-            let instructions = compiler.compile(&template_node)
+            let instructions = compiler
+                .compile(&template_node)
                 .map_err(|e: crate::error::JsonTemplateError| -> TemplateError { e.into() })?;
             definitions.insert(name, instructions);
         }
 
         // Compile the main template into executable instructions
         let compiler = Compiler::new(&stylesheet, &definitions);
-        let instructions = compiler.compile(&template_file._template)
+        let instructions = compiler
+            .compile(&template_file._template)
             .map_err(|e: crate::error::JsonTemplateError| -> TemplateError { e.into() })?;
 
         // Detect features from the compiled instructions
@@ -102,7 +105,8 @@ impl TemplateParser for JsonParser {
         let mut role_templates = HashMap::new();
         for (role_name, role_template_node) in template_file._roles {
             let role_compiler = Compiler::new(&stylesheet, &definitions);
-            let role_instructions = role_compiler.compile(&role_template_node)
+            let role_instructions = role_compiler
+                .compile(&role_template_node)
                 .map_err(|e: crate::error::JsonTemplateError| -> TemplateError { e.into() })?;
 
             role_templates.insert(
@@ -113,7 +117,7 @@ impl TemplateParser for JsonParser {
                     stylesheet: Arc::clone(&stylesheet),
                     features,
                     resource_base_path: resource_base_path.clone(),
-                }) as Arc<dyn CompiledTemplate>
+                }) as Arc<dyn CompiledTemplate>,
             );
         }
 
@@ -173,7 +177,11 @@ fn scan_instructions_for_features(instructions: &[JsonInstruction], flags: &mut 
             JsonInstruction::ForEach { body, .. } => {
                 scan_instructions_for_features(body, flags);
             }
-            JsonInstruction::If { then_branch, else_branch, .. } => {
+            JsonInstruction::If {
+                then_branch,
+                else_branch,
+                ..
+            } => {
                 scan_instructions_for_features(then_branch, flags);
                 scan_instructions_for_features(else_branch, flags);
             }

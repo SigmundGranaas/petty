@@ -4,13 +4,15 @@ use super::ast::{
 };
 use super::parser;
 use super::pattern;
-use super::util::{get_attr_owned_optional, get_attr_owned_required, get_line_col_from_pos, OwnedAttributes};
-use petty_xpath1;
-use petty_style::stylesheet::{ElementStyle, Stylesheet};
-use petty_template_core::TemplateFlags;
-use petty_style::parsers as style;
+use super::util::{
+    OwnedAttributes, get_attr_owned_optional, get_attr_owned_required, get_line_col_from_pos,
+};
 use crate::ast::{NamedTemplate, TemplateRule};
 use crate::error::XsltError;
+use petty_style::parsers as style;
+use petty_style::stylesheet::{ElementStyle, Stylesheet};
+use petty_template_core::TemplateFlags;
+use petty_xpath1;
 use quick_xml::events::{BytesEnd, BytesStart};
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -19,8 +21,20 @@ use std::sync::Arc;
 
 /// A trait defining the callbacks the parser driver will use to build a stylesheet.
 pub trait StylesheetBuilder {
-    fn start_element(&mut self, e: &BytesStart, attrs: OwnedAttributes, pos: usize, source: &str) -> Result<(), XsltError>;
-    fn empty_element(&mut self, e: &BytesStart, attrs: OwnedAttributes, pos: usize, source: &str) -> Result<(), XsltError>;
+    fn start_element(
+        &mut self,
+        e: &BytesStart,
+        attrs: OwnedAttributes,
+        pos: usize,
+        source: &str,
+    ) -> Result<(), XsltError>;
+    fn empty_element(
+        &mut self,
+        e: &BytesStart,
+        attrs: OwnedAttributes,
+        pos: usize,
+        source: &str,
+    ) -> Result<(), XsltError>;
     fn end_element(&mut self, e: &BytesEnd, pos: usize, source: &str) -> Result<(), XsltError>;
     fn text(&mut self, text: String) -> Result<(), XsltError>;
 }
@@ -36,6 +50,7 @@ pub fn compile(
 }
 
 /// Represents the current state of the builder, tracking nested structures.
+#[allow(clippy::large_enum_variant)]
 pub(crate) enum BuilderState {
     Stylesheet,
     Template(OwnedAttributes),
@@ -111,11 +126,16 @@ impl CompilerBuilder {
     /// Consumes the builder to produce the final, compiled artifact.
     fn finalize(mut self, resource_base_path: PathBuf) -> Result<CompiledStylesheet, XsltError> {
         if self.stylesheet.default_page_master_name.is_none() {
-            self.stylesheet.default_page_master_name = self.stylesheet.page_masters.keys().next().cloned();
+            self.stylesheet.default_page_master_name =
+                self.stylesheet.page_masters.keys().next().cloned();
         }
 
         for rules in self.template_rules.values_mut() {
-            rules.sort_by(|a, b| b.priority.partial_cmp(&a.priority).unwrap_or(std::cmp::Ordering::Equal));
+            rules.sort_by(|a, b| {
+                b.priority
+                    .partial_cmp(&a.priority)
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
         }
 
         // Scan all templates for internal links and anchors
@@ -159,7 +179,12 @@ impl CompilerBuilder {
     fn template_contains_links(&self, instructions: &[XsltInstruction]) -> bool {
         for instr in instructions {
             match instr {
-                XsltInstruction::ContentTag { tag_name, styles, body, .. } => {
+                XsltInstruction::ContentTag {
+                    tag_name,
+                    styles,
+                    body,
+                    ..
+                } => {
                     // Check if this is a link element
                     if self.is_link_tag(tag_name) {
                         return true;
@@ -173,7 +198,9 @@ impl CompilerBuilder {
                         return true;
                     }
                 }
-                XsltInstruction::EmptyTag { tag_name, styles, .. } => {
+                XsltInstruction::EmptyTag {
+                    tag_name, styles, ..
+                } => {
                     // Check if this is a link element
                     if self.is_link_tag(tag_name) {
                         return true;
@@ -195,9 +222,10 @@ impl CompilerBuilder {
                         }
                     }
                     if let Some(otherwise_body) = otherwise
-                        && self.template_contains_links(&otherwise_body.0) {
-                            return true;
-                        }
+                        && self.template_contains_links(&otherwise_body.0)
+                    {
+                        return true;
+                    }
                 }
                 XsltInstruction::ForEach { body, .. } => {
                     if self.template_contains_links(&body.0) {
@@ -216,9 +244,10 @@ impl CompilerBuilder {
                 }
                 XsltInstruction::Table { header, body, .. } => {
                     if let Some(h) = header
-                        && self.template_contains_links(&h.0) {
-                            return true;
-                        }
+                        && self.template_contains_links(&h.0)
+                    {
+                        return true;
+                    }
                     if self.template_contains_links(&body.0) {
                         return true;
                     }
@@ -232,13 +261,13 @@ impl CompilerBuilder {
 
     /// Checks if a tag name represents a link element.
     fn is_link_tag(&self, tag_name: &[u8]) -> bool {
-        matches!(
-            tag_name,
-            b"fo:link" | b"fo:basic-link" | b"a" | b"link"
-        )
+        matches!(tag_name, b"fo:link" | b"fo:basic-link" | b"a" | b"link")
     }
 
-    pub(crate) fn parse_xpath_and_detect_features(&mut self, expr_str: &str) -> Result<petty_xpath1::Expression, XsltError> {
+    pub(crate) fn parse_xpath_and_detect_features(
+        &mut self,
+        expr_str: &str,
+    ) -> Result<petty_xpath1::Expression, XsltError> {
         let expr = petty_xpath1::parse_expression(expr_str)?;
         if self.ast_contains_function(&expr, "petty:index") {
             self.features.uses_index_function = true;
@@ -248,7 +277,11 @@ impl CompilerBuilder {
 
     fn ast_contains_function(&self, expr: &petty_xpath1::Expression, name: &str) -> bool {
         match expr {
-            petty_xpath1::Expression::FunctionCall { name: func_name, args, .. } => {
+            petty_xpath1::Expression::FunctionCall {
+                name: func_name,
+                args,
+                ..
+            } => {
                 if func_name == name {
                     return true;
                 }
@@ -263,14 +296,25 @@ impl CompilerBuilder {
             petty_xpath1::Expression::LocationPath(lp) => {
                 let check_start = if let Some(sp) = &lp.start_point {
                     self.ast_contains_function(sp, name)
-                } else { false };
-                check_start || lp.steps.iter().any(|s| s.predicates.iter().any(|p| self.ast_contains_function(p, name)))
+                } else {
+                    false
+                };
+                check_start
+                    || lp.steps.iter().any(|s| {
+                        s.predicates
+                            .iter()
+                            .any(|p| self.ast_contains_function(p, name))
+                    })
             }
-            _ => false
+            _ => false,
         }
     }
 
-    pub(crate) fn resolve_styles(&self, attrs: &OwnedAttributes, location: crate::error::Location) -> Result<PreparsedStyles, XsltError> {
+    pub(crate) fn resolve_styles(
+        &self,
+        attrs: &OwnedAttributes,
+        location: crate::error::Location,
+    ) -> Result<PreparsedStyles, XsltError> {
         let mut style_sets = Vec::new();
         let mut style_override = ElementStyle::default();
 
@@ -279,12 +323,15 @@ impl CompilerBuilder {
         // 1. Process `use-attribute-sets`
         if let Some(sets_str) = get_attr_owned_optional(attrs, b"use-attribute-sets")? {
             for set_name in sets_str.split_whitespace() {
-                let style = self.stylesheet.styles.get(set_name).cloned().ok_or_else(|| {
-                    XsltError::TemplateStructure {
+                let style = self
+                    .stylesheet
+                    .styles
+                    .get(set_name)
+                    .cloned()
+                    .ok_or_else(|| XsltError::TemplateStructure {
                         message: format!("Attribute set '{}' not found", set_name),
                         location: location.clone(),
-                    }
-                })?;
+                    })?;
                 style_sets.push(style);
             }
         }
@@ -334,11 +381,20 @@ impl CompilerBuilder {
 }
 
 impl StylesheetBuilder for CompilerBuilder {
-    fn start_element(&mut self, e: &BytesStart, attrs: OwnedAttributes, pos: usize, source: &str) -> Result<(), XsltError> {
+    fn start_element(
+        &mut self,
+        e: &BytesStart,
+        attrs: OwnedAttributes,
+        pos: usize,
+        source: &str,
+    ) -> Result<(), XsltError> {
         let qname_binding = e.name();
         let name = qname_binding.as_ref();
 
-        if let Some(BuilderState::Sortable { saw_non_sort_child, .. }) = self.state_stack.last_mut() {
+        if let Some(BuilderState::Sortable {
+            saw_non_sort_child, ..
+        }) = self.state_stack.last_mut()
+        {
             *saw_non_sort_child = true;
         }
 
@@ -366,15 +422,24 @@ impl StylesheetBuilder for CompilerBuilder {
         Ok(())
     }
 
-    fn empty_element(&mut self, e: &BytesStart, attrs: OwnedAttributes, pos: usize, source: &str) -> Result<(), XsltError> {
+    fn empty_element(
+        &mut self,
+        e: &BytesStart,
+        attrs: OwnedAttributes,
+        pos: usize,
+        source: &str,
+    ) -> Result<(), XsltError> {
         let qname_binding = e.name();
         let name = qname_binding.as_ref();
         let location = get_line_col_from_pos(source, pos).into();
 
         if name != b"xsl:sort"
-            && let Some(BuilderState::Sortable { saw_non_sort_child, .. }) = self.state_stack.last_mut() {
-                *saw_non_sort_child = true;
-            }
+            && let Some(BuilderState::Sortable {
+                saw_non_sort_child, ..
+            }) = self.state_stack.last_mut()
+        {
+            *saw_non_sort_child = true;
+        }
 
         match name {
             b"fo:simple-page-master" => self.handle_simple_page_master(attrs)?,
@@ -442,18 +507,22 @@ impl StylesheetBuilder for CompilerBuilder {
     }
 
     fn text(&mut self, text: String) -> Result<(), XsltError> {
-        if let Some(BuilderState::Sortable { saw_non_sort_child, .. }) = self.state_stack.last_mut()
-            && !text.trim().is_empty() {
-                *saw_non_sort_child = true;
-            }
+        if let Some(BuilderState::Sortable {
+            saw_non_sort_child, ..
+        }) = self.state_stack.last_mut()
+            && !text.trim().is_empty()
+        {
+            *saw_non_sort_child = true;
+        }
         let is_in_xsl_text = matches!(self.state_stack.last(), Some(BuilderState::XslText));
 
         // Preserve whitespace content if it's from <xsl:text>.
         // Otherwise, only keep text that has non-whitespace characters.
         if (is_in_xsl_text || !text.trim().is_empty())
-            && let Some(body) = self.instruction_stack.last_mut() {
-                body.push(XsltInstruction::Text(text));
-            }
+            && let Some(body) = self.instruction_stack.last_mut()
+        {
+            body.push(XsltInstruction::Text(text));
+        }
         Ok(())
     }
 }

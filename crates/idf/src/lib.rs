@@ -3,8 +3,8 @@
 //! This module defines the core, in-memory representation of a document's
 //! structure and content after parsing but before layout.
 
-use petty_style::stylesheet::ElementStyle;
 use petty_style::dimension::Dimension;
+use petty_style::stylesheet::ElementStyle;
 use std::sync::Arc;
 
 // --- Shared Types ---
@@ -39,19 +39,39 @@ pub enum IRNode {
     /// The root of a document fragment, containing other block nodes.
     Root(Vec<IRNode>),
     /// A generic block container.
-    Block { meta: NodeMetadata, children: Vec<IRNode> },
+    Block {
+        meta: NodeMetadata,
+        children: Vec<IRNode>,
+    },
     /// A paragraph, containing only inline content.
-    Paragraph { meta: NodeMetadata, children: Vec<InlineNode> },
+    Paragraph {
+        meta: NodeMetadata,
+        children: Vec<InlineNode>,
+    },
     /// A heading, with a level and inline content.
-    Heading { meta: NodeMetadata, level: u8, children: Vec<InlineNode> },
+    Heading {
+        meta: NodeMetadata,
+        level: u8,
+        children: Vec<InlineNode>,
+    },
     /// An image.
     Image { meta: NodeMetadata, src: TextStr },
     /// A container for flexible box layout.
-    FlexContainer { meta: NodeMetadata, children: Vec<IRNode> },
+    FlexContainer {
+        meta: NodeMetadata,
+        children: Vec<IRNode>,
+    },
     /// An ordered or unordered list.
-    List { meta: NodeMetadata, start: Option<usize>, children: Vec<IRNode> },
+    List {
+        meta: NodeMetadata,
+        start: Option<usize>,
+        children: Vec<IRNode>,
+    },
     /// An item within a list.
-    ListItem { meta: NodeMetadata, children: Vec<IRNode> },
+    ListItem {
+        meta: NodeMetadata,
+        children: Vec<IRNode>,
+    },
     /// A table.
     Table {
         meta: NodeMetadata,
@@ -99,9 +119,7 @@ impl IRNode {
     }
 
     pub fn style_sets(&self) -> &[Arc<ElementStyle>] {
-        self.meta()
-            .map(|m| m.style_sets.as_slice())
-            .unwrap_or(&[])
+        self.meta().map(|m| m.style_sets.as_slice()).unwrap_or(&[])
     }
 
     pub fn style_override(&self) -> Option<&ElementStyle> {
@@ -126,18 +144,28 @@ impl IRNode {
     }
 }
 
-
 /// Represents an inline-level element within a block like a `Paragraph`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum InlineNode {
     /// A run of plain text.
     Text(TextStr),
     /// A styled `<span>`.
-    StyledSpan { meta: InlineMetadata, children: Vec<InlineNode> },
+    StyledSpan {
+        meta: InlineMetadata,
+        children: Vec<InlineNode>,
+    },
     /// A hyperlink `<a>`.
-    Hyperlink { meta: InlineMetadata, href: TextStr, children: Vec<InlineNode> },
+    Hyperlink {
+        meta: InlineMetadata,
+        href: TextStr,
+        children: Vec<InlineNode>,
+    },
     /// A cross-reference to another page.
-    PageReference { meta: InlineMetadata, target_id: TextStr, children: Vec<InlineNode> },
+    PageReference {
+        meta: InlineMetadata,
+        target_id: TextStr,
+        children: Vec<InlineNode>,
+    },
     /// An inline image.
     Image { meta: InlineMetadata, src: TextStr },
     /// A soft line break.

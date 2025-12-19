@@ -1,7 +1,7 @@
-use petty_idf::TextStr;
-use petty_types::geometry::{self, BoxConstraints, Size};
 use crate::{ComputedStyle, LayoutEngine, LayoutError, PositionedElement};
 use bumpalo::Bump;
+use petty_idf::TextStr;
+use petty_types::geometry::{self, BoxConstraints, Size};
 use std::any::Any;
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -256,7 +256,11 @@ pub enum LayoutResult {
 }
 
 pub trait LayoutNode: Debug + Sync {
-    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<Size, LayoutError>;
+    fn measure(
+        &self,
+        env: &LayoutEnvironment,
+        constraints: BoxConstraints,
+    ) -> Result<Size, LayoutError>;
 
     fn layout(
         &self,

@@ -1,12 +1,12 @@
 #![cfg(test)]
 
-use petty_idf::{IRNode, NodeMetadata};
-use crate::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
 use crate::LayoutElement;
+use crate::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
+use petty_idf::{IRNode, NodeMetadata};
 use petty_style::border::{Border, BorderStyle};
-use petty_types::color::Color;
 use petty_style::dimension::{Margins, PageSize};
 use petty_style::stylesheet::{ElementStyle, PageLayout, Stylesheet};
+use petty_types::color::Color;
 use std::collections::HashMap;
 
 #[test]
@@ -56,7 +56,10 @@ fn test_block_with_border_and_padding_indents_content() {
         page_masters: HashMap::from([(
             "master".to_string(),
             PageLayout {
-                size: PageSize::Custom { width: 500.0, height: 500.0 },
+                size: PageSize::Custom {
+                    width: 500.0,
+                    height: 500.0,
+                },
                 margins: Some(Margins::all(10.0)),
                 ..Default::default()
             },
@@ -105,7 +108,10 @@ fn test_multipage_block_with_background_is_drawn_on_all_pages() {
         page_masters: HashMap::from([(
             "master".to_string(),
             PageLayout {
-                size: PageSize::Custom { width: 500.0, height: 100.0 },
+                size: PageSize::Custom {
+                    width: 500.0,
+                    height: 100.0,
+                },
                 margins: Some(Margins::all(10.0)),
                 ..Default::default()
             },
@@ -115,7 +121,12 @@ fn test_multipage_block_with_background_is_drawn_on_all_pages() {
     };
     let block_style_override = ElementStyle {
         widows: Some(1),
-        background_color: Some(Color { r: 255, g: 0, b: 0, a: 1.0 }),
+        background_color: Some(Color {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 1.0,
+        }),
         ..Default::default()
     };
     let nodes = vec![IRNode::Block {
@@ -210,7 +221,10 @@ fn test_vertical_margin_collapse() {
         page_masters: HashMap::from([(
             "master".to_string(),
             PageLayout {
-                size: PageSize::Custom { width: 500.0, height: 500.0 },
+                size: PageSize::Custom {
+                    width: 500.0,
+                    height: 500.0,
+                },
                 margins: Some(Margins::all(10.0)),
                 ..Default::default()
             },
@@ -220,11 +234,17 @@ fn test_vertical_margin_collapse() {
     };
 
     let block_style_1 = ElementStyle {
-        margin: Some(Margins { bottom: 20.0, ..Default::default() }),
+        margin: Some(Margins {
+            bottom: 20.0,
+            ..Default::default()
+        }),
         ..Default::default()
     };
     let block_style_2 = ElementStyle {
-        margin: Some(Margins { top: 30.0, ..Default::default() }),
+        margin: Some(Margins {
+            top: 30.0,
+            ..Default::default()
+        }),
         ..Default::default()
     };
 

@@ -1,6 +1,6 @@
+use crate::pipeline::config::PipelineCacheConfig;
 use petty_core::layout::fonts::SharedFontLibrary;
 use petty_core::parser::processor::CompiledTemplate;
-use crate::pipeline::config::PipelineCacheConfig;
 use petty_core::traits::ResourceProvider;
 use std::collections::HashMap;
 use std::sync::Arc;

@@ -9,13 +9,13 @@ use crate::flex::{AlignItems, AlignSelf, FlexDirection, FlexWrap, JustifyContent
 use crate::font::{FontStyle, FontWeight};
 use crate::list::ListStyleType;
 use crate::text::TextAlign;
+use nom::IResult;
 use nom::branch::alt;
 use nom::bytes::complete::{tag, tag_no_case, take_while_m_n};
 use nom::character::complete::{char, space0, space1};
 use nom::combinator::{map, map_res, opt, recognize};
 use nom::multi::separated_list1;
 use nom::sequence::{delimited, pair, preceded, tuple};
-use nom::IResult;
 use petty_types::Color;
 use thiserror::Error;
 
@@ -221,10 +221,12 @@ pub fn parse_font_weight(s: &str) -> Result<FontWeight, StyleParseError> {
         "bold" => Ok(FontWeight::Bold),
         "black" => Ok(FontWeight::Black),
         _ => {
-            let num_weight = s.parse::<u16>().map_err(|_| StyleParseError::InvalidValue {
-                property: "font-weight".to_string(),
-                value: s.to_string(),
-            })?;
+            let num_weight = s
+                .parse::<u16>()
+                .map_err(|_| StyleParseError::InvalidValue {
+                    property: "font-weight".to_string(),
+                    value: s.to_string(),
+                })?;
             Ok(FontWeight::Numeric(num_weight))
         }
     }

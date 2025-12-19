@@ -1,7 +1,7 @@
-use petty_style::stylesheet::ElementStyle;
-use petty_json_template::ast::{JsonImage, JsonNode, TemplateNode};
 use crate::node::TemplateBuilder;
 use crate::style::impl_styled_widget;
+use petty_json_template::ast::{JsonImage, JsonNode, TemplateNode};
+use petty_style::stylesheet::ElementStyle;
 
 /// Builder for a block-level `<Image>` node.
 #[derive(Clone)]

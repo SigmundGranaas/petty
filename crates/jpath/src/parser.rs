@@ -2,6 +2,7 @@
 use super::ast::{Expression, PathSegment, Selection};
 use crate::error::JPathError;
 use nom::{
+    IResult,
     branch::alt,
     bytes::complete::{is_not, tag, take_while},
     character::complete::{alpha1, char, multispace0, u64 as nom_u64},
@@ -9,9 +10,8 @@ use nom::{
     multi::{many0, separated_list0},
     number::complete::double,
     sequence::{delimited, pair, preceded},
-    IResult,
 };
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 // --- Main Public Parser ---
 
@@ -39,7 +39,10 @@ fn expression(input: &str) -> IResult<&str, Expression> {
 // --- Literal Parsers ---
 
 fn boolean(input: &str) -> IResult<&str, Value> {
-    alt((map(tag("true"), |_| json!(true)), map(tag("false"), |_| json!(false))))(input)
+    alt((
+        map(tag("true"), |_| json!(true)),
+        map(tag("false"), |_| json!(false)),
+    ))(input)
 }
 
 fn null(input: &str) -> IResult<&str, Value> {
@@ -47,7 +50,9 @@ fn null(input: &str) -> IResult<&str, Value> {
 }
 
 fn string_literal(input: &str) -> IResult<&str, Value> {
-    map(delimited(char('\''), is_not("'"), char('\'')), |s: &str| json!(s))(input)
+    map(delimited(char('\''), is_not("'"), char('\'')), |s: &str| {
+        json!(s)
+    })(input)
 }
 
 fn number(input: &str) -> IResult<&str, Value> {
@@ -68,11 +73,15 @@ fn identifier(input: &str) -> IResult<&str, &str> {
 }
 
 fn key_segment(input: &str) -> IResult<&str, PathSegment> {
-    map(preceded(char('.'), identifier), |s| PathSegment::Key(s.to_string()))(input)
+    map(preceded(char('.'), identifier), |s| {
+        PathSegment::Key(s.to_string())
+    })(input)
 }
 
 fn index_segment(input: &str) -> IResult<&str, PathSegment> {
-    map(delimited(char('['), nom_u64, char(']')), |i| PathSegment::Index(i as usize))(input)
+    map(delimited(char('['), nom_u64, char(']')), |i| {
+        PathSegment::Index(i as usize)
+    })(input)
 }
 
 fn path_segment(input: &str) -> IResult<&str, PathSegment> {
@@ -80,17 +89,22 @@ fn path_segment(input: &str) -> IResult<&str, PathSegment> {
 }
 
 fn full_path(input: &str) -> IResult<&str, Selection> {
-    map(pair(identifier, many0(path_segment)), |(start, mut rest)| {
-        let mut segments = vec![PathSegment::Key(start.to_string())];
-        segments.append(&mut rest);
-        Selection::Path(segments)
-    })(input)
+    map(
+        pair(identifier, many0(path_segment)),
+        |(start, mut rest)| {
+            let mut segments = vec![PathSegment::Key(start.to_string())];
+            segments.append(&mut rest);
+            Selection::Path(segments)
+        },
+    )(input)
 }
 
 fn selection(input: &str) -> IResult<&str, Selection> {
     alt((
         map(tag("."), |_| Selection::CurrentContext),
-        map(preceded(char('$'), identifier), |name| Selection::Variable(name.to_string())),
+        map(preceded(char('$'), identifier), |name| {
+            Selection::Variable(name.to_string())
+        }),
         full_path,
     ))(input)
 }
@@ -100,10 +114,19 @@ fn selection(input: &str) -> IResult<&str, Selection> {
 fn function_call(input: &str) -> IResult<&str, Expression> {
     let (input, name) = identifier(input)?;
     let (input, _) = multispace0(input)?;
-    let (input, args) =
-        delimited(char('('), separated_list0(ws(char(',')), expression), char(')'))(input)?;
+    let (input, args) = delimited(
+        char('('),
+        separated_list0(ws(char(',')), expression),
+        char(')'),
+    )(input)?;
 
-    Ok((input, Expression::FunctionCall { name: name.to_string(), args }))
+    Ok((
+        input,
+        Expression::FunctionCall {
+            name: name.to_string(),
+            args,
+        },
+    ))
 }
 
 /// A combinator that takes a parser `inner` and produces a parser that consumes surrounding whitespace.

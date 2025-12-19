@@ -1,9 +1,9 @@
 // src/pipeline/renderer/mod.rs
-use petty_core::error::PipelineError;
 use crate::pipeline::api::PreparedDataSources;
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::renderer::composing::ComposingRenderer;
 use crate::pipeline::renderer::streaming::SinglePassStreamingRenderer;
+use petty_core::error::PipelineError;
 use std::io::{Seek, Write};
 
 pub mod composing;

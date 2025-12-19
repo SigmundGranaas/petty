@@ -1,8 +1,8 @@
-use petty_types::geometry::Rect;
+use crate::elements::RectElement;
 use crate::style::{ComputedStyle, ComputedStyleData};
 use crate::{LayoutElement, PositionedElement};
-use crate::elements::RectElement;
 use petty_style::border::Border;
+use petty_types::geometry::Rect;
 use std::sync::Arc;
 
 /// Generates background and border elements for a rectangular region.
@@ -19,13 +19,29 @@ pub fn create_background_and_borders(
 ) -> Vec<PositionedElement> {
     let mut elements = Vec::new();
 
-    let border_top = if draw_top { style.border_top_width() } else { 0.0 };
-    let border_bottom = if draw_bottom { style.border_bottom_width() } else { 0.0 };
+    let border_top = if draw_top {
+        style.border_top_width()
+    } else {
+        0.0
+    };
+    let border_bottom = if draw_bottom {
+        style.border_bottom_width()
+    } else {
+        0.0
+    };
     let border_left = style.border_left_width();
     let border_right = style.border_right_width();
 
-    let padding_top = if draw_top { style.box_model.padding.top } else { 0.0 };
-    let padding_bottom = if draw_bottom { style.box_model.padding.bottom } else { 0.0 };
+    let padding_top = if draw_top {
+        style.box_model.padding.top
+    } else {
+        0.0
+    };
+    let padding_bottom = if draw_bottom {
+        style.box_model.padding.bottom
+    } else {
+        0.0
+    };
 
     let total_height = border_top + padding_top + content_height + padding_bottom + border_bottom;
 
@@ -66,40 +82,61 @@ pub fn create_background_and_borders(
 
     let mut draw_border = |b: &Option<Border>, rect: Rect| {
         if let Some(border) = b
-            && border.width > 0.0 {
-                let mut border_data = ComputedStyleData::default();
-                border_data.misc.background_color = Some(border.color.clone());
-                let border_style = ComputedStyle::new(border_data);
+            && border.width > 0.0
+        {
+            let mut border_data = ComputedStyleData::default();
+            border_data.misc.background_color = Some(border.color.clone());
+            let border_style = ComputedStyle::new(border_data);
 
-                let positioned_rect = PositionedElement {
-                    element: LayoutElement::Rectangle(RectElement),
-                    style: Arc::new(border_style),
-                    ..PositionedElement::from_rect(rect)
-                };
-                push(positioned_rect, 0.0, start_y);
-            }
+            let positioned_rect = PositionedElement {
+                element: LayoutElement::Rectangle(RectElement),
+                style: Arc::new(border_style),
+                ..PositionedElement::from_rect(rect)
+            };
+            push(positioned_rect, 0.0, start_y);
+        }
     };
 
     if draw_top {
         draw_border(
             &style.border.top,
-            Rect { x: 0.0, y: 0.0, width: bounds_width, height: border_top },
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: bounds_width,
+                height: border_top,
+            },
         );
     }
     if draw_bottom {
         draw_border(
             &style.border.bottom,
-            Rect { x: 0.0, y: total_height - border_bottom, width: bounds_width, height: border_bottom },
+            Rect {
+                x: 0.0,
+                y: total_height - border_bottom,
+                width: bounds_width,
+                height: border_bottom,
+            },
         );
     }
 
     draw_border(
         &style.border.left,
-        Rect { x: 0.0, y: 0.0, width: border_left, height: total_height },
+        Rect {
+            x: 0.0,
+            y: 0.0,
+            width: border_left,
+            height: total_height,
+        },
     );
     draw_border(
         &style.border.right,
-        Rect { x: bounds_width - border_right, y: 0.0, width: border_right, height: total_height },
+        Rect {
+            x: bounds_width - border_right,
+            y: 0.0,
+            width: border_right,
+            height: total_height,
+        },
     );
 
     elements

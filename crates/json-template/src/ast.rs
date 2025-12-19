@@ -11,6 +11,7 @@ use std::collections::HashMap;
 
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(untagged)]
+#[allow(clippy::large_enum_variant)]
 pub enum TemplateNode {
     Control(ControlNode),
     Static(JsonNode),

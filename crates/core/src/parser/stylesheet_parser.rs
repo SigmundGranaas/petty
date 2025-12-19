@@ -6,8 +6,8 @@
 
 #![allow(deprecated)]
 
-use crate::style_types::stylesheet::Stylesheet;
 use crate::parser::ParseError;
+use crate::style_types::stylesheet::Stylesheet;
 
 #[deprecated(
     since = "0.2.0",
@@ -23,7 +23,9 @@ impl<'a> XsltParser<'a> {
         note = "Functionality moved to `parser::xslt::compiler::compile`"
     )]
     pub fn new(_content: &'a str) -> Self {
-        Self { _phantom: std::marker::PhantomData }
+        Self {
+            _phantom: std::marker::PhantomData,
+        }
     }
 
     #[deprecated(

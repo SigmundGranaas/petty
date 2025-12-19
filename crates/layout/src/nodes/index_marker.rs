@@ -1,14 +1,12 @@
 // src/core/layout/nodes/index_marker.rs
 
-use petty_idf::IRNode;
-use crate::engine::{LayoutEngine, LayoutStore};
-use petty_types::geometry::{BoxConstraints, Size};
-use crate::interface::{
-    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
-};
 use super::RenderNode;
-use crate::style::ComputedStyle;
 use crate::LayoutError;
+use crate::engine::{LayoutEngine, LayoutStore};
+use crate::interface::{LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState};
+use crate::style::ComputedStyle;
+use petty_idf::IRNode;
+use petty_types::geometry::{BoxConstraints, Size};
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -46,7 +44,11 @@ impl<'a> LayoutNode for IndexMarkerNode<'a> {
         self.style.as_ref()
     }
 
-    fn measure(&self, _env: &LayoutEnvironment, _constraints: BoxConstraints) -> Result<Size, LayoutError> {
+    fn measure(
+        &self,
+        _env: &LayoutEnvironment,
+        _constraints: BoxConstraints,
+    ) -> Result<Size, LayoutError> {
         Ok(Size::zero())
     }
 

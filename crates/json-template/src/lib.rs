@@ -5,13 +5,13 @@
 
 pub mod ast;
 pub mod compiler;
-pub mod executor;
 pub mod error;
+pub mod executor;
 pub mod processor;
 mod style_deser;
 
+pub use ast::{JsonTemplateFile, TemplateNode};
+pub use compiler::{CompiledString, CompiledStyles, CompiledTable, Compiler, JsonInstruction};
 pub use error::JsonTemplateError;
-pub use ast::{TemplateNode, JsonTemplateFile};
-pub use compiler::{JsonInstruction, Compiler, CompiledString, CompiledStyles, CompiledTable};
 pub use executor::TemplateExecutor;
-pub use processor::{JsonParser, CompiledJsonTemplate};
+pub use processor::{CompiledJsonTemplate, JsonParser};

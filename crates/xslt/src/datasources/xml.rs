@@ -51,8 +51,14 @@ impl<'a, 'input> PartialEq for XmlNode<'a, 'input> {
         match (self, other) {
             (XmlNode::Element(a), XmlNode::Element(b)) => a.id() == b.id(),
             (
-                XmlNode::Attribute { parent: p1, index: i1 },
-                XmlNode::Attribute { parent: p2, index: i2 },
+                XmlNode::Attribute {
+                    parent: p1,
+                    index: i1,
+                },
+                XmlNode::Attribute {
+                    parent: p2,
+                    index: i2,
+                },
             ) => p1.id() == p2.id() && i1 == i2,
             _ => false,
         }
@@ -70,15 +76,20 @@ impl<'a, 'input> PartialOrd for XmlNode<'a, 'input> {
 impl<'a, 'input> Ord for XmlNode<'a, 'input> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         match (self, other) {
-            (XmlNode::Element(a), XmlNode::Element(b)) => {
-                a.id().get().cmp(&b.id().get())
-            }
-            (XmlNode::Attribute { parent: p1, index: i1 }, XmlNode::Attribute { parent: p2, index: i2 }) => {
-                match p1.id().get().cmp(&p2.id().get()) {
-                    std::cmp::Ordering::Equal => i1.cmp(i2),
-                    other => other,
-                }
-            }
+            (XmlNode::Element(a), XmlNode::Element(b)) => a.id().get().cmp(&b.id().get()),
+            (
+                XmlNode::Attribute {
+                    parent: p1,
+                    index: i1,
+                },
+                XmlNode::Attribute {
+                    parent: p2,
+                    index: i2,
+                },
+            ) => match p1.id().get().cmp(&p2.id().get()) {
+                std::cmp::Ordering::Equal => i1.cmp(i2),
+                other => other,
+            },
             // Elements come before their attributes in document order
             (XmlNode::Element(e), XmlNode::Attribute { parent, .. }) => {
                 if e.id() == parent.id() {
@@ -156,7 +167,8 @@ impl<'a> DataSourceNode<'a> for XmlNode<'a, 'a> {
             XmlNode::Attribute { parent, index } => {
                 parent.attributes().nth(*index).map(|attr| {
                     // Check for xml: prefix by looking at the namespace
-                    let prefix = if attr.namespace() == Some("http://www.w3.org/XML/1998/namespace") {
+                    let prefix = if attr.namespace() == Some("http://www.w3.org/XML/1998/namespace")
+                    {
                         Some("xml")
                     } else {
                         None
@@ -184,18 +196,19 @@ impl<'a> DataSourceNode<'a> for XmlNode<'a, 'a> {
                 } else if node.is_comment() {
                     node.text().unwrap_or("").to_string()
                 } else if node.is_pi() {
-                    node.pi().map(|pi| pi.value.unwrap_or("")).unwrap_or("").to_string()
+                    node.pi()
+                        .map(|pi| pi.value.unwrap_or(""))
+                        .unwrap_or("")
+                        .to_string()
                 } else {
                     String::new()
                 }
             }
-            XmlNode::Attribute { parent, index } => {
-                parent
-                    .attributes()
-                    .nth(*index)
-                    .map(|attr| attr.value().to_string())
-                    .unwrap_or_default()
-            }
+            XmlNode::Attribute { parent, index } => parent
+                .attributes()
+                .nth(*index)
+                .map(|attr| attr.value().to_string())
+                .unwrap_or_default(),
         }
     }
 
@@ -215,9 +228,7 @@ impl<'a> DataSourceNode<'a> for XmlNode<'a, 'a> {
 
     fn children(&self) -> Box<dyn Iterator<Item = Self> + 'a> {
         match self {
-            XmlNode::Element(node) => {
-                Box::new(node.children().map(XmlNode::Element))
-            }
+            XmlNode::Element(node) => Box::new(node.children().map(XmlNode::Element)),
             XmlNode::Attribute { .. } => {
                 // Attributes don't have children
                 Box::new(std::iter::empty())
@@ -244,12 +255,14 @@ mod tests {
         let root = doc.root_node();
 
         // Navigate to <item>
-        let item = root.children().find(|n| {
-            n.name().map(|q| q.local_part == "root").unwrap_or(false)
-        }).unwrap();
-        let item = item.children().find(|n| {
-            n.name().map(|q| q.local_part == "item").unwrap_or(false)
-        }).unwrap();
+        let item = root
+            .children()
+            .find(|n| n.name().map(|q| q.local_part == "root").unwrap_or(false))
+            .unwrap();
+        let item = item
+            .children()
+            .find(|n| n.name().map(|q| q.local_part == "item").unwrap_or(false))
+            .unwrap();
 
         // Check attributes
         let attrs: Vec<_> = item.attributes().collect();
@@ -275,20 +288,24 @@ mod tests {
         let root = doc.root_node();
 
         // Navigate to <user>
-        let data = root.children().find(|n| {
-            n.name().map(|q| q.local_part == "data").unwrap_or(false)
-        }).unwrap();
-        let users = data.children().find(|n| {
-            n.name().map(|q| q.local_part == "users").unwrap_or(false)
-        }).unwrap();
-        let user = users.children().find(|n| {
-            n.name().map(|q| q.local_part == "user").unwrap_or(false)
-        }).unwrap();
+        let data = root
+            .children()
+            .find(|n| n.name().map(|q| q.local_part == "data").unwrap_or(false))
+            .unwrap();
+        let users = data
+            .children()
+            .find(|n| n.name().map(|q| q.local_part == "users").unwrap_or(false))
+            .unwrap();
+        let user = users
+            .children()
+            .find(|n| n.name().map(|q| q.local_part == "user").unwrap_or(false))
+            .unwrap();
 
         // Check the status attribute
-        let status_attr = user.attributes().find(|a| {
-            a.name().map(|q| q.local_part == "status").unwrap_or(false)
-        }).unwrap();
+        let status_attr = user
+            .attributes()
+            .find(|a| a.name().map(|q| q.local_part == "status").unwrap_or(false))
+            .unwrap();
         assert_eq!(status_attr.string_value(), "active");
     }
 }

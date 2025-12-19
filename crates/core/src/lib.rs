@@ -21,14 +21,14 @@
 //! implementors can fulfill for their target platform.
 
 // Re-export foundation crates
-pub use petty_types as types_base;
-pub use petty_style as style_types;
 pub use petty_idf as idf;
+pub use petty_style as style_types;
 pub use petty_traits as traits;
+pub use petty_types as types_base;
 
 // Re-export algorithm crates
-pub use petty_xpath1 as xpath;
 pub use petty_layout as layout;
+pub use petty_xpath1 as xpath;
 
 pub mod core;
 pub mod error;
@@ -36,17 +36,17 @@ pub mod parser;
 pub mod types;
 
 // Re-export commonly used types from foundation crates
-pub use types_base::{Color, Size, Rect, BoxConstraints};
-pub use style_types::{FontWeight, FontStyle, ElementStyle, Dimension, Margins, Border};
 pub use idf::{IRNode, InlineNode, NodeMetadata};
+pub use style_types::{Border, Dimension, ElementStyle, FontStyle, FontWeight, Margins};
+pub use types_base::{BoxConstraints, Color, Rect, Size};
 
 // Re-export from internal modules
 pub use error::PipelineError;
-pub use types::{LaidOutSequence, TocEntry, ApiIndexEntry};
+pub use types::{ApiIndexEntry, LaidOutSequence, TocEntry};
 
 // Re-export platform abstraction traits
 pub use traits::{
-    Executor, ExecutorError, SyncExecutor,
-    FontProvider, FontError, FontQuery, FontDescriptor, InMemoryFontProvider, SharedFontData,
-    ResourceProvider, ResourceError, InMemoryResourceProvider, SharedResourceData,
+    Executor, ExecutorError, FontDescriptor, FontError, FontProvider, FontQuery,
+    InMemoryFontProvider, InMemoryResourceProvider, ResourceError, ResourceProvider,
+    SharedFontData, SharedResourceData, SyncExecutor,
 };

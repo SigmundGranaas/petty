@@ -12,4 +12,4 @@ pub mod utils;
 
 pub use error::RenderError;
 pub use traits::DocumentRenderer;
-pub use types::{LaidOutSequence, Pass1Result, ResolvedAnchor, HyperlinkLocation};
+pub use types::{HyperlinkLocation, LaidOutSequence, Pass1Result, ResolvedAnchor};

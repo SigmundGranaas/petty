@@ -5,13 +5,13 @@ pub(super) mod table;
 pub(super) mod template;
 pub(super) mod variables;
 
-use std::sync::Arc;
 use super::compiler::{BuilderState, CompilerBuilder};
-use super::util::{get_attr_owned_required, get_line_col_from_pos, OwnedAttributes};
-use petty_style::stylesheet::ElementStyle;
+use super::util::{OwnedAttributes, get_attr_owned_required, get_line_col_from_pos};
 use crate::ast::{PreparsedTemplate, XsltInstruction};
 use crate::error::XsltError;
+use petty_style::stylesheet::ElementStyle;
 use quick_xml::events::BytesEnd;
+use std::sync::Arc;
 
 // These are handlers for common/shared logic that doesn't fit neatly into one file.
 // They are implemented as methods on CompilerBuilder.
@@ -47,7 +47,8 @@ impl CompilerBuilder {
     }
 
     pub(crate) fn handle_element_start(&mut self, attrs: OwnedAttributes) {
-        self.state_stack.push(BuilderState::InstructionElement(attrs));
+        self.state_stack
+            .push(BuilderState::InstructionElement(attrs));
     }
 
     pub(crate) fn handle_element_end(
@@ -58,7 +59,8 @@ impl CompilerBuilder {
         source: &str,
     ) -> Result<(), XsltError> {
         if let BuilderState::InstructionElement(attrs) = current_state {
-            let name_avt_str = get_attr_owned_required(&attrs, b"name", b"xsl:element", pos, source)?;
+            let name_avt_str =
+                get_attr_owned_required(&attrs, b"name", b"xsl:element", pos, source)?;
             let instr = XsltInstruction::Element {
                 name: crate::util::parse_avt(self, &name_avt_str)?,
                 body: PreparsedTemplate(body),
@@ -71,8 +73,7 @@ impl CompilerBuilder {
     }
 
     pub(crate) fn handle_copy_start(&mut self, attrs: OwnedAttributes) {
-        self.state_stack
-            .push(BuilderState::InstructionBody(attrs));
+        self.state_stack.push(BuilderState::InstructionBody(attrs));
     }
 
     pub(crate) fn handle_copy_end(
@@ -103,7 +104,8 @@ impl CompilerBuilder {
     ) -> Result<(), XsltError> {
         match self.state_stack.last() {
             Some(BuilderState::AttributeSet { .. }) => {
-                let attr_name = get_attr_owned_required(&attrs, b"name", b"xsl:attribute", pos, source)?;
+                let attr_name =
+                    get_attr_owned_required(&attrs, b"name", b"xsl:attribute", pos, source)?;
                 self.state_stack.push(BuilderState::Attribute(attr_name));
             }
             _ => {
@@ -133,12 +135,14 @@ impl CompilerBuilder {
                         }
                     })
                     .unwrap_or_default();
-                if let Some(BuilderState::AttributeSet { style, .. }) = self.state_stack.last_mut() {
+                if let Some(BuilderState::AttributeSet { style, .. }) = self.state_stack.last_mut()
+                {
                     petty_style::parsers::apply_style_property(style, &prop, &value)?;
                 }
             }
             BuilderState::InstructionAttribute(attrs) => {
-                let attr_name_str = get_attr_owned_required(&attrs, b"name", b"xsl:attribute", pos, source)?;
+                let attr_name_str =
+                    get_attr_owned_required(&attrs, b"name", b"xsl:attribute", pos, source)?;
                 let instr = XsltInstruction::Attribute {
                     name: crate::util::parse_avt(self, &attr_name_str)?,
                     body: PreparsedTemplate(body),
@@ -166,7 +170,10 @@ impl CompilerBuilder {
         Ok(())
     }
 
-    pub(crate) fn handle_attribute_set_end(&mut self, current_state: BuilderState) -> Result<(), XsltError> {
+    pub(crate) fn handle_attribute_set_end(
+        &mut self,
+        current_state: BuilderState,
+    ) -> Result<(), XsltError> {
         if let BuilderState::AttributeSet { name, style } = current_state {
             self.stylesheet.styles.insert(name, Arc::new(style));
         }

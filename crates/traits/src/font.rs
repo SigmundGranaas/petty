@@ -195,11 +195,10 @@ impl InMemoryFontProvider {
             style: style.clone(),
             postscript_name: None,
         };
-        let mut fonts = self.fonts.write()
-            .map_err(|_| FontError::LoadFailed {
-                path: format!("{}:{}:{:?}", family_string, weight.numeric_value(), style),
-                message: "font store lock poisoned".to_string(),
-            })?;
+        let mut fonts = self.fonts.write().map_err(|_| FontError::LoadFailed {
+            path: format!("{}:{}:{:?}", family_string, weight.numeric_value(), style),
+            message: "font store lock poisoned".to_string(),
+        })?;
         fonts.push((descriptor, Arc::new(data)));
         Ok(())
     }
@@ -223,11 +222,10 @@ impl InMemoryFontProvider {
             style: style.clone(),
             postscript_name: None,
         };
-        let mut fonts = self.fonts.write()
-            .map_err(|_| FontError::LoadFailed {
-                path: format!("{}:{}:{:?}", family_string, weight.numeric_value(), style),
-                message: "font store lock poisoned".to_string(),
-            })?;
+        let mut fonts = self.fonts.write().map_err(|_| FontError::LoadFailed {
+            path: format!("{}:{}:{:?}", family_string, weight.numeric_value(), style),
+            message: "font store lock poisoned".to_string(),
+        })?;
         fonts.push((descriptor, data));
         Ok(())
     }
@@ -237,13 +235,21 @@ impl InMemoryFontProvider {
     /// # Errors
     ///
     /// Returns `FontError::LoadFailed` if the internal lock is poisoned.
-    pub fn add_font_with_descriptor(&self, descriptor: FontDescriptor, data: Vec<u8>) -> Result<(), FontError> {
-        let path = format!("{}:{}:{:?}", descriptor.family, descriptor.weight.numeric_value(), descriptor.style);
-        let mut fonts = self.fonts.write()
-            .map_err(|_| FontError::LoadFailed {
-                path,
-                message: "font store lock poisoned".to_string(),
-            })?;
+    pub fn add_font_with_descriptor(
+        &self,
+        descriptor: FontDescriptor,
+        data: Vec<u8>,
+    ) -> Result<(), FontError> {
+        let path = format!(
+            "{}:{}:{:?}",
+            descriptor.family,
+            descriptor.weight.numeric_value(),
+            descriptor.style
+        );
+        let mut fonts = self.fonts.write().map_err(|_| FontError::LoadFailed {
+            path,
+            message: "font store lock poisoned".to_string(),
+        })?;
         fonts.push((descriptor, Arc::new(data)));
         Ok(())
     }
@@ -288,13 +294,19 @@ impl InMemoryFontProvider {
         }
 
         // Try any font in primary family with any weight/style
-        if let Some((_, data)) = fonts.iter().find(|(d, _)| d.family.eq_ignore_ascii_case(query.family)) {
+        if let Some((_, data)) = fonts
+            .iter()
+            .find(|(d, _)| d.family.eq_ignore_ascii_case(query.family))
+        {
             return Some(data.clone());
         }
 
         // Try any font in fallback families
         for fallback in query.fallbacks {
-            if let Some((_, data)) = fonts.iter().find(|(d, _)| d.family.eq_ignore_ascii_case(fallback)) {
+            if let Some((_, data)) = fonts
+                .iter()
+                .find(|(d, _)| d.family.eq_ignore_ascii_case(fallback))
+            {
                 return Some(data.clone());
             }
         }
@@ -328,9 +340,9 @@ impl InMemoryFontProvider {
         if !family_matches.is_empty() {
             // Find closest weight
             let target_weight = weight.numeric_value();
-            let closest = family_matches
-                .iter()
-                .min_by_key(|(d, _)| (d.weight.numeric_value() as i32 - target_weight as i32).abs());
+            let closest = family_matches.iter().min_by_key(|(d, _)| {
+                (d.weight.numeric_value() as i32 - target_weight as i32).abs()
+            });
             if let Some((_, data)) = closest {
                 return Some(data.clone());
             }
@@ -365,7 +377,8 @@ impl FontProvider for InMemoryFontProvider {
     }
 
     fn list_fonts(&self) -> Vec<FontDescriptor> {
-        self.fonts.read()
+        self.fonts
+            .read()
             .map(|f| f.iter().map(|(d, _)| d.clone()).collect())
             .unwrap_or_default()
     }
@@ -387,7 +400,14 @@ mod tests {
     #[test]
     fn test_in_memory_provider_add_and_load() {
         let provider = InMemoryFontProvider::new();
-        provider.add_font("TestFont", FontWeight::Regular, FontStyle::Normal, make_fake_font_data("test")).unwrap();
+        provider
+            .add_font(
+                "TestFont",
+                FontWeight::Regular,
+                FontStyle::Normal,
+                make_fake_font_data("test"),
+            )
+            .unwrap();
 
         let query = FontQuery::new("TestFont");
         let data = provider.load_font(&query).unwrap();
@@ -405,7 +425,14 @@ mod tests {
     #[test]
     fn test_in_memory_provider_has_font() {
         let provider = InMemoryFontProvider::new();
-        provider.add_font("TestFont", FontWeight::Regular, FontStyle::Normal, make_fake_font_data("test")).unwrap();
+        provider
+            .add_font(
+                "TestFont",
+                FontWeight::Regular,
+                FontStyle::Normal,
+                make_fake_font_data("test"),
+            )
+            .unwrap();
 
         assert!(provider.has_font(&FontQuery::new("TestFont")));
         assert!(!provider.has_font(&FontQuery::new("OtherFont")));
@@ -414,9 +441,30 @@ mod tests {
     #[test]
     fn test_in_memory_provider_list_families() {
         let provider = InMemoryFontProvider::new();
-        provider.add_font("Arial", FontWeight::Regular, FontStyle::Normal, make_fake_font_data("arial")).unwrap();
-        provider.add_font("Arial", FontWeight::Bold, FontStyle::Normal, make_fake_font_data("arial-bold")).unwrap();
-        provider.add_font("Helvetica", FontWeight::Regular, FontStyle::Normal, make_fake_font_data("helvetica")).unwrap();
+        provider
+            .add_font(
+                "Arial",
+                FontWeight::Regular,
+                FontStyle::Normal,
+                make_fake_font_data("arial"),
+            )
+            .unwrap();
+        provider
+            .add_font(
+                "Arial",
+                FontWeight::Bold,
+                FontStyle::Normal,
+                make_fake_font_data("arial-bold"),
+            )
+            .unwrap();
+        provider
+            .add_font(
+                "Helvetica",
+                FontWeight::Regular,
+                FontStyle::Normal,
+                make_fake_font_data("helvetica"),
+            )
+            .unwrap();
 
         let families = provider.list_families();
         assert_eq!(families.len(), 2);
@@ -427,7 +475,14 @@ mod tests {
     #[test]
     fn test_in_memory_provider_fallback() {
         let provider = InMemoryFontProvider::new();
-        provider.add_font("Fallback", FontWeight::Regular, FontStyle::Normal, make_fake_font_data("fallback")).unwrap();
+        provider
+            .add_font(
+                "Fallback",
+                FontWeight::Regular,
+                FontStyle::Normal,
+                make_fake_font_data("fallback"),
+            )
+            .unwrap();
 
         let query = FontQuery::new("Primary").with_fallbacks(&["Fallback"]);
         let data = provider.load_font(&query).unwrap();
@@ -437,8 +492,22 @@ mod tests {
     #[test]
     fn test_in_memory_provider_weight_matching() {
         let provider = InMemoryFontProvider::new();
-        provider.add_font("TestFont", FontWeight::Regular, FontStyle::Normal, make_fake_font_data("regular")).unwrap();
-        provider.add_font("TestFont", FontWeight::Bold, FontStyle::Normal, make_fake_font_data("bold")).unwrap();
+        provider
+            .add_font(
+                "TestFont",
+                FontWeight::Regular,
+                FontStyle::Normal,
+                make_fake_font_data("regular"),
+            )
+            .unwrap();
+        provider
+            .add_font(
+                "TestFont",
+                FontWeight::Bold,
+                FontStyle::Normal,
+                make_fake_font_data("bold"),
+            )
+            .unwrap();
 
         // Exact match
         let query = FontQuery::new("TestFont").with_weight(FontWeight::Bold);
@@ -455,7 +524,14 @@ mod tests {
     #[test]
     fn test_in_memory_provider_case_insensitive() {
         let provider = InMemoryFontProvider::new();
-        provider.add_font("TestFont", FontWeight::Regular, FontStyle::Normal, make_fake_font_data("test")).unwrap();
+        provider
+            .add_font(
+                "TestFont",
+                FontWeight::Regular,
+                FontStyle::Normal,
+                make_fake_font_data("test"),
+            )
+            .unwrap();
 
         let query = FontQuery::new("testfont");
         assert!(provider.has_font(&query));
@@ -478,8 +554,22 @@ mod tests {
     #[test]
     fn test_in_memory_provider_clear() {
         let provider = InMemoryFontProvider::new();
-        provider.add_font("Font1", FontWeight::Regular, FontStyle::Normal, make_fake_font_data("a")).unwrap();
-        provider.add_font("Font2", FontWeight::Regular, FontStyle::Normal, make_fake_font_data("b")).unwrap();
+        provider
+            .add_font(
+                "Font1",
+                FontWeight::Regular,
+                FontStyle::Normal,
+                make_fake_font_data("a"),
+            )
+            .unwrap();
+        provider
+            .add_font(
+                "Font2",
+                FontWeight::Regular,
+                FontStyle::Normal,
+                make_fake_font_data("b"),
+            )
+            .unwrap();
 
         assert_eq!(provider.len(), 2);
         provider.clear();
@@ -490,8 +580,22 @@ mod tests {
     #[test]
     fn test_in_memory_provider_style_matching() {
         let provider = InMemoryFontProvider::new();
-        provider.add_font("TestFont", FontWeight::Regular, FontStyle::Normal, make_fake_font_data("normal")).unwrap();
-        provider.add_font("TestFont", FontWeight::Regular, FontStyle::Italic, make_fake_font_data("italic")).unwrap();
+        provider
+            .add_font(
+                "TestFont",
+                FontWeight::Regular,
+                FontStyle::Normal,
+                make_fake_font_data("normal"),
+            )
+            .unwrap();
+        provider
+            .add_font(
+                "TestFont",
+                FontWeight::Regular,
+                FontStyle::Italic,
+                make_fake_font_data("italic"),
+            )
+            .unwrap();
 
         let query = FontQuery::new("TestFont").with_style(FontStyle::Italic);
         let data = provider.load_font(&query).unwrap();
@@ -511,7 +615,9 @@ mod tests {
             style: FontStyle::Italic,
             postscript_name: Some("CustomFont-BoldItalic".to_string()),
         };
-        provider.add_font_with_descriptor(descriptor, make_fake_font_data("custom")).unwrap();
+        provider
+            .add_font_with_descriptor(descriptor, make_fake_font_data("custom"))
+            .unwrap();
 
         let query = FontQuery::new("CustomFont")
             .with_weight(FontWeight::Bold)
@@ -523,11 +629,17 @@ mod tests {
     #[test]
     fn test_in_memory_provider_multiple_fallbacks() {
         let provider = InMemoryFontProvider::new();
-        provider.add_font("ThirdChoice", FontWeight::Regular, FontStyle::Normal, make_fake_font_data("third")).unwrap();
+        provider
+            .add_font(
+                "ThirdChoice",
+                FontWeight::Regular,
+                FontStyle::Normal,
+                make_fake_font_data("third"),
+            )
+            .unwrap();
 
         // First and second fallbacks don't exist
-        let query = FontQuery::new("Primary")
-            .with_fallbacks(&["Second", "ThirdChoice"]);
+        let query = FontQuery::new("Primary").with_fallbacks(&["Second", "ThirdChoice"]);
         let data = provider.load_font(&query).unwrap();
         assert_eq!(&*data, b"third");
     }
@@ -535,10 +647,16 @@ mod tests {
     #[test]
     fn test_in_memory_provider_no_matching_fallback() {
         let provider = InMemoryFontProvider::new();
-        provider.add_font("SomeFont", FontWeight::Regular, FontStyle::Normal, make_fake_font_data("some")).unwrap();
+        provider
+            .add_font(
+                "SomeFont",
+                FontWeight::Regular,
+                FontStyle::Normal,
+                make_fake_font_data("some"),
+            )
+            .unwrap();
 
-        let query = FontQuery::new("Primary")
-            .with_fallbacks(&["Fallback1", "Fallback2"]);
+        let query = FontQuery::new("Primary").with_fallbacks(&["Fallback1", "Fallback2"]);
         let result = provider.load_font(&query);
         assert!(matches!(result, Err(FontError::NotFound { .. })));
     }

@@ -1,8 +1,8 @@
-use petty_core::error::PipelineError;
 use crate::pipeline::api::PreparedDataSources;
-use crate::pipeline::provider::DataSourceProvider;
-use serde_json::Value;
 use crate::pipeline::context::PipelineContext;
+use crate::pipeline::provider::DataSourceProvider;
+use petty_core::error::PipelineError;
+use serde_json::Value;
 
 #[derive(Clone)]
 pub struct PassThroughProvider;
@@ -27,10 +27,10 @@ impl DataSourceProvider for PassThroughProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use petty_core::layout::fonts::SharedFontLibrary;
-    use petty_json_template::JsonParser;
     use crate::pipeline::adapters::TemplateParserAdapter;
+    use petty_core::layout::fonts::SharedFontLibrary;
     use petty_core::parser::processor::TemplateParser;
+    use petty_json_template::JsonParser;
     use serde_json::json;
     use std::collections::HashMap;
     use std::path::PathBuf;

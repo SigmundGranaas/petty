@@ -1,12 +1,12 @@
 //! An implementation of the `OutputBuilder` trait that constructs an IDF `IRNode` tree.
 
-use super::{output::OutputBuilder};
+use super::output::OutputBuilder;
+use crate::ast::PreparsedStyles;
 use petty_idf::{
     IRNode, InlineMetadata, InlineNode, NodeMetadata, TableBody, TableCell, TableColumnDefinition,
     TableHeader, TableRow,
 };
 use petty_style::dimension::Dimension;
-use crate::ast::PreparsedStyles;
 
 /// An `OutputBuilder` that creates a `Vec<IRNode>`.
 pub struct IdfBuilder {
@@ -33,9 +33,10 @@ impl IdfBuilder {
     /// Consumes the builder and returns the final tree.
     pub fn get_result(mut self) -> Vec<IRNode> {
         if self.node_stack.len() == 1
-            && let Some(IRNode::Root(children)) = self.node_stack.pop() {
-                return children;
-            }
+            && let Some(IRNode::Root(children)) = self.node_stack.pop()
+        {
+            return children;
+        }
         // Fallback for an empty or malformed document
         vec![]
     }
@@ -60,9 +61,11 @@ impl IdfBuilder {
                             last_cell.children.push(node);
                         } else {
                             // This case can happen if a block is placed inside a <row> but not a <cell>.
-                            log::warn!("Attempted to add block content to a table row with no cells.");
+                            log::warn!(
+                                "Attempted to add block content to a table row with no cells."
+                            );
                         }
-                    }  else {
+                    } else {
                         // This case can happen if a block is placed inside a <table> but not a <row>.
                         log::warn!("Attempted to add block content to a table with no rows.");
                     }
@@ -73,16 +76,14 @@ impl IdfBuilder {
     }
 
     fn push_inline_to_parent(&mut self, node: InlineNode) {
-        if let Some(parent_inline) = self.inline_stack.last_mut() {
-            match parent_inline {
-                InlineNode::StyledSpan { children: c, .. }
-                | InlineNode::Hyperlink { children: c, .. }
-                | InlineNode::PageReference { children: c, .. } => {
-                    c.push(node);
-                    return;
-                }
-                _ => {}
-            }
+        if let Some(
+            InlineNode::StyledSpan { children: c, .. }
+            | InlineNode::Hyperlink { children: c, .. }
+            | InlineNode::PageReference { children: c, .. },
+        ) = self.inline_stack.last_mut()
+        {
+            c.push(node);
+            return;
         }
 
         if let Some(parent_block) = self.node_stack.last_mut() {
@@ -101,8 +102,10 @@ impl IdfBuilder {
                     };
                     if let Some(cell) = row_to_modify.and_then(|r| r.cells.last_mut()) {
                         // Find or create a paragraph in the cell to hold the inline content
-                        if let Some(IRNode::Paragraph { children: p_children, .. }) =
-                            cell.children.last_mut()
+                        if let Some(IRNode::Paragraph {
+                            children: p_children,
+                            ..
+                        }) = cell.children.last_mut()
                         {
                             p_children.push(node);
                         } else {
@@ -140,9 +143,10 @@ impl OutputBuilder for IdfBuilder {
     }
     fn end_block(&mut self) {
         if self.node_stack.len() > 1
-            && let Some(node) = self.node_stack.pop() {
-                self.push_block_to_parent(node);
-            }
+            && let Some(node) = self.node_stack.pop()
+        {
+            self.push_block_to_parent(node);
+        }
     }
 
     fn start_flex_container(&mut self, styles: &PreparsedStyles) {
@@ -159,8 +163,6 @@ impl OutputBuilder for IdfBuilder {
     fn end_flex_container(&mut self) {
         self.end_block(); // Same logic as block
     }
-
-
 
     fn start_paragraph(&mut self, styles: &PreparsedStyles) {
         let node = IRNode::Paragraph {
@@ -242,7 +244,11 @@ impl OutputBuilder for IdfBuilder {
     }
 
     fn set_table_columns(&mut self, columns: &[Dimension]) {
-        if let Some(IRNode::Table { columns: table_cols, .. }) = self.node_stack.last_mut() {
+        if let Some(IRNode::Table {
+            columns: table_cols,
+            ..
+        }) = self.node_stack.last_mut()
+        {
             *table_cols = columns
                 .iter()
                 .map(|dim| TableColumnDefinition {
@@ -295,7 +301,6 @@ impl OutputBuilder for IdfBuilder {
         }
     }
 
-
     fn start_styled_span(&mut self, styles: &PreparsedStyles) {
         let node = InlineNode::StyledSpan {
             meta: InlineMetadata {
@@ -330,24 +335,26 @@ impl OutputBuilder for IdfBuilder {
     fn set_attribute(&mut self, name: &str, value: &str) {
         if name == "id"
             && let Some(block_parent) = self.node_stack.last_mut()
-                && let Some(meta) = block_parent.meta_mut() {
-                    meta.id = Some(value.to_string());
-                    return;
-                }
+            && let Some(meta) = block_parent.meta_mut()
+        {
+            meta.id = Some(value.to_string());
+            return;
+        }
 
         if let Some(inline_parent) = self.inline_stack.last_mut()
-            && let InlineNode::Hyperlink { href, .. } = inline_parent {
-                if name == "href" {
-                    *href = value.to_string();
-                    return;
-                }
-                // Handle FO "destination" attribute for internal links
-                if name == "destination" {
-                    // destination is a local anchor reference, add '#' prefix
-                    *href = format!("#{}", value);
-                    return;
-                }
+            && let InlineNode::Hyperlink { href, .. } = inline_parent
+        {
+            if name == "href" {
+                *href = value.to_string();
+                return;
             }
+            // Handle FO "destination" attribute for internal links
+            if name == "destination" {
+                // destination is a local anchor reference, add '#' prefix
+                *href = format!("#{}", value);
+                return;
+            }
+        }
         if let Some(block_parent) = self.node_stack.last_mut() {
             match block_parent {
                 IRNode::Image { src, .. } => {

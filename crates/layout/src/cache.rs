@@ -1,11 +1,11 @@
+use crate::fonts::FontData;
 use crate::style::ComputedStyle;
 use crate::text::shaper::ShapedRun;
-use crate::fonts::FontData;
 use std::any::Any;
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::hash::Hash;
+use std::sync::{Arc, RwLock};
 
 // --- Cache Keys ---
 
@@ -54,10 +54,18 @@ impl LayoutCache {
     }
 
     pub fn clear(&self) {
-        if let Ok(mut c) = self.fonts.write() { c.clear(); }
-        if let Ok(mut c) = self.shaping.write() { c.clear(); }
-        if let Ok(mut c) = self.multi_span.write() { c.clear(); }
-        if let Ok(mut c) = self.measurements.write() { c.clear(); }
+        if let Ok(mut c) = self.fonts.write() {
+            c.clear();
+        }
+        if let Ok(mut c) = self.shaping.write() {
+            c.clear();
+        }
+        if let Ok(mut c) = self.multi_span.write() {
+            c.clear();
+        }
+        if let Ok(mut c) = self.measurements.write() {
+            c.clear();
+        }
     }
 }
 

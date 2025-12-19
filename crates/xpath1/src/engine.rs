@@ -6,6 +6,7 @@ use super::{axes, operators};
 use crate::datasource::{DataSourceNode, NodeType};
 use crate::error::XPathError;
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::marker::PhantomData;
 
 /// Represents the possible result types of an XPath expression evaluation.
@@ -33,21 +34,33 @@ impl<'a, N: DataSourceNode<'a>> XPathValue<N> {
         match self {
             XPathValue::Number(n) => *n,
             XPathValue::String(s) => s.trim().parse().unwrap_or(f64::NAN),
-            XPathValue::Boolean(b) => if *b { 1.0 } else { 0.0 },
+            XPathValue::Boolean(b) => {
+                if *b {
+                    1.0
+                } else {
+                    0.0
+                }
+            }
             XPathValue::NodeSet(nodes) => {
                 let s = nodes.first().map(|n| n.string_value()).unwrap_or_default();
                 s.trim().parse().unwrap_or(f64::NAN)
             }
         }
     }
+}
 
+impl<'a, N: DataSourceNode<'a>> fmt::Display for XPathValue<N> {
     /// Coerces the XPath value to a string as per XPath 1.0 rules.
-    pub fn to_string(&self) -> String {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            XPathValue::NodeSet(nodes) => nodes.first().map(|n| n.string_value()).unwrap_or_default(),
-            XPathValue::String(s) => s.clone(),
-            XPathValue::Number(n) => n.to_string(),
-            XPathValue::Boolean(b) => b.to_string(),
+            XPathValue::NodeSet(nodes) => write!(
+                f,
+                "{}",
+                nodes.first().map(|n| n.string_value()).unwrap_or_default()
+            ),
+            XPathValue::String(s) => write!(f, "{}", s),
+            XPathValue::Number(n) => write!(f, "{}", n),
+            XPathValue::Boolean(b) => write!(f, "{}", b),
         }
     }
 }
@@ -70,6 +83,7 @@ pub struct EvaluationContext<'a, 'd, N: DataSourceNode<'a>> {
 }
 
 impl<'a, 'd, N: DataSourceNode<'a>> EvaluationContext<'a, 'd, N> {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         context_node: N,
         root_node: N,
@@ -111,11 +125,16 @@ where
         }
         Expression::Variable(name) => {
             if e_ctx.strict && !e_ctx.variables.contains_key(name) {
-                return Err(XPathError::TypeError(
-                    format!("Reference to undeclared variable: ${}", name)
-                ));
+                return Err(XPathError::TypeError(format!(
+                    "Reference to undeclared variable: ${}",
+                    name
+                )));
             }
-            Ok(e_ctx.variables.get(name).cloned().unwrap_or(XPathValue::String("".to_string())))
+            Ok(e_ctx
+                .variables
+                .get(name)
+                .cloned()
+                .unwrap_or(XPathValue::String("".to_string())))
         }
         Expression::FunctionCall { name, args } => {
             let mut evaluated_args = Vec::with_capacity(args.len());
@@ -204,12 +223,18 @@ where
             Axis::Child => axes::collect_child_nodes(node, &mut seen, &mut result_nodes),
             Axis::Attribute => axes::collect_attribute_nodes(node, &mut seen, &mut result_nodes),
             Axis::Descendant => axes::collect_descendant_nodes(node, &mut seen, &mut result_nodes),
-            Axis::DescendantOrSelf => axes::collect_descendant_or_self_nodes(node, &mut seen, &mut result_nodes),
+            Axis::DescendantOrSelf => {
+                axes::collect_descendant_or_self_nodes(node, &mut seen, &mut result_nodes)
+            }
             Axis::Parent => axes::collect_parent_nodes(node, &mut seen, &mut result_nodes),
             Axis::Ancestor => axes::collect_ancestor_nodes(node, &mut seen, &mut result_nodes),
             Axis::SelfAxis => axes::collect_self_nodes(node, &mut seen, &mut result_nodes),
-            Axis::FollowingSibling => axes::collect_following_sibling_nodes(node, &mut seen, &mut result_nodes),
-            Axis::PrecedingSibling => axes::collect_preceding_sibling_nodes(node, &mut seen, &mut result_nodes),
+            Axis::FollowingSibling => {
+                axes::collect_following_sibling_nodes(node, &mut seen, &mut result_nodes)
+            }
+            Axis::PrecedingSibling => {
+                axes::collect_preceding_sibling_nodes(node, &mut seen, &mut result_nodes)
+            }
             Axis::Following => axes::collect_following_nodes(node, &mut seen, &mut result_nodes),
             Axis::Preceding => axes::collect_preceding_nodes(node, &mut seen, &mut result_nodes),
         }
@@ -224,22 +249,22 @@ where
 {
     nodes
         .iter()
-        .filter(|&node| {
-            match test {
-                NodeTest::Wildcard => match axis {
-                    Axis::Attribute => node.node_type() == NodeType::Attribute,
-                    _ => node.node_type() == NodeType::Element,
-                },
-                NodeTest::Name(name_to_test) => {
-                    node.name().is_some_and(|q_name| q_name.local_part == name_to_test)
+        .filter(|&node| match test {
+            NodeTest::Wildcard => match axis {
+                Axis::Attribute => node.node_type() == NodeType::Attribute,
+                _ => node.node_type() == NodeType::Element,
+            },
+            NodeTest::Name(name_to_test) => node
+                .name()
+                .is_some_and(|q_name| q_name.local_part == name_to_test),
+            NodeTest::NodeType(ntt) => match ntt {
+                NodeTypeTest::Text => node.node_type() == NodeType::Text,
+                NodeTypeTest::Comment => node.node_type() == NodeType::Comment,
+                NodeTypeTest::ProcessingInstruction => {
+                    node.node_type() == NodeType::ProcessingInstruction
                 }
-                NodeTest::NodeType(ntt) => match ntt {
-                    NodeTypeTest::Text => node.node_type() == NodeType::Text,
-                    NodeTypeTest::Comment => node.node_type() == NodeType::Comment,
-                    NodeTypeTest::ProcessingInstruction => node.node_type() == NodeType::ProcessingInstruction,
-                    NodeTypeTest::Node => true,
-                },
-            }
+                NodeTypeTest::Node => true,
+            },
         })
         .copied()
         .collect()
@@ -267,7 +292,7 @@ where
                 context_size,
                 e_ctx.variables,
                 e_ctx.key_indexes, // Pass through the key indexes
-                e_ctx.strict, // Propagate strict mode
+                e_ctx.strict,      // Propagate strict mode
             );
             let result = evaluate(predicate, &predicate_e_ctx)?;
             let keep = match result {
@@ -286,7 +311,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::datasource::tests::{create_test_tree, MockNode};
+    use crate::datasource::tests::{MockNode, create_test_tree};
     use std::collections::HashMap;
 
     fn create_test_eval_context<'a, 'd>(
@@ -315,14 +340,18 @@ mod tests {
         let ancestors = collect_axis_nodes(Axis::Ancestor, &[text]);
         assert_eq!(ancestors, vec![para, root]);
 
-
         // Test filter_by_node_test
         let all_nodes = vec![root, para, attr, text];
         let elements = filter_by_node_test(&all_nodes, &NodeTest::Wildcard, Axis::Child);
         assert_eq!(elements, vec![para]);
-        let para_nodes = filter_by_node_test(&all_nodes, &NodeTest::Name("para".to_string()), Axis::Child);
+        let para_nodes =
+            filter_by_node_test(&all_nodes, &NodeTest::Name("para".to_string()), Axis::Child);
         assert_eq!(para_nodes, vec![para]);
-        let text_nodes = filter_by_node_test(&all_nodes, &NodeTest::NodeType(NodeTypeTest::Text), Axis::Child);
+        let text_nodes = filter_by_node_test(
+            &all_nodes,
+            &NodeTest::NodeType(NodeTypeTest::Text),
+            Axis::Child,
+        );
         assert_eq!(text_nodes, vec![text]);
 
         // Test apply_predicates (positional)
@@ -402,7 +431,10 @@ mod tests {
         let keys = HashMap::new();
 
         let mut vars = HashMap::new();
-        vars.insert("myVar".to_string(), XPathValue::String("test-value".to_string()));
+        vars.insert(
+            "myVar".to_string(),
+            XPathValue::String("test-value".to_string()),
+        );
 
         let e_ctx = create_test_eval_context(&tree, &funcs, &vars, &keys);
 
@@ -420,7 +452,10 @@ mod tests {
 
         // Put the <para> node (id 1) into a variable
         let para_node = MockNode { id: 1, tree: &tree };
-        vars.insert("para_node".to_string(), XPathValue::NodeSet(vec![para_node]));
+        vars.insert(
+            "para_node".to_string(),
+            XPathValue::NodeSet(vec![para_node]),
+        );
 
         let e_ctx = create_test_eval_context(&tree, &funcs, &vars, &keys);
 

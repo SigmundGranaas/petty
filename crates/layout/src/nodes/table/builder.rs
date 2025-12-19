@@ -1,11 +1,11 @@
-use petty_idf::IRNode;
+use super::node::{TableCellNode, TableNode, TableRowNode};
+use crate::LayoutError;
 use crate::engine::{LayoutEngine, LayoutStore};
 use crate::nodes::RenderNode;
 use crate::nodes::block::BlockNode;
 use crate::style::ComputedStyle;
-use crate::LayoutError;
+use petty_idf::IRNode;
 use std::sync::Arc;
-use super::node::{TableNode, TableRowNode, TableCellNode};
 
 impl<'a> TableNode<'a> {
     pub fn build(
@@ -14,7 +14,9 @@ impl<'a> TableNode<'a> {
         parent_style: Arc<ComputedStyle>,
         store: &'a LayoutStore,
     ) -> Result<RenderNode<'a>, LayoutError> {
-        let node = store.bump.alloc(Self::new(node, engine, parent_style, store)?);
+        let node = store
+            .bump
+            .alloc(Self::new(node, engine, parent_style, store)?);
         Ok(RenderNode::Table(node))
     }
 
@@ -87,7 +89,9 @@ impl<'a> TableRowNode<'a> {
             .iter()
             .map(|c| TableCellNode::new(c, style, engine, store))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { cells: store.bump.alloc_slice_clone(&cells) })
+        Ok(Self {
+            cells: store.bump.alloc_slice_clone(&cells),
+        })
     }
 }
 

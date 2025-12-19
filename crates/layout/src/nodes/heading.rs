@@ -1,15 +1,13 @@
 // src/core/layout/nodes/heading.rs
 
-use petty_idf::{IRNode, TextStr};
-use crate::engine::{LayoutEngine, LayoutStore};
-use petty_types::geometry::{BoxConstraints, Size};
-use crate::interface::{
-    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
-};
 use super::RenderNode;
+use crate::LayoutError;
+use crate::engine::{LayoutEngine, LayoutStore};
+use crate::interface::{LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState};
 use crate::nodes::paragraph::ParagraphNode;
 use crate::style::ComputedStyle;
-use crate::LayoutError;
+use petty_idf::{IRNode, TextStr};
+use petty_types::geometry::{BoxConstraints, Size};
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -25,12 +23,7 @@ impl<'a> HeadingNode<'a> {
         parent_style: Arc<ComputedStyle>,
         store: &'a LayoutStore,
     ) -> Result<RenderNode<'a>, LayoutError> {
-        let IRNode::Heading {
-            meta,
-            children,
-            ..
-        } = node
-        else {
+        let IRNode::Heading { meta, children, .. } = node else {
             return Err(LayoutError::BuilderMismatch("Heading", node.kind()));
         };
 
@@ -62,7 +55,11 @@ impl<'a> LayoutNode for HeadingNode<'a> {
         self.p_node.style()
     }
 
-    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<Size, LayoutError> {
+    fn measure(
+        &self,
+        env: &LayoutEnvironment,
+        constraints: BoxConstraints,
+    ) -> Result<Size, LayoutError> {
         self.p_node.measure(env, constraints)
     }
 

@@ -1,8 +1,8 @@
+use lopdf::Document as LopdfDocument;
 use petty::PipelineBuilder;
 use serde_json::json;
-use std::io::Cursor;
-use lopdf::Document as LopdfDocument;
 use std::collections::BTreeMap;
+use std::io::Cursor;
 
 /// Helper function to extract text content from a PDF
 fn extract_text_from_pdf(pdf_bytes: &[u8]) -> Result<String, Box<dyn std::error::Error>> {
@@ -18,7 +18,10 @@ fn extract_text_from_pdf(pdf_bytes: &[u8]) -> Result<String, Box<dyn std::error:
                 text.push('\n');
             }
             Err(e) => {
-                eprintln!("Warning: Could not extract text from page {}: {}", page_num, e);
+                eprintln!(
+                    "Warning: Could not extract text from page {}: {}",
+                    page_num, e
+                );
             }
         }
     }
@@ -52,7 +55,9 @@ fn check_font_embedding(pdf_bytes: &[u8]) -> Result<Vec<String>, Box<dyn std::er
 }
 
 /// Helper to get font descriptors from PDF
-fn get_font_descriptors(pdf_bytes: &[u8]) -> Result<BTreeMap<String, BTreeMap<String, String>>, Box<dyn std::error::Error>> {
+fn get_font_descriptors(
+    pdf_bytes: &[u8],
+) -> Result<BTreeMap<String, BTreeMap<String, String>>, Box<dyn std::error::Error>> {
     let doc = LopdfDocument::load_mem(pdf_bytes)?;
     let mut font_info = BTreeMap::new();
 
@@ -67,14 +72,20 @@ fn get_font_descriptors(pdf_bytes: &[u8]) -> Result<BTreeMap<String, BTreeMap<St
                         // Get subtype
                         if let Ok(subtype_val) = dict.get(b"Subtype") {
                             if let Ok(subtype_name) = subtype_val.as_name() {
-                                info.insert("Subtype".to_string(), String::from_utf8_lossy(subtype_name).to_string());
+                                info.insert(
+                                    "Subtype".to_string(),
+                                    String::from_utf8_lossy(subtype_name).to_string(),
+                                );
                             }
                         }
 
                         // Get base font name
                         if let Ok(base_font_val) = dict.get(b"BaseFont") {
                             if let Ok(base_font_name) = base_font_val.as_name() {
-                                info.insert("BaseFont".to_string(), String::from_utf8_lossy(base_font_name).to_string());
+                                info.insert(
+                                    "BaseFont".to_string(),
+                                    String::from_utf8_lossy(base_font_name).to_string(),
+                                );
                             }
                         }
 
@@ -90,8 +101,14 @@ fn get_font_descriptors(pdf_bytes: &[u8]) -> Result<BTreeMap<String, BTreeMap<St
                             if let Ok(desc_ref_id) = font_desc_ref.as_reference() {
                                 if let Ok(desc_obj) = doc.get_object(desc_ref_id) {
                                     if let Ok(desc_dict) = desc_obj.as_dict() {
-                                        if desc_dict.has(b"FontFile") || desc_dict.has(b"FontFile2") || desc_dict.has(b"FontFile3") {
-                                            info.insert("EmbeddedFont".to_string(), "true".to_string());
+                                        if desc_dict.has(b"FontFile")
+                                            || desc_dict.has(b"FontFile2")
+                                            || desc_dict.has(b"FontFile3")
+                                        {
+                                            info.insert(
+                                                "EmbeddedFont".to_string(),
+                                                "true".to_string(),
+                                            );
                                         }
                                     }
                                 }
@@ -109,7 +126,9 @@ fn get_font_descriptors(pdf_bytes: &[u8]) -> Result<BTreeMap<String, BTreeMap<St
 }
 
 /// Helper to extract link annotations from PDF pages
-fn extract_link_annotations(pdf_bytes: &[u8]) -> Result<Vec<BTreeMap<String, String>>, Box<dyn std::error::Error>> {
+fn extract_link_annotations(
+    pdf_bytes: &[u8],
+) -> Result<Vec<BTreeMap<String, String>>, Box<dyn std::error::Error>> {
     let doc = LopdfDocument::load_mem(pdf_bytes)?;
     let mut annotations = Vec::new();
 
@@ -146,8 +165,10 @@ fn extract_link_annotations(pdf_bytes: &[u8]) -> Result<Vec<BTreeMap<String, Str
                                     // Get annotation type
                                     if let Ok(subtype) = annot_dict.get(b"Subtype") {
                                         if let Ok(subtype_name) = subtype.as_name() {
-                                            info.insert("Subtype".to_string(),
-                                                String::from_utf8_lossy(subtype_name).to_string());
+                                            info.insert(
+                                                "Subtype".to_string(),
+                                                String::from_utf8_lossy(subtype_name).to_string(),
+                                            );
                                         }
                                     }
 
@@ -184,7 +205,8 @@ fn extract_link_annotations(pdf_bytes: &[u8]) -> Result<Vec<BTreeMap<String, Str
 /// Helper to count internal links/anchors in PDF
 fn count_internal_links(pdf_bytes: &[u8]) -> Result<usize, Box<dyn std::error::Error>> {
     let annotations = extract_link_annotations(pdf_bytes)?;
-    let link_count = annotations.iter()
+    let link_count = annotations
+        .iter()
         .filter(|a| a.get("Subtype").map(|s| s.as_str()) == Some("Link"))
         .count();
     Ok(link_count)
@@ -249,14 +271,16 @@ fn test_simple_text_rendering() -> Result<(), Box<dyn std::error::Error>> {
     let writer = Cursor::new(Vec::new());
 
     let result = tokio::runtime::Runtime::new()?
-        .block_on(async {
-            pipeline.generate(data.into_iter(), writer).await
-        })?;
+        .block_on(async { pipeline.generate(data.into_iter(), writer).await })?;
 
     let pdf_bytes = result.into_inner();
 
     // Verify PDF was created and has content
-    assert!(pdf_bytes.len() > 100, "PDF should have substantial content, got {} bytes", pdf_bytes.len());
+    assert!(
+        pdf_bytes.len() > 100,
+        "PDF should have substantial content, got {} bytes",
+        pdf_bytes.len()
+    );
 
     // Check that it's a valid PDF
     let doc = LopdfDocument::load_mem(&pdf_bytes)?;
@@ -395,9 +419,7 @@ fn test_styled_text_rendering() -> Result<(), Box<dyn std::error::Error>> {
     let writer = Cursor::new(Vec::new());
 
     let result = tokio::runtime::Runtime::new()?
-        .block_on(async {
-            pipeline.generate(data.into_iter(), writer).await
-        })?;
+        .block_on(async { pipeline.generate(data.into_iter(), writer).await })?;
 
     let pdf_bytes = result.into_inner();
 
@@ -415,7 +437,9 @@ fn test_styled_text_rendering() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     assert!(
-        extracted_text.contains("Regular paragraph") || extracted_text.contains("paragraph") || extracted_text.contains("Bold"),
+        extracted_text.contains("Regular paragraph")
+            || extracted_text.contains("paragraph")
+            || extracted_text.contains("Bold"),
         "Should contain paragraph text, got: {:?}",
         extracted_text
     );
@@ -473,9 +497,7 @@ fn test_xslt_template_rendering() -> Result<(), Box<dyn std::error::Error>> {
     let writer = Cursor::new(Vec::new());
 
     let result = tokio::runtime::Runtime::new()?
-        .block_on(async {
-            pipeline.generate(data.into_iter(), writer).await
-        })?;
+        .block_on(async { pipeline.generate(data.into_iter(), writer).await })?;
 
     let pdf_bytes = result.into_inner();
 
@@ -581,9 +603,7 @@ fn test_toc_with_role_template() -> Result<(), Box<dyn std::error::Error>> {
     let writer = Cursor::new(Vec::new());
 
     let result = tokio::runtime::Runtime::new()?
-        .block_on(async {
-            pipeline.generate(data.into_iter(), writer).await
-        })?;
+        .block_on(async { pipeline.generate(data.into_iter(), writer).await })?;
 
     let pdf_bytes = result.into_inner();
 
@@ -610,11 +630,26 @@ fn test_toc_with_role_template() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Verify section titles appear in text
-    assert!(extracted_text.contains("Introduction"), "Should contain 'Introduction'");
-    assert!(extracted_text.contains("Background"), "Should contain 'Background'");
-    assert!(extracted_text.contains("Methodology"), "Should contain 'Methodology'");
-    assert!(extracted_text.contains("Results"), "Should contain 'Results'");
-    assert!(extracted_text.contains("Conclusion"), "Should contain 'Conclusion'");
+    assert!(
+        extracted_text.contains("Introduction"),
+        "Should contain 'Introduction'"
+    );
+    assert!(
+        extracted_text.contains("Background"),
+        "Should contain 'Background'"
+    );
+    assert!(
+        extracted_text.contains("Methodology"),
+        "Should contain 'Methodology'"
+    );
+    assert!(
+        extracted_text.contains("Results"),
+        "Should contain 'Results'"
+    );
+    assert!(
+        extracted_text.contains("Conclusion"),
+        "Should contain 'Conclusion'"
+    );
 
     // Extract and check link annotations
     let annotations = extract_link_annotations(&pdf_bytes)?;
@@ -697,9 +732,7 @@ fn test_toc_with_existing_template() -> Result<(), Box<dyn std::error::Error>> {
     let writer = Cursor::new(Vec::new());
 
     let result = tokio::runtime::Runtime::new()?
-        .block_on(async {
-            pipeline.generate(data.into_iter(), writer).await
-        })?;
+        .block_on(async { pipeline.generate(data.into_iter(), writer).await })?;
 
     let pdf_bytes = result.into_inner();
 
@@ -720,11 +753,17 @@ fn test_toc_with_existing_template() -> Result<(), Box<dyn std::error::Error>> {
 
     // Extract and check link annotations
     let annotations = extract_link_annotations(&pdf_bytes)?;
-    println!("Found {} annotations in existing template", annotations.len());
+    println!(
+        "Found {} annotations in existing template",
+        annotations.len()
+    );
     println!("Annotations: {:#?}", annotations);
 
     let link_count = count_internal_links(&pdf_bytes)?;
-    println!("Number of internal links in existing template: {}", link_count);
+    println!(
+        "Number of internal links in existing template: {}",
+        link_count
+    );
 
     // Verify that links were created (should have links for all heading levels)
     // Expected: 3 sections + 3 subsections = 6 headings total
@@ -735,10 +774,22 @@ fn test_toc_with_existing_template() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Verify TOC content appears
-    assert!(extracted_text.contains("Table of Contents"), "Should contain TOC header");
-    assert!(extracted_text.contains("Chapter 1: Getting Started"), "Should contain section 1");
-    assert!(extracted_text.contains("Chapter 2: Advanced Topics"), "Should contain section 2");
-    assert!(extracted_text.contains("Chapter 3: Best Practices"), "Should contain section 3");
+    assert!(
+        extracted_text.contains("Table of Contents"),
+        "Should contain TOC header"
+    );
+    assert!(
+        extracted_text.contains("Chapter 1: Getting Started"),
+        "Should contain section 1"
+    );
+    assert!(
+        extracted_text.contains("Chapter 2: Advanced Topics"),
+        "Should contain section 2"
+    );
+    assert!(
+        extracted_text.contains("Chapter 3: Best Practices"),
+        "Should contain section 3"
+    );
 
     Ok(())
 }
@@ -790,9 +841,7 @@ fn test_anchor_and_link_basic() -> Result<(), Box<dyn std::error::Error>> {
     let writer = Cursor::new(Vec::new());
 
     let result = tokio::runtime::Runtime::new()?
-        .block_on(async {
-            pipeline.generate(data.into_iter(), writer).await
-        })?;
+        .block_on(async { pipeline.generate(data.into_iter(), writer).await })?;
 
     let pdf_bytes = result.into_inner();
 
@@ -808,8 +857,14 @@ fn test_anchor_and_link_basic() -> Result<(), Box<dyn std::error::Error>> {
     println!("Extracted text:\n{}", extracted_text);
 
     // Verify content is present
-    assert!(extracted_text.contains("Target Section"), "Should contain 'Target Section'");
-    assert!(extracted_text.contains("Click here"), "Should contain link text");
+    assert!(
+        extracted_text.contains("Target Section"),
+        "Should contain 'Target Section'"
+    );
+    assert!(
+        extracted_text.contains("Click here"),
+        "Should contain link text"
+    );
 
     // Check for link annotations
     let link_count = count_internal_links(&pdf_bytes)?;

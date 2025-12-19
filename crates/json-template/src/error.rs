@@ -1,5 +1,5 @@
-use thiserror::Error;
 use petty_template_core::TemplateError;
+use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum JsonTemplateError {

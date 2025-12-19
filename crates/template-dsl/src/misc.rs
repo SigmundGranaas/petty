@@ -1,5 +1,5 @@
-use petty_json_template::ast::{JsonNode, TemplateNode};
 use crate::node::TemplateBuilder;
+use petty_json_template::ast::{JsonNode, TemplateNode};
 
 /// Builder for a `<LineBreak>` node.
 #[derive(Clone, Default)]

@@ -1,17 +1,17 @@
 // src/pipeline/concurrency.rs
 
-use petty_core::error::PipelineError;
-use petty_layout::LayoutEngine;
-use petty_template_core::{DataSourceFormat, ExecutionConfig};
-use crate::pipeline::context::PipelineContext;
-use crate::pipeline::worker::{finish_layout_and_resource_loading, LaidOutSequence};
-use petty_render_lopdf::LopdfRenderer;
-use petty_render_core::{HyperlinkLocation, Pass1Result, ResolvedAnchor};
-use petty_render_core::DocumentRenderer;
 use crate::MapRenderError;
+use crate::pipeline::context::PipelineContext;
+use crate::pipeline::worker::{LaidOutSequence, finish_layout_and_resource_loading};
 use log::{debug, info, warn};
 use lopdf::dictionary;
 use petty_core::ApiIndexEntry;
+use petty_core::error::PipelineError;
+use petty_layout::LayoutEngine;
+use petty_render_core::DocumentRenderer;
+use petty_render_core::{HyperlinkLocation, Pass1Result, ResolvedAnchor};
+use petty_render_lopdf::LopdfRenderer;
+use petty_template_core::{DataSourceFormat, ExecutionConfig};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Seek, Write};
@@ -66,7 +66,10 @@ pub(crate) fn spawn_workers(
         let resource_provider_clone = Arc::clone(&context.resource_provider);
 
         let worker_handle = task::spawn_blocking(move || {
-            info!("[WORKER-{}] Started with shared font library and resource provider.", worker_id);
+            info!(
+                "[WORKER-{}] Started with shared font library and resource provider.",
+                worker_id
+            );
 
             let mut layout_engine = LayoutEngine::new(&current_font_lib, cache_config);
 
@@ -95,7 +98,12 @@ pub(crate) fn spawn_workers(
                         if let Ok(seq) = &layout_result {
                             let size = seq.rough_heap_size();
                             if size > 2 * 1024 * 1024 {
-                                warn!("[WORKER-{}] LARGE ITEM #{}: ~{:.2} MB", worker_id, index, size as f64 / 1_000_000.0);
+                                warn!(
+                                    "[WORKER-{}] LARGE ITEM #{}: ~{:.2} MB",
+                                    worker_id,
+                                    index,
+                                    size as f64 / 1_000_000.0
+                                );
                             }
                         }
 
@@ -151,7 +159,11 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
         buffer.insert(index, result);
 
         if buffer.len() > 20 {
-            debug!("[CONSUMER] Buffer growing: {} items waiting. Looking for #{}.", buffer.len(), next_sequence_idx);
+            debug!(
+                "[CONSUMER] Buffer growing: {} items waiting. Looking for #{}.",
+                buffer.len(),
+                next_sequence_idx
+            );
         }
 
         while let Some(res) = buffer.remove(&next_sequence_idx) {
@@ -186,9 +198,15 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
                             _ => None,
                         };
                         if let Some(href_str) = href {
-                            log::debug!("[HYPERLINK DETECTION] Found text with href: '{}'", href_str);
+                            log::debug!(
+                                "[HYPERLINK DETECTION] Found text with href: '{}'",
+                                href_str
+                            );
                             if let Some(target_id) = href_str.strip_prefix('#') {
-                                log::debug!("[HYPERLINK DETECTION] Adding internal link to target: '{}'", target_id);
+                                log::debug!(
+                                    "[HYPERLINK DETECTION] Adding internal link to target: '{}'",
+                                    target_id
+                                );
                                 pass1_result.hyperlink_locations.push(HyperlinkLocation {
                                     global_page_index: current_global_page_idx,
                                     rect: [el.x, el.y, el.x + el.width, el.y + el.height],
@@ -214,9 +232,11 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
                     &font_map,
                     page_width,
                     page_height,
-                ).map_render_err()?;
+                )
+                .map_render_err()?;
                 let writer = renderer.writer_mut().unwrap();
-                let content_id = writer.write_content_stream(content)
+                let content_id = writer
+                    .write_content_stream(content)
                     .map_err(|e| PipelineError::Render(e.to_string()))?;
 
                 let page_dict = dictionary! {

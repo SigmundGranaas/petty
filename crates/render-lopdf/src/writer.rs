@@ -1,6 +1,6 @@
 // src/render/streaming_writer.rs
 use lopdf::content::Content;
-use lopdf::{dictionary, Dictionary, Object, ObjectId, Stream};
+use lopdf::{Dictionary, Object, ObjectId, Stream, dictionary};
 use std::collections::BTreeMap;
 use std::io::{self, Seek, Write};
 
@@ -62,9 +62,9 @@ impl<W: Write + Seek> StreamingPdfWriter<W> {
     fn write_object_at_id(&mut self, id: ObjectId, object: &Object) -> io::Result<()> {
         let offset = self.writer.stream_position()?;
 
-        let idx = (id.0 as usize).checked_sub(1).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "Invalid Object ID 0")
-        })?;
+        let idx = (id.0 as usize)
+            .checked_sub(1)
+            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "Invalid Object ID 0"))?;
 
         if idx >= self.object_offsets.len() {
             self.object_offsets.resize(idx + 1, 0);
@@ -188,13 +188,19 @@ mod internal_writer {
                     writer.write_all(b")")
                 }
                 StringFormat::Hexadecimal => {
-                    write!(writer, "<{}>", s.iter().map(|b| format!("{:02X}", b)).collect::<String>())
+                    write!(
+                        writer,
+                        "<{}>",
+                        s.iter().map(|b| format!("{:02X}", b)).collect::<String>()
+                    )
                 }
             },
             Object::Array(arr) => {
                 writer.write_all(b"[")?;
                 for (i, obj) in arr.iter().enumerate() {
-                    if i > 0 { writer.write_all(b" ")?; }
+                    if i > 0 {
+                        writer.write_all(b" ")?;
+                    }
                     write_object(writer, obj)?;
                 }
                 writer.write_all(b"]")

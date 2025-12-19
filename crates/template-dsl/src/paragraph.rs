@@ -1,8 +1,8 @@
-use petty_style::stylesheet::ElementStyle;
-use petty_json_template::ast::{JsonNode, JsonParagraph, TemplateNode};
 use crate::builders::{InlineImage, Span, Text};
 use crate::node::TemplateBuilder;
 use crate::style::impl_styled_widget;
+use petty_json_template::ast::{JsonNode, JsonParagraph, TemplateNode};
+use petty_style::stylesheet::ElementStyle;
 
 /// Builder for a `<Paragraph>` node.
 #[derive(Default, Clone)]

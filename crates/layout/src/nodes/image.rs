@@ -1,15 +1,13 @@
-use crate::engine::{LayoutEngine, LayoutStore};
-use petty_types::geometry::{self, BoxConstraints, Size};
-use crate::interface::{
-    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
-};
 use super::RenderNode;
-use crate::style::ComputedStyle;
-use crate::{LayoutElement, LayoutError, PositionedElement, ImageElement};
-use petty_style::dimension::Dimension;
+use crate::engine::{LayoutEngine, LayoutStore};
+use crate::interface::{LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState};
 use crate::painting::box_painter::create_background_and_borders;
-use std::sync::Arc;
+use crate::style::ComputedStyle;
+use crate::{ImageElement, LayoutElement, LayoutError, PositionedElement};
 use petty_idf::IRNode;
+use petty_style::dimension::Dimension;
+use petty_types::geometry::{self, BoxConstraints, Size};
+use std::sync::Arc;
 
 #[derive(Debug, Clone)]
 pub struct ImageNode<'a> {
@@ -26,7 +24,9 @@ impl<'a> ImageNode<'a> {
         parent_style: Arc<ComputedStyle>,
         store: &'a LayoutStore,
     ) -> Result<RenderNode<'a>, LayoutError> {
-        let node = store.bump.alloc(Self::new(node, engine, parent_style, store)?);
+        let node = store
+            .bump
+            .alloc(Self::new(node, engine, parent_style, store)?);
         Ok(RenderNode::Image(node))
     }
 
@@ -67,11 +67,8 @@ impl<'a> ImageNode<'a> {
         parent_style: &Arc<ComputedStyle>,
         store: &'a LayoutStore,
     ) -> Result<Self, LayoutError> {
-        let style = engine.compute_style(
-            &meta.style_sets,
-            meta.style_override.as_ref(),
-            parent_style,
-        );
+        let style =
+            engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), parent_style);
         let style_ref = store.cache_style(style);
         let src_ref = store.alloc_str(&src);
 
@@ -89,7 +86,11 @@ impl<'a> LayoutNode for ImageNode<'a> {
         self.style.as_ref()
     }
 
-    fn measure(&self, _env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<Size, LayoutError> {
+    fn measure(
+        &self,
+        _env: &LayoutEnvironment,
+        constraints: BoxConstraints,
+    ) -> Result<Size, LayoutError> {
         let w = match self.style.box_model.width {
             Some(Dimension::Pt(v)) => v,
             _ => 100.0,
@@ -101,7 +102,8 @@ impl<'a> LayoutNode for ImageNode<'a> {
         };
 
         let width = constraints.constrain_width(w + self.style.padding_x() + self.style.border_x());
-        let height = constraints.constrain_height(h + self.style.padding_y() + self.style.border_y());
+        let height =
+            constraints.constrain_height(h + self.style.padding_y() + self.style.border_y());
 
         Ok(Size::new(width, height))
     }
@@ -142,7 +144,8 @@ impl<'a> LayoutNode for ImageNode<'a> {
             &self.style,
             start_y,
             size.height,
-            true, true
+            true,
+            true,
         );
         for el in bg_elements {
             ctx.push_element_at(el, 0.0, 0.0);
@@ -156,7 +159,9 @@ impl<'a> LayoutNode for ImageNode<'a> {
         };
 
         let image_el = PositionedElement {
-            element: LayoutElement::Image(ImageElement { src: self.src.to_string() }),
+            element: LayoutElement::Image(ImageElement {
+                src: self.src.to_string(),
+            }),
             style: self.style.clone(),
             ..PositionedElement::from_rect(content_rect)
         };

@@ -48,6 +48,10 @@ impl Hash for Border {
 impl From<(f32, &str, Color)> for Border {
     fn from((width, style_str, color): (f32, &str, Color)) -> Self {
         let style = BorderStyle::from_str(style_str).unwrap_or(BorderStyle::Solid);
-        Self { width, style, color }
+        Self {
+            width,
+            style,
+            color,
+        }
     }
 }

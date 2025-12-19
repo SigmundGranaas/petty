@@ -1,7 +1,6 @@
-use serde::{de, Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash, Default)]
 pub enum FontWeight {
     Thin,
     Light,
@@ -44,15 +43,13 @@ impl FontWeight {
             "medium" => Ok(FontWeight::Medium),
             "bold" => Ok(FontWeight::Bold),
             "black" => Ok(FontWeight::Black),
-            _ => {
-                s.parse::<u16>()
-                    .map(FontWeight::Numeric)
-                    .map_err(|_| format!("Invalid font weight: '{}'", s))
-            }
+            _ => s
+                .parse::<u16>()
+                .map(FontWeight::Numeric)
+                .map_err(|_| format!("Invalid font weight: '{}'", s)),
         }
     }
 }
-
 
 impl<'de> Deserialize<'de> for FontWeight {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -73,12 +70,10 @@ impl<'de> Deserialize<'de> for FontWeight {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
-#[derive(Default)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash, Default)]
 pub enum FontStyle {
     #[default]
     Normal,
     Italic,
     Oblique,
 }
-

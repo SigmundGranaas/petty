@@ -1,9 +1,10 @@
-use petty_xpath1::datasource::DataSourceNode;
-use petty_xpath1::{Expression, XPathValue};
 use crate::ast::{PreparsedTemplate, SortKey};
 use crate::executor::{ExecutionError, TemplateExecutor};
 use crate::output::OutputBuilder;
+use petty_xpath1::datasource::DataSourceNode;
+use petty_xpath1::{Expression, XPathValue};
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_for_each<'s, 'a, N: DataSourceNode<'a> + 'a>(
     executor: &mut TemplateExecutor<'s, 'a, N>,
     select: &Expression,
@@ -15,7 +16,8 @@ pub(crate) fn handle_for_each<'s, 'a, N: DataSourceNode<'a> + 'a>(
     builder: &mut dyn OutputBuilder,
 ) -> Result<(), ExecutionError> {
     let merged_vars = executor.get_merged_variables();
-    let e_ctx = executor.get_eval_context(context_node, &merged_vars, context_position, context_size);
+    let e_ctx =
+        executor.get_eval_context(context_node, &merged_vars, context_position, context_size);
 
     if let XPathValue::NodeSet(mut nodes) = petty_xpath1::evaluate(select, &e_ctx)? {
         executor.sort_node_set(&mut nodes, sort_keys, &merged_vars)?;

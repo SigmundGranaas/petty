@@ -1,15 +1,15 @@
 pub mod ast;
-pub mod parser;
-pub mod engine;
-pub mod functions;
-pub mod operators;
 pub mod axes;
 pub mod datasource;
+pub mod engine;
 pub mod error;
+pub mod functions;
+pub mod operators;
+pub mod parser;
 
-pub use ast::{Expression, LocationPath, Step, Axis, NodeTest, BinaryOperator};
-pub use engine::{XPathValue, EvaluationContext, evaluate};
+pub use ast::{Axis, BinaryOperator, Expression, LocationPath, NodeTest, Step};
 pub use datasource::{DataSourceNode, NodeType, QName};
+pub use engine::{EvaluationContext, XPathValue, evaluate};
 
 // Re-export test utilities for integration testing in downstream crates
 pub use datasource::tests;

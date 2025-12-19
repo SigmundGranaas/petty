@@ -1,8 +1,8 @@
-use petty_xpath1::datasource::DataSourceNode;
-use petty_xpath1::{self};
 use crate::ast::WithParam;
 use crate::executor::{ExecutionError, TemplateExecutor};
 use crate::output::OutputBuilder;
+use petty_xpath1::datasource::DataSourceNode;
+use petty_xpath1::{self};
 use std::collections::{HashMap, HashSet};
 
 pub(crate) fn handle_call_template<'s, 'a, N: DataSourceNode<'a> + 'a>(
@@ -19,21 +19,33 @@ pub(crate) fn handle_call_template<'s, 'a, N: DataSourceNode<'a> + 'a>(
         let caller_merged_vars = executor.get_merged_variables();
 
         let passed_params = {
-            let e_ctx = executor.get_eval_context(context_node, &caller_merged_vars, context_position, context_size);
+            let e_ctx = executor.get_eval_context(
+                context_node,
+                &caller_merged_vars,
+                context_position,
+                context_size,
+            );
             params
                 .iter()
-                .map(|param| Ok((param.name.clone(), petty_xpath1::evaluate(&param.select, &e_ctx)?)))
+                .map(|param| {
+                    Ok((
+                        param.name.clone(),
+                        petty_xpath1::evaluate(&param.select, &e_ctx)?,
+                    ))
+                })
                 .collect::<Result<HashMap<_, _>, ExecutionError>>()?
         };
 
         // Strict mode check for undeclared parameters
         if executor.strict {
-            let defined_param_names: HashSet<_> = template_clone.params.iter().map(|p| &p.name).collect();
+            let defined_param_names: HashSet<_> =
+                template_clone.params.iter().map(|p| &p.name).collect();
             for passed_name in passed_params.keys() {
                 if !defined_param_names.contains(passed_name) {
-                    return Err(ExecutionError::TypeError(
-                        format!("Call to template '{}' with undeclared parameter: '{}'", name, passed_name)
-                    ));
+                    return Err(ExecutionError::TypeError(format!(
+                        "Call to template '{}' with undeclared parameter: '{}'",
+                        name, passed_name
+                    )));
                 }
             }
         }

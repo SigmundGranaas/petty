@@ -1,7 +1,7 @@
-use std::time::Duration;
-use std::sync::Mutex;
 use std::collections::HashMap;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Duration;
 
 /// Trait for measuring layout performance.
 ///
@@ -50,10 +50,16 @@ impl DebugProfiler {
         let hits = self.hits.load(Ordering::Relaxed);
         let misses = self.misses.load(Ordering::Relaxed);
         let total = hits + misses;
-        if total == 0 { return; }
+        if total == 0 {
+            return;
+        }
 
         log::info!("=== Profile Summary (ID: {}) ===", sequence_id);
-        log::info!("Cache Hits: {} ({:.1}%)", hits, (hits as f64 / total as f64) * 100.0);
+        log::info!(
+            "Cache Hits: {} ({:.1}%)",
+            hits,
+            (hits as f64 / total as f64) * 100.0
+        );
 
         if let Ok(stats) = self.stats.lock() {
             for (k, v) in stats.iter() {
@@ -82,7 +88,9 @@ impl Profiler for DebugProfiler {
         self.misses.fetch_add(1, Ordering::Relaxed);
     }
     fn reset(&self) {
-        if let Ok(mut g) = self.stats.lock() { g.clear(); }
+        if let Ok(mut g) = self.stats.lock() {
+            g.clear();
+        }
         self.hits.store(0, Ordering::Relaxed);
         self.misses.store(0, Ordering::Relaxed);
     }

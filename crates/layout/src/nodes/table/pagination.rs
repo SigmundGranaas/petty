@@ -1,6 +1,6 @@
-use crate::{LayoutContext, LayoutError, LayoutNode, LayoutResult, NodeState, TableState};
 use super::node::TableNode;
-use crate::{BoxConstraints, Size, Rect};
+use crate::{BoxConstraints, Rect, Size};
+use crate::{LayoutContext, LayoutError, LayoutNode, LayoutResult, NodeState, TableState};
 
 /// encapsulated table pagination logic.
 pub struct TablePagination<'node, 'ctx, 'data, 'a, 'b> {
@@ -59,7 +59,13 @@ impl<'node, 'ctx, 'data, 'a, 'b> TablePagination<'node, 'ctx, 'data, 'a, 'b> {
         }
 
         // 2. Render Body Rows
-        for (i, row) in self.node.body_rows.iter().enumerate().skip(self.start_row_index) {
+        for (i, row) in self
+            .node
+            .body_rows
+            .iter()
+            .enumerate()
+            .skip(self.start_row_index)
+        {
             let height_idx = self.header_count + i;
             let row_height = *self.row_heights.get(height_idx).unwrap_or(&0.0);
 
@@ -97,7 +103,7 @@ impl<'node, 'ctx, 'data, 'a, 'b> TablePagination<'node, 'ctx, 'data, 'a, 'b> {
         row: &super::node::TableRowNode,
         y: f32,
         height: f32,
-        occupied_until_row_idx: &mut Vec<usize>,
+        occupied_until_row_idx: &mut [usize],
         current_row_idx: usize,
         future_heights: &[f32],
     ) -> Result<(), LayoutError> {
@@ -106,7 +112,9 @@ impl<'node, 'ctx, 'data, 'a, 'b> TablePagination<'node, 'ctx, 'data, 'a, 'b> {
         let mut cell_iter = row.cells.iter();
 
         while col_cursor < self.col_widths.len() {
-            if col_cursor < occupied_until_row_idx.len() && occupied_until_row_idx[col_cursor] > current_row_idx {
+            if col_cursor < occupied_until_row_idx.len()
+                && occupied_until_row_idx[col_cursor] > current_row_idx
+            {
                 x_offset += self.col_widths[col_cursor];
                 col_cursor += 1;
                 continue;

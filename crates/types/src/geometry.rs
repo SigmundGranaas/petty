@@ -18,7 +18,10 @@ impl Size {
     }
 
     pub fn zero() -> Self {
-        Self { width: 0.0, height: 0.0 }
+        Self {
+            width: 0.0,
+            height: 0.0,
+        }
     }
 }
 
@@ -42,7 +45,12 @@ impl PartialEq for BoxConstraints {
 
 impl BoxConstraints {
     pub fn new(min_width: f32, max_width: f32, min_height: f32, max_height: f32) -> Self {
-        Self { min_width, max_width, min_height, max_height }
+        Self {
+            min_width,
+            max_width,
+            min_height,
+            max_height,
+        }
     }
 
     pub fn tight(size: Size) -> Self {

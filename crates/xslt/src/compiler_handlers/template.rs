@@ -2,9 +2,9 @@
 
 use crate::ast::{NamedTemplate, PreparsedTemplate, TemplateRule, XsltInstruction};
 use crate::compiler::{BuilderState, CompilerBuilder};
-use crate::pattern;
-use crate::util::{get_attr_owned_optional, get_attr_owned_required, OwnedAttributes};
 use crate::error::XsltError;
+use crate::pattern;
+use crate::util::{OwnedAttributes, get_attr_owned_optional, get_attr_owned_required};
 
 impl CompilerBuilder {
     pub(crate) fn handle_template_start(
@@ -14,7 +14,8 @@ impl CompilerBuilder {
         source: &str,
     ) -> Result<(), XsltError> {
         if let Some(role_name) = get_attr_owned_optional(&attrs, b"petty:role")? {
-            self.state_stack.push(BuilderState::RoleTemplate { role_name, attrs });
+            self.state_stack
+                .push(BuilderState::RoleTemplate { role_name, attrs });
         } else if let Some(template_name) = get_attr_owned_optional(&attrs, b"name")? {
             self.state_stack.push(BuilderState::NamedTemplate {
                 name: template_name,
@@ -37,7 +38,8 @@ impl CompilerBuilder {
     ) -> Result<(), XsltError> {
         match current_state {
             BuilderState::Template(attrs) => {
-                let match_str = get_attr_owned_required(&attrs, b"match", b"xsl:template", pos, source)?;
+                let match_str =
+                    get_attr_owned_required(&attrs, b"match", b"xsl:template", pos, source)?;
                 let pattern = pattern::parse(&match_str)?;
                 let mode = get_attr_owned_optional(&attrs, b"mode")?;
                 let priority = get_attr_owned_optional(&attrs, b"priority")?
@@ -61,16 +63,19 @@ impl CompilerBuilder {
                     params,
                     body: PreparsedTemplate(body),
                 };
-                self.named_templates.insert(name, std::sync::Arc::new(template));
+                self.named_templates
+                    .insert(name, std::sync::Arc::new(template));
             }
             BuilderState::RoleTemplate { role_name, attrs } => {
                 // Generate a unique mode for this role template.
                 let unique_mode = format!("__petty_role_{}", role_name);
-                self.role_template_modes.insert(role_name, unique_mode.clone());
+                self.role_template_modes
+                    .insert(role_name, unique_mode.clone());
 
                 // A role template acts like a regular template rule, but with a specific mode.
                 // It defaults to matching the root node if no `match` is provided.
-                let match_str = get_attr_owned_optional(&attrs, b"match")?.unwrap_or_else(|| "/".to_string());
+                let match_str =
+                    get_attr_owned_optional(&attrs, b"match")?.unwrap_or_else(|| "/".to_string());
                 let pattern = pattern::parse(&match_str)?;
 
                 let rule = TemplateRule {
@@ -79,7 +84,10 @@ impl CompilerBuilder {
                     mode: Some(unique_mode),
                     body: PreparsedTemplate(body),
                 };
-                self.template_rules.entry(rule.mode.clone()).or_default().push(rule);
+                self.template_rules
+                    .entry(rule.mode.clone())
+                    .or_default()
+                    .push(rule);
             }
             _ => {} // Should not happen
         }

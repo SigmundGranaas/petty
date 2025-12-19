@@ -1,7 +1,5 @@
+use crate::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
 use petty_idf::{IRNode, InlineNode, NodeMetadata};
-use crate::test_utils::{
-    create_paragraph, find_first_text_box_with_content, paginate_test_nodes,
-};
 use petty_style::dimension::{Dimension, Margins, PageSize};
 use petty_style::stylesheet::{ElementStyle, PageLayout, Stylesheet};
 use std::collections::HashMap;

@@ -1,17 +1,15 @@
-use petty_core::layout::LayoutEngine;
-use petty_core::error::PipelineError;
+use crate::MapRenderError;
 use crate::pipeline::api::{Anchor, Document, Heading, Hyperlink, PreparedDataSources};
-use crate::pipeline::concurrency::{
-    producer_task, run_in_order_streaming_consumer, spawn_workers,
-};
+use crate::pipeline::concurrency::{producer_task, run_in_order_streaming_consumer, spawn_workers};
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::provider::DataSourceProvider;
-use petty_render_lopdf::LopdfRenderer;
-use petty_render_core::Pass1Result;
-use petty_render_core::DocumentRenderer;
-use crate::MapRenderError;
 use chrono::Utc;
 use log::info;
+use petty_core::error::PipelineError;
+use petty_core::layout::LayoutEngine;
+use petty_render_core::DocumentRenderer;
+use petty_render_core::Pass1Result;
+use petty_render_lopdf::LopdfRenderer;
 use serde_json::Value;
 use std::io::{BufWriter, Seek, SeekFrom};
 use std::sync::Arc;
@@ -55,7 +53,9 @@ impl DataSourceProvider for MetadataGeneratingProvider {
         }
         #[cfg(not(feature = "tempfile"))]
         {
-            info!("[METADATA] Starting analysis pass, streaming render to in-memory buffer (WASM).");
+            info!(
+                "[METADATA] Starting analysis pass, streaming render to in-memory buffer (WASM)."
+            );
         }
 
         // Use tempfile on native platforms for memory efficiency, in-memory buffer for WASM
@@ -74,15 +74,20 @@ impl DataSourceProvider for MetadataGeneratingProvider {
         let pass1_result: Pass1Result;
 
         let final_buf_writer = {
-            let final_layout_engine = LayoutEngine::new(&context.font_library, context.cache_config);
+            let final_layout_engine =
+                LayoutEngine::new(&context.font_library, context.cache_config);
             let final_stylesheet = context.compiled_template.stylesheet();
 
             // Pass Arc<Stylesheet> correctly
-            let mut renderer = LopdfRenderer::new(final_layout_engine, final_stylesheet.clone()).map_render_err()?;
+            let mut renderer = LopdfRenderer::new(final_layout_engine, final_stylesheet.clone())
+                .map_render_err()?;
             renderer.begin_document(buf_writer).map_render_err()?;
 
-            let (page_width, page_height) =
-                renderer.stylesheet.get_default_page_layout().size.dimensions_pt();
+            let (page_width, page_height) = renderer
+                .stylesheet
+                .get_default_page_layout()
+                .size
+                .dimensions_pt();
 
             let (page_ids, p1_result) = run_in_order_streaming_consumer(
                 rx2,
@@ -90,7 +95,7 @@ impl DataSourceProvider for MetadataGeneratingProvider {
                 page_width,
                 page_height,
                 true,
-                semaphore
+                semaphore,
             )?;
             pass1_result = p1_result;
 
@@ -112,9 +117,9 @@ impl DataSourceProvider for MetadataGeneratingProvider {
 
         let document = build_document_from_pass1_result(pass1_result);
 
-        let mut temp_file = final_buf_writer.into_inner().map_err(|e| {
-            PipelineError::Io(e.into_error())
-        })?;
+        let mut temp_file = final_buf_writer
+            .into_inner()
+            .map_err(|e| PipelineError::Io(e.into_error()))?;
 
         temp_file.seek(SeekFrom::Start(0))?;
 
@@ -131,14 +136,15 @@ fn build_document_from_pass1_result(pass1_result: Pass1Result) -> Document {
         .toc_entries
         .iter()
         .filter_map(|entry| {
-            pass1_result.resolved_anchors.get(&entry.target_id).map(|anchor| {
-                Heading {
+            pass1_result
+                .resolved_anchors
+                .get(&entry.target_id)
+                .map(|anchor| Heading {
                     id: entry.target_id.clone(),
                     level: entry.level,
                     text: entry.text.clone(),
                     page_number: anchor.global_page_index,
-                }
-            })
+                })
         })
         .collect();
 
@@ -176,14 +182,14 @@ fn build_document_from_pass1_result(pass1_result: Pass1Result) -> Document {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use petty_core::layout::fonts::SharedFontLibrary;
-    use petty_json_template::JsonParser;
     use crate::pipeline::adapters::TemplateParserAdapter;
-    use petty_core::parser::processor::TemplateParser;
     use crate::pipeline::api::IndexEntry;
     use crate::pipeline::context::PipelineContext;
-    use petty_render_core::{HyperlinkLocation, ResolvedAnchor};
     use crate::pipeline::worker::TocEntry;
+    use petty_core::layout::fonts::SharedFontLibrary;
+    use petty_core::parser::processor::TemplateParser;
+    use petty_json_template::JsonParser;
+    use petty_render_core::{HyperlinkLocation, ResolvedAnchor};
     use serde_json::json;
     use std::collections::HashMap;
     use std::io::Read;
@@ -194,22 +200,39 @@ mod tests {
         let mut resolved_anchors = HashMap::new();
         resolved_anchors.insert(
             "h1".to_string(),
-            ResolvedAnchor { global_page_index: 1, y_pos: 700.0 },
+            ResolvedAnchor {
+                global_page_index: 1,
+                y_pos: 700.0,
+            },
         );
         resolved_anchors.insert(
             "h2".to_string(),
-            ResolvedAnchor { global_page_index: 2, y_pos: 650.0 },
+            ResolvedAnchor {
+                global_page_index: 2,
+                y_pos: 650.0,
+            },
         );
         resolved_anchors.insert(
             "some-other-anchor".to_string(),
-            ResolvedAnchor { global_page_index: 3, y_pos: 100.0 },
+            ResolvedAnchor {
+                global_page_index: 3,
+                y_pos: 100.0,
+            },
         );
 
         let pass1_result = Pass1Result {
             total_pages: 5,
             toc_entries: vec![
-                TocEntry { level: 1, text: "Heading 1".to_string(), target_id: "h1".to_string() },
-                TocEntry { level: 2, text: "Heading 2".to_string(), target_id: "h2".to_string() },
+                TocEntry {
+                    level: 1,
+                    text: "Heading 1".to_string(),
+                    target_id: "h1".to_string(),
+                },
+                TocEntry {
+                    level: 2,
+                    text: "Heading 2".to_string(),
+                    target_id: "h2".to_string(),
+                },
                 TocEntry {
                     level: 2,
                     text: "No Anchor".to_string(),
@@ -222,7 +245,10 @@ mod tests {
                 rect: [10.0, 20.0, 30.0, 40.0],
                 target_id: "h2".to_string(),
             }],
-            index_entries: vec![IndexEntry { text: "Rust".to_string(), page_number: 4 }],
+            index_entries: vec![IndexEntry {
+                text: "Rust".to_string(),
+                page_number: 4,
+            }],
             ..Default::default()
         };
 
@@ -272,14 +298,15 @@ mod tests {
             "section2": { "title": "Second Section" },
         })];
 
-        let sources = tokio::task::spawn_blocking(move || {
-            provider.provide(&context, data.into_iter())
-        })
-            .await
-            .unwrap()
-            .unwrap();
+        let sources =
+            tokio::task::spawn_blocking(move || provider.provide(&context, data.into_iter()))
+                .await
+                .unwrap()
+                .unwrap();
 
-        let doc = sources.document.expect("Document object should be generated");
+        let doc = sources
+            .document
+            .expect("Document object should be generated");
         assert_eq!(doc.page_count, 2);
 
         let mut artifact = sources.body_artifact.expect("Body artifact should exist");

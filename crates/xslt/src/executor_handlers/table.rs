@@ -1,9 +1,10 @@
-use petty_style::dimension::Dimension;
 use crate::ast::{PreparsedStyles, PreparsedTemplate};
-use petty_xpath1::datasource::DataSourceNode;
 use crate::executor::{ExecutionError, TemplateExecutor};
 use crate::output::OutputBuilder;
+use petty_style::dimension::Dimension;
+use petty_xpath1::datasource::DataSourceNode;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_table<'s, 'a, N: DataSourceNode<'a> + 'a>(
     executor: &mut TemplateExecutor<'s, 'a, N>,
     styles: &PreparsedStyles,
@@ -30,13 +31,7 @@ pub(crate) fn handle_table<'s, 'a, N: DataSourceNode<'a> + 'a>(
         builder.end_table_header();
     }
 
-    executor.execute_template(
-        body,
-        context_node,
-        context_position,
-        context_size,
-        builder,
-    )?;
+    executor.execute_template(body, context_node, context_position, context_size, builder)?;
 
     builder.end_table();
     Ok(())

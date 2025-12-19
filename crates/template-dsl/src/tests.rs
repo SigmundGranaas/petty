@@ -1,12 +1,12 @@
 #![cfg(test)]
 
-use petty_types::color::Color;
 use super::builders::*;
-use super::{p, Template, TemplateBuilder};
+use super::{Template, TemplateBuilder, p};
+use petty_json_template::ast::TemplateNode;
 use petty_style::dimension::{Dimension, Margins, PageSize};
 use petty_style::font::FontWeight;
 use petty_style::stylesheet::{ElementStyle, PageLayout};
-use petty_json_template::ast::TemplateNode;
+use petty_types::color::Color;
 
 // --- New Reusable Component Pattern ---
 /// A reusable component implemented as a struct.
@@ -40,7 +40,7 @@ impl TemplateBuilder for UserBadge {
                     Paragraph::empty()
                         .child(Span::new().text("Premium").style_name("premium-text")),
                 )
-                    .with_else(Paragraph::new("Standard")),
+                .with_else(Paragraph::new("Standard")),
             );
 
         // The component's build logic returns another builder, so we must
@@ -51,12 +51,14 @@ impl TemplateBuilder for UserBadge {
 
 #[test]
 fn test_inline_styling() {
-    let template = Template::new(Block::new().padding(Margins::all(20.0)).child(
-        p("Hello Inline Styles")
-            .font_size(24.0)
-            .font_weight(FontWeight::Bold)
-            .color(Color::gray(50)),
-    ));
+    let template = Template::new(
+        Block::new().padding(Margins::all(20.0)).child(
+            p("Hello Inline Styles")
+                .font_size(24.0)
+                .font_weight(FontWeight::Bold)
+                .color(Color::gray(50)),
+        ),
+    );
 
     let json_string = template.to_json().unwrap();
     let produced_value: serde_json::Value = serde_json::from_str(&json_string).unwrap();
@@ -97,25 +99,25 @@ fn test_full_template_with_control_flow() {
                 Flex::new().child(Paragraph::new("Product: {{this.name}}")),
             )),
     )
-        .add_style(
-            "badge",
-            ElementStyle {
-                padding: Some(Margins::all(10.0)),
-                ..Default::default()
-            },
-        )
-        .add_style(
-            "premium-text",
-            ElementStyle {
-                color: Some(Color {
-                    r: 212,
-                    g: 175,
-                    b: 55,
-                    a: 1.0,
-                }),
-                ..Default::default()
-            },
-        );
+    .add_style(
+        "badge",
+        ElementStyle {
+            padding: Some(Margins::all(10.0)),
+            ..Default::default()
+        },
+    )
+    .add_style(
+        "premium-text",
+        ElementStyle {
+            color: Some(Color {
+                r: 212,
+                g: 175,
+                b: 55,
+                a: 1.0,
+            }),
+            ..Default::default()
+        },
+    );
 
     let json_string = template.to_json().unwrap();
     let produced_value: serde_json::Value = serde_json::from_str(&json_string).unwrap();
@@ -183,32 +185,32 @@ fn test_template_with_definitions_and_roles() {
             .child(Paragraph::new("Rendering user badge:"))
             .child(Render::new("user_badge_def")), // Use the Render builder
     )
-        .add_style(
-            "badge",
-            ElementStyle {
-                padding: Some(Margins::all(5.0)),
-                ..Default::default()
-            },
-        )
-        .add_style(
-            "premium-text",
-            ElementStyle {
-                color: Some(Color {
-                    r: 212,
-                    g: 175,
-                    b: 55,
-                    a: 1.0,
-                }),
-                ..Default::default()
-            },
-        )
-        // Add a reusable definition
-        .add_definition(
-            "user_badge_def",
-            // The definition can be any builder, including our custom component
-            UserBadge::new("{{user.name}}", "user.is_admin"),
-        )
-        .add_role("page-header", Paragraph::new("This is a header"));
+    .add_style(
+        "badge",
+        ElementStyle {
+            padding: Some(Margins::all(5.0)),
+            ..Default::default()
+        },
+    )
+    .add_style(
+        "premium-text",
+        ElementStyle {
+            color: Some(Color {
+                r: 212,
+                g: 175,
+                b: 55,
+                a: 1.0,
+            }),
+            ..Default::default()
+        },
+    )
+    // Add a reusable definition
+    .add_definition(
+        "user_badge_def",
+        // The definition can be any builder, including our custom component
+        UserBadge::new("{{user.name}}", "user.is_admin"),
+    )
+    .add_role("page-header", Paragraph::new("This is a header"));
 
     let json_string = template.to_json().unwrap();
     let produced_value: serde_json::Value = serde_json::from_str(&json_string).unwrap();
@@ -276,11 +278,13 @@ fn test_template_builder_serialization() {
                             .cell(Cell::new().child(Paragraph::new("100.00"))),
                     ),
             )
-            .child(List::new().item(
-                ListItem::new()
-                    .child(Paragraph::new("Note 1"))
-                    .child(Paragraph::new("Note 2")),
-            )),
+            .child(
+                List::new().item(
+                    ListItem::new()
+                        .child(Paragraph::new("Note 1"))
+                        .child(Paragraph::new("Note 2")),
+                ),
+            ),
     );
 
     template = template

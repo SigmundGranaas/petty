@@ -1,8 +1,8 @@
+use crate::LayoutError;
 use crate::engine::{LayoutEngine, LayoutStore};
 use crate::fonts::SharedFontLibrary;
 use crate::interface::{AnchorLocation, IndexEntry};
 use crate::{LayoutElement, PositionedElement, TextElement};
-use crate::LayoutError;
 use petty_style::stylesheet::Stylesheet;
 use std::collections::HashMap;
 
@@ -30,7 +30,8 @@ pub fn paginate_test_nodes(
     let store = LayoutStore::new();
     let ir_root = IRNode::Root(nodes);
 
-    let root = engine.build_render_tree(&ir_root, &store)
+    let root = engine
+        .build_render_tree(&ir_root, &store)
         .map_err(|e| LayoutError::Generic(e.to_string()))?;
 
     let iterator = engine
@@ -80,9 +81,9 @@ pub fn find_first_text_box_with_content<'a>(
 ) -> Option<&'a PositionedElement> {
     elements.iter().find(|el| {
         if let LayoutElement::Text(TextElement {
-                                       content: text_content,
-                                       ..
-                                   }) = &el.element
+            content: text_content,
+            ..
+        }) = &el.element
         {
             text_content.contains(content)
         } else {

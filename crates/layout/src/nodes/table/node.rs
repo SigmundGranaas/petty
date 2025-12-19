@@ -1,16 +1,16 @@
-use petty_idf::TableColumnDefinition;
 use crate::nodes::block::BlockNode;
 use crate::style::ComputedStyle;
 use crate::{
     BoxConstraints, LayoutContext, LayoutEnvironment, LayoutError, LayoutNode, LayoutResult,
-    NodeState, Size
+    NodeState, Size,
 };
+use petty_idf::TableColumnDefinition;
 // Use explicit geometry types from base to match Trait definition
+use crate::algorithms::table_solver::{TableCellInfo, TableSolver};
 use petty_types::geometry::{BoxConstraints as BaseBoxConstraints, Size as BaseSize};
-use crate::algorithms::table_solver::{TableSolver, TableCellInfo};
-use std::sync::Arc;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 use std::time::Instant;
 
 use super::pagination::TablePagination;
@@ -38,7 +38,11 @@ impl<'a> LayoutNode for TableNode<'a> {
         self.style.as_ref()
     }
 
-    fn measure(&self, env: &LayoutEnvironment, constraints: BaseBoxConstraints) -> Result<BaseSize, LayoutError> {
+    fn measure(
+        &self,
+        env: &LayoutEnvironment,
+        constraints: BaseBoxConstraints,
+    ) -> Result<BaseSize, LayoutError> {
         let h_deduction = self.style.padding_x() + self.style.border_x();
         let available_width = if constraints.has_bounded_width() {
             Some((constraints.max_width - h_deduction).max(0.0))
@@ -55,7 +59,12 @@ impl<'a> LayoutNode for TableNode<'a> {
         let key = self.get_cache_key(available_width);
 
         // Check generic cache in environment
-        if let Some(output) = env.cache.borrow().get(&key).and_then(|v| v.downcast_ref::<TableLayoutOutput>()) {
+        if let Some(output) = env
+            .cache
+            .borrow()
+            .get(&key)
+            .and_then(|v| v.downcast_ref::<TableLayoutOutput>())
+        {
             let width = if constraints.has_bounded_width() {
                 constraints.max_width
             } else {
@@ -65,7 +74,9 @@ impl<'a> LayoutNode for TableNode<'a> {
         }
 
         let layout_output = self.compute_layout_output(env, available_width, max_height_hint)?;
-        env.cache.borrow_mut().insert(key, Box::new(layout_output.clone()));
+        env.cache
+            .borrow_mut()
+            .insert(key, Box::new(layout_output.clone()));
 
         let width = if constraints.has_bounded_width() {
             constraints.max_width
@@ -104,11 +115,20 @@ impl<'a> LayoutNode for TableNode<'a> {
 
         let key = self.get_cache_key(available_width);
 
-        let layout_output = if let Some(output) = ctx.env.cache.borrow().get(&key).and_then(|v| v.downcast_ref::<TableLayoutOutput>()) {
+        let layout_output = if let Some(output) = ctx
+            .env
+            .cache
+            .borrow()
+            .get(&key)
+            .and_then(|v| v.downcast_ref::<TableLayoutOutput>())
+        {
             output.clone()
         } else {
             let output = self.compute_layout_output(&ctx.env, available_width, max_height_hint)?;
-            ctx.env.cache.borrow_mut().insert(key, Box::new(output.clone()));
+            ctx.env
+                .cache
+                .borrow_mut()
+                .insert(key, Box::new(output.clone()));
             output
         };
 
@@ -158,7 +178,11 @@ impl<'a> TableNode<'a> {
         max_height_hint: Option<f32>,
     ) -> Result<TableLayoutOutput, LayoutError> {
         let solver = TableSolver::new(env, &self.columns);
-        let all_rows = self.header_rows.iter().chain(self.body_rows.iter()).map(|r| r.cells.iter());
+        let all_rows = self
+            .header_rows
+            .iter()
+            .chain(self.body_rows.iter())
+            .map(|r| r.cells.iter());
 
         let col_widths = solver.resolve_widths(available_width, all_rows)?;
         let row_heights = self.calculate_all_row_heights(env, &col_widths, max_height_hint)?;
@@ -181,7 +205,7 @@ impl<'a> TableNode<'a> {
             col_widths,
             row_heights,
             total_width,
-            total_height
+            total_height,
         })
     }
 
@@ -203,16 +227,18 @@ impl<'a> TableNode<'a> {
 
         for row in self.body_rows {
             if let Some(max_h) = max_height_hint
-                && total_accumulated > max_h {
-                    row_heights.push(0.0);
-                    continue;
-                }
+                && total_accumulated > max_h
+            {
+                row_heights.push(0.0);
+                continue;
+            }
             let h = row.measure_height(env, col_widths)?;
             row_heights.push(h);
             total_accumulated += h;
         }
 
-        env.engine.record_perf("TableNode::calculate_all_row_heights", start.elapsed());
+        env.engine
+            .record_perf("TableNode::calculate_all_row_heights", start.elapsed());
 
         Ok(row_heights)
     }
@@ -225,12 +251,18 @@ pub struct TableRowNode<'a> {
 }
 
 impl<'a> TableRowNode<'a> {
-    pub fn measure_height(&self, env: &LayoutEnvironment, col_widths: &[f32]) -> Result<f32, LayoutError> {
+    pub fn measure_height(
+        &self,
+        env: &LayoutEnvironment,
+        col_widths: &[f32],
+    ) -> Result<f32, LayoutError> {
         let mut max_height: f32 = 0.0;
         let mut col_cursor = 0;
 
         for cell in self.cells {
-            if col_cursor >= col_widths.len() { break; }
+            if col_cursor >= col_widths.len() {
+                break;
+            }
             let end_col = (col_cursor + cell.colspan).min(col_widths.len());
             let cell_width: f32 = col_widths[col_cursor..end_col].iter().sum();
 
@@ -252,7 +284,9 @@ pub struct TableCellNode<'a> {
 }
 
 impl<'a> TableCellInfo for &'a TableCellNode<'a> {
-    fn colspan(&self) -> usize { self.colspan }
+    fn colspan(&self) -> usize {
+        self.colspan
+    }
     fn measure_max_content(&self, env: &LayoutEnvironment) -> Result<f32, LayoutError> {
         let infinite_constraint = BoxConstraints {
             min_width: 0.0,
@@ -266,7 +300,8 @@ impl<'a> TableCellInfo for &'a TableCellNode<'a> {
 
 impl<'a> TableCellNode<'a> {
     pub fn measure_height(&self, env: &LayoutEnvironment, width: f32) -> Result<f32, LayoutError> {
-        Ok(self.content
+        Ok(self
+            .content
             .measure(env, BoxConstraints::tight_width(width))?
             .height)
     }

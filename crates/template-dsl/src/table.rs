@@ -1,10 +1,11 @@
-use petty_style::dimension::Dimension;
-use petty_style::stylesheet::ElementStyle;
-use petty_json_template::ast::{
-    JsonContainer, JsonNode, JsonTable, JsonTableBody, JsonTableColumn, JsonTableHeader, TemplateNode,
-};
 use crate::node::TemplateBuilder;
 use crate::style::impl_styled_widget;
+use petty_json_template::ast::{
+    JsonContainer, JsonNode, JsonTable, JsonTableBody, JsonTableColumn, JsonTableHeader,
+    TemplateNode,
+};
+use petty_style::dimension::Dimension;
+use petty_style::stylesheet::ElementStyle;
 
 /// Builder for a table cell. A cell is a block-level container.
 #[derive(Default, Clone)]
@@ -75,7 +76,11 @@ impl TemplateBuilder for Row {
             id: self.id,
             style_names: vec![],
             style_override: Default::default(),
-            children: self.cells.into_iter().map(|c| Box::new(c).build()).collect(),
+            children: self
+                .cells
+                .into_iter()
+                .map(|c| Box::new(c).build())
+                .collect(),
         }))
     }
 }
@@ -183,11 +188,7 @@ impl TemplateBuilder for Table {
                 .collect(),
             header,
             body: JsonTableBody {
-                rows: self
-                    .body_children
-                    .into_iter()
-                    .map(|r| r.build())
-                    .collect(),
+                rows: self.body_children.into_iter().map(|r| r.build()).collect(),
             },
         }))
     }

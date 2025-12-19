@@ -3,14 +3,14 @@
 use super::ast::*;
 use crate::error::XPathError;
 use nom::{
+    IResult,
     branch::alt,
     bytes::complete::{tag, take_while, take_while1},
     character::complete::{char, multispace0},
-    combinator::{map, opt, recognize, peek},
+    combinator::{map, opt, peek, recognize},
     multi::{many0, separated_list0},
     number::complete::double,
     sequence::{delimited, pair, preceded, terminated},
-    IResult,
 };
 
 // --- Main Public Parser ---
@@ -45,8 +45,7 @@ where
 {
     move |input: &str| {
         let (input, mut left) = sub_expr_parser(input)?;
-        let (input, remainder) =
-            many0(pair(ws(&mut op_parser), &mut sub_expr_parser))(input)?;
+        let (input, remainder) = many0(pair(ws(&mut op_parser), &mut sub_expr_parser))(input)?;
 
         for (op, right) in remainder {
             left = Expression::BinaryOp {
@@ -58,7 +57,6 @@ where
         Ok((input, left))
     }
 }
-
 
 // --- Expression Parsers (in order of precedence) ---
 
@@ -140,12 +138,8 @@ fn unary_expr(input: &str) -> IResult<&str, Expression> {
 
 // The union operator `|` has higher precedence than the others, but only applies to paths.
 fn union_expr(input: &str) -> IResult<&str, Expression> {
-    build_binary_expr_parser(
-        path_expr,
-        map(char('|'), |_| BinaryOperator::Union)
-    )(input)
+    build_binary_expr_parser(path_expr, map(char('|'), |_| BinaryOperator::Union))(input)
 }
-
 
 /// This is the core parser that handles the ambiguity between location paths
 /// and other primary expressions that might be followed by a path.
@@ -153,10 +147,7 @@ fn path_expr(input: &str) -> IResult<&str, Expression> {
     // Try primary expressions FIRST, because a function call like `position()` is a primary expression,
     // but the more general `location_path` parser might incorrectly parse `position` as a step name
     // before the `function_call` parser gets a chance to see the `()`.
-    let (i, start_expr) = alt((
-        primary_expr,
-        map(location_path, Expression::LocationPath),
-    ))(input)?;
+    let (i, start_expr) = alt((primary_expr, map(location_path, Expression::LocationPath)))(input)?;
 
     let (i, remainder_steps) = many0(pair(alt((tag("//"), tag("/"))), step))(i)?;
 
@@ -188,7 +179,6 @@ fn path_expr(input: &str) -> IResult<&str, Expression> {
 
     Ok((i, result))
 }
-
 
 fn primary_expr(input: &str) -> IResult<&str, Expression> {
     ws(alt((
@@ -233,7 +223,15 @@ fn q_name(input: &str) -> IResult<&str, String> {
 
 fn node_type_test(input: &str) -> IResult<&str, NodeTest> {
     map(
-        terminated(alt((tag("text"), tag("node"), tag("comment"), tag("processing-instruction"))), pair(ws(char('(')), ws(char(')')))),
+        terminated(
+            alt((
+                tag("text"),
+                tag("node"),
+                tag("comment"),
+                tag("processing-instruction"),
+            )),
+            pair(ws(char('(')), ws(char(')'))),
+        ),
         |node_type: &str| match node_type {
             "text" => NodeTest::NodeType(NodeTypeTest::Text),
             "comment" => NodeTest::NodeType(NodeTypeTest::Comment),
@@ -292,35 +290,51 @@ fn predicate(input: &str) -> IResult<&str, Expression> {
 
 fn step(input: &str) -> IResult<&str, Step> {
     let (i, main_part) = alt((
-        map(tag("."), |_| (Axis::SelfAxis, NodeTest::Name(".".to_string()))),
+        map(tag("."), |_| {
+            (Axis::SelfAxis, NodeTest::Name(".".to_string()))
+        }),
         map(preceded(char('@'), node_test), |nt| (Axis::Attribute, nt)),
-        map(pair(opt(axis), node_test), |(ax, nt)| (ax.unwrap_or(Axis::Child), nt)),
+        map(pair(opt(axis), node_test), |(ax, nt)| {
+            (ax.unwrap_or(Axis::Child), nt)
+        }),
     ))(input)?;
     let (axis, node_test) = main_part;
     let (i, predicates) = many0(predicate)(i)?;
-    Ok((i, Step { axis, node_test, predicates }))
+    Ok((
+        i,
+        Step {
+            axis,
+            node_test,
+            predicates,
+        },
+    ))
 }
 
 fn location_path(input: &str) -> IResult<&str, LocationPath> {
     // This parser handles a path that does NOT start with a variable or function call.
-    let (i, (is_absolute, first_step)) = if let Ok((rem, _)) = tag::<&str, &str, nom::error::Error<&str>>("//")(input) {
-        let (rem, step) = step(rem)?;
-        let initial_steps = vec![
-            Step { axis: Axis::DescendantOrSelf, node_test: NodeTest::NodeType(NodeTypeTest::Node), predicates: vec![] },
-            step,
-        ];
-        (rem, (true, initial_steps))
-    } else if let Ok((rem, _)) = tag::<&str, &str, nom::error::Error<&str>>("/")(input) {
-        if let Ok((rem, first_step)) = step(rem) {
-            (rem, (true, vec![first_step]))
+    let (i, (is_absolute, first_step)) =
+        if let Ok((rem, _)) = tag::<&str, &str, nom::error::Error<&str>>("//")(input) {
+            let (rem, step) = step(rem)?;
+            let initial_steps = vec![
+                Step {
+                    axis: Axis::DescendantOrSelf,
+                    node_test: NodeTest::NodeType(NodeTypeTest::Node),
+                    predicates: vec![],
+                },
+                step,
+            ];
+            (rem, (true, initial_steps))
+        } else if let Ok((rem, _)) = tag::<&str, &str, nom::error::Error<&str>>("/")(input) {
+            if let Ok((rem, first_step)) = step(rem) {
+                (rem, (true, vec![first_step]))
+            } else {
+                // This handles the case of a path that is just "/"
+                (rem, (true, vec![]))
+            }
         } else {
-            // This handles the case of a path that is just "/"
-            (rem, (true, vec![]))
-        }
-    } else {
-        let (rem, first_step) = step(input)?;
-        (rem, (false, vec![first_step]))
-    };
+            let (rem, first_step) = step(input)?;
+            (rem, (false, vec![first_step]))
+        };
 
     let (i, mut steps) = (i, first_step);
     // After the first step, subsequent steps MUST be preceded by / or //.
@@ -337,7 +351,14 @@ fn location_path(input: &str) -> IResult<&str, LocationPath> {
         steps.push(next_step);
     }
 
-    Ok((i, LocationPath { start_point: None, is_absolute, steps }))
+    Ok((
+        i,
+        LocationPath {
+            start_point: None,
+            is_absolute,
+            steps,
+        },
+    ))
 }
 
 // --- Function Call Parser ---
@@ -350,16 +371,21 @@ fn function_call(input: &str) -> IResult<&str, Expression> {
     // Node-type tests like text() are not functions. They are handled by the step parser.
     // If the name is a node type test, fail this parser.
     if name == "text" || name == "node" || name == "comment" || name == "processing-instruction" {
-        return Err(nom::Err::Error(nom::error::Error::new(input, nom::error::ErrorKind::Verify)));
+        return Err(nom::Err::Error(nom::error::Error::new(
+            input,
+            nom::error::ErrorKind::Verify,
+        )));
     }
 
     let (i, _) = multispace0(i)?;
-    let (i, args) =
-        delimited(char('('), separated_list0(ws(char(',')), expression), char(')'))(i)?;
+    let (i, args) = delimited(
+        char('('),
+        separated_list0(ws(char(',')), expression),
+        char(')'),
+    )(i)?;
 
     Ok((i, Expression::FunctionCall { name, args }))
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -374,8 +400,16 @@ mod tests {
                 start_point: None,
                 is_absolute: false,
                 steps: vec![
-                    Step { axis: Axis::Child, node_test: NodeTest::Name("foo".into()), predicates: vec![] },
-                    Step { axis: Axis::Child, node_test: NodeTest::Name("bar".into()), predicates: vec![] },
+                    Step {
+                        axis: Axis::Child,
+                        node_test: NodeTest::Name("foo".into()),
+                        predicates: vec![]
+                    },
+                    Step {
+                        axis: Axis::Child,
+                        node_test: NodeTest::Name("bar".into()),
+                        predicates: vec![]
+                    },
                 ]
             })
         );
@@ -384,13 +418,31 @@ mod tests {
     #[test]
     fn test_parse_unary_minus() {
         let result = parse_expression("-5").unwrap();
-        assert_eq!(result, Expression::UnaryOp { op: UnaryOperator::Minus, expr: Box::new(Expression::Number(5.0)) });
+        assert_eq!(
+            result,
+            Expression::UnaryOp {
+                op: UnaryOperator::Minus,
+                expr: Box::new(Expression::Number(5.0))
+            }
+        );
 
         let result2 = parse_expression("10 - -5").unwrap();
-        assert!(matches!(result2, Expression::BinaryOp { op: BinaryOperator::Minus, .. }));
-        if let Expression::BinaryOp{ left, right, .. } = result2 {
+        assert!(matches!(
+            result2,
+            Expression::BinaryOp {
+                op: BinaryOperator::Minus,
+                ..
+            }
+        ));
+        if let Expression::BinaryOp { left, right, .. } = result2 {
             assert_eq!(*left, Expression::Number(10.0));
-            assert_eq!(*right, Expression::UnaryOp { op: UnaryOperator::Minus, expr: Box::new(Expression::Number(5.0)) });
+            assert_eq!(
+                *right,
+                Expression::UnaryOp {
+                    op: UnaryOperator::Minus,
+                    expr: Box::new(Expression::Number(5.0))
+                }
+            );
         }
     }
 
@@ -418,8 +470,16 @@ mod tests {
                 start_point: Some(Box::new(Expression::Variable("myVar".to_string()))),
                 is_absolute: false,
                 steps: vec![
-                    Step { axis: Axis::Child, node_test: NodeTest::Name("foo".into()), predicates: vec![] },
-                    Step { axis: Axis::Child, node_test: NodeTest::Name("bar".into()), predicates: vec![] },
+                    Step {
+                        axis: Axis::Child,
+                        node_test: NodeTest::Name("foo".into()),
+                        predicates: vec![]
+                    },
+                    Step {
+                        axis: Axis::Child,
+                        node_test: NodeTest::Name("bar".into()),
+                        predicates: vec![]
+                    },
                 ]
             })
         );
@@ -451,7 +511,7 @@ mod tests {
                 axis: Axis::Attribute,
                 node_test: NodeTest::Name("id".into()),
                 predicates: vec![],
-            }]
+            }],
         };
         assert_eq!(
             result,
@@ -506,7 +566,10 @@ mod tests {
         let result = parse_expression("foo/text()").unwrap();
         if let Expression::LocationPath(lp) = result {
             assert_eq!(lp.steps.len(), 2);
-            assert_eq!(lp.steps[1].node_test, NodeTest::NodeType(NodeTypeTest::Text));
+            assert_eq!(
+                lp.steps[1].node_test,
+                NodeTest::NodeType(NodeTypeTest::Text)
+            );
         } else {
             panic!("Expected location path");
         }
@@ -543,17 +606,77 @@ mod tests {
 
     #[test]
     fn test_parse_boolean_logic() {
-        let a_path = Expression::LocationPath(LocationPath { start_point: None, is_absolute: false, steps: vec![Step { axis: Axis::Child, node_test: NodeTest::Name("a".into()), predicates: vec![] }] });
-        let b_path = Expression::LocationPath(LocationPath { start_point: None, is_absolute: false, steps: vec![Step { axis: Axis::Child, node_test: NodeTest::Name("b".into()), predicates: vec![] }] });
-        let c_path = Expression::LocationPath(LocationPath { start_point: None, is_absolute: false, steps: vec![Step { axis: Axis::Child, node_test: NodeTest::Name("c".into()), predicates: vec![] }] });
-        let d_path = Expression::LocationPath(LocationPath { start_point: None, is_absolute: false, steps: vec![Step { axis: Axis::Child, node_test: NodeTest::Name("d".into()), predicates: vec![] }] });
-        let e_path = Expression::LocationPath(LocationPath { start_point: None, is_absolute: false, steps: vec![Step { axis: Axis::Child, node_test: NodeTest::Name("e".into()), predicates: vec![] }] });
-        let f_path = Expression::LocationPath(LocationPath { start_point: None, is_absolute: false, steps: vec![Step { axis: Axis::Child, node_test: NodeTest::Name("f".into()), predicates: vec![] }] });
+        let a_path = Expression::LocationPath(LocationPath {
+            start_point: None,
+            is_absolute: false,
+            steps: vec![Step {
+                axis: Axis::Child,
+                node_test: NodeTest::Name("a".into()),
+                predicates: vec![],
+            }],
+        });
+        let b_path = Expression::LocationPath(LocationPath {
+            start_point: None,
+            is_absolute: false,
+            steps: vec![Step {
+                axis: Axis::Child,
+                node_test: NodeTest::Name("b".into()),
+                predicates: vec![],
+            }],
+        });
+        let c_path = Expression::LocationPath(LocationPath {
+            start_point: None,
+            is_absolute: false,
+            steps: vec![Step {
+                axis: Axis::Child,
+                node_test: NodeTest::Name("c".into()),
+                predicates: vec![],
+            }],
+        });
+        let d_path = Expression::LocationPath(LocationPath {
+            start_point: None,
+            is_absolute: false,
+            steps: vec![Step {
+                axis: Axis::Child,
+                node_test: NodeTest::Name("d".into()),
+                predicates: vec![],
+            }],
+        });
+        let e_path = Expression::LocationPath(LocationPath {
+            start_point: None,
+            is_absolute: false,
+            steps: vec![Step {
+                axis: Axis::Child,
+                node_test: NodeTest::Name("e".into()),
+                predicates: vec![],
+            }],
+        });
+        let f_path = Expression::LocationPath(LocationPath {
+            start_point: None,
+            is_absolute: false,
+            steps: vec![Step {
+                axis: Axis::Child,
+                node_test: NodeTest::Name("f".into()),
+                predicates: vec![],
+            }],
+        });
 
         let result = parse_expression("a = b or c = d and e = f").unwrap();
-        let a_eq_b = Expression::BinaryOp { left: Box::new(a_path), op: BinaryOperator::Equals, right: Box::new(b_path) };
-        let c_eq_d = Expression::BinaryOp { left: Box::new(c_path), op: BinaryOperator::Equals, right: Box::new(d_path) };
-        let e_eq_f = Expression::BinaryOp { left: Box::new(e_path), op: BinaryOperator::Equals, right: Box::new(f_path) };
+        let a_eq_b = Expression::BinaryOp {
+            left: Box::new(a_path),
+            op: BinaryOperator::Equals,
+            right: Box::new(b_path),
+        };
+        let c_eq_d = Expression::BinaryOp {
+            left: Box::new(c_path),
+            op: BinaryOperator::Equals,
+            right: Box::new(d_path),
+        };
+        let e_eq_f = Expression::BinaryOp {
+            left: Box::new(e_path),
+            op: BinaryOperator::Equals,
+            right: Box::new(f_path),
+        };
 
         assert_eq!(
             result,
@@ -583,7 +706,11 @@ mod tests {
                         node_test: NodeTest::NodeType(NodeTypeTest::Node),
                         predicates: vec![]
                     },
-                    Step { axis: Axis::Child, node_test: NodeTest::Name("foo".into()), predicates: vec![] },
+                    Step {
+                        axis: Axis::Child,
+                        node_test: NodeTest::Name("foo".into()),
+                        predicates: vec![]
+                    },
                 ]
             })
         );
@@ -595,9 +722,25 @@ mod tests {
         assert_eq!(
             result,
             Expression::BinaryOp {
-                left: Box::new(Expression::LocationPath(LocationPath { start_point: None, is_absolute: false, steps: vec![Step { axis: Axis::Child, node_test: NodeTest::Name("a".into()), predicates: vec![] }] })),
+                left: Box::new(Expression::LocationPath(LocationPath {
+                    start_point: None,
+                    is_absolute: false,
+                    steps: vec![Step {
+                        axis: Axis::Child,
+                        node_test: NodeTest::Name("a".into()),
+                        predicates: vec![]
+                    }]
+                })),
                 op: BinaryOperator::LessThan,
-                right: Box::new(Expression::LocationPath(LocationPath { start_point: None, is_absolute: false, steps: vec![Step { axis: Axis::Child, node_test: NodeTest::Name("b".into()), predicates: vec![] }] })),
+                right: Box::new(Expression::LocationPath(LocationPath {
+                    start_point: None,
+                    is_absolute: false,
+                    steps: vec![Step {
+                        axis: Axis::Child,
+                        node_test: NodeTest::Name("b".into()),
+                        predicates: vec![]
+                    }]
+                })),
             }
         );
 

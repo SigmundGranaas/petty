@@ -17,7 +17,6 @@ pub enum ListStyleType {
     None,
 }
 
-
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "kebab-case")]
 #[derive(Default)]
@@ -26,4 +25,3 @@ pub enum ListStylePosition {
     #[default]
     Outside,
 }
-

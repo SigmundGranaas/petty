@@ -1,6 +1,6 @@
-use petty_types::{ApiIndexEntry, TocEntry};
 use petty_idf::SharedData;
-use petty_layout::{AnchorLocation, IndexEntry, PositionedElement, LayoutElement};
+use petty_layout::{AnchorLocation, IndexEntry, LayoutElement, PositionedElement};
+use petty_types::{ApiIndexEntry, TocEntry};
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]

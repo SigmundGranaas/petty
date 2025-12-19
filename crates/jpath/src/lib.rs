@@ -6,21 +6,21 @@
 
 pub mod ast;
 pub mod engine;
-pub mod functions;
 pub mod error;
+pub mod functions;
 mod parser;
 
 // --- Public API ---
 pub use ast::{Expression, PathSegment, Selection};
-pub use engine::{evaluate, evaluate_as_bool, evaluate_as_string, select, EvaluationContext};
+pub use engine::{EvaluationContext, evaluate, evaluate_as_bool, evaluate_as_string, select};
+pub use error::JPathError;
 pub use functions::{FunctionRegistry, JPathFunction};
 pub use parser::parse_expression;
-pub use error::JPathError;
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::{json};
+    use serde_json::json;
     use std::collections::HashMap;
 
     #[test]

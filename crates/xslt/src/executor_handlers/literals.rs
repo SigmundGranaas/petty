@@ -1,12 +1,12 @@
 //! Handlers for literal output, including text, `value-of`, and literal result elements.
 
-use petty_style::dimension::Dimension;
 use crate::ast::AttributeValueTemplate;
-use petty_xpath1::datasource::DataSourceNode;
-use petty_xpath1::{self, engine};
 use crate::ast::{PreparsedStyles, PreparsedTemplate};
 use crate::executor::{ExecutionError, TemplateExecutor};
 use crate::output::OutputBuilder;
+use petty_style::dimension::Dimension;
+use petty_xpath1::datasource::DataSourceNode;
+use petty_xpath1::{self, engine};
 use std::collections::HashMap;
 
 pub(crate) fn handle_text(text: &str, builder: &mut dyn OutputBuilder) {
@@ -24,6 +24,7 @@ pub(crate) fn handle_value_of<'a, N: DataSourceNode<'a> + 'a>(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn handle_content_tag<'s, 'a, N: DataSourceNode<'a> + 'a>(
     executor: &mut TemplateExecutor<'s, 'a, N>,
     tag_name: &[u8],
@@ -41,13 +42,7 @@ pub(crate) fn handle_content_tag<'s, 'a, N: DataSourceNode<'a> + 'a>(
         builder.set_attribute(name, value);
     }
 
-    executor.execute_template(
-        body,
-        context_node,
-        context_position,
-        context_size,
-        builder,
-    )?;
+    executor.execute_template(body, context_node, context_position, context_size, builder)?;
     executor.execute_end_tag(tag_name, builder);
     Ok(())
 }
@@ -80,7 +75,8 @@ pub(crate) fn handle_element<'s, 'a, N: DataSourceNode<'a> + 'a>(
 ) -> Result<(), ExecutionError> {
     let tag_name = {
         let merged_vars = executor.get_merged_variables();
-        let e_ctx = executor.get_eval_context(context_node, &merged_vars, context_position, context_size);
+        let e_ctx =
+            executor.get_eval_context(context_node, &merged_vars, context_position, context_size);
         executor.evaluate_avt(name_avt, &e_ctx)?
     };
 
@@ -89,13 +85,7 @@ pub(crate) fn handle_element<'s, 'a, N: DataSourceNode<'a> + 'a>(
     let empty_styles = PreparsedStyles::default();
 
     executor.execute_start_tag(tag_name.as_bytes(), &empty_styles, builder);
-    executor.execute_template(
-        body,
-        context_node,
-        context_position,
-        context_size,
-        builder,
-    )?;
+    executor.execute_template(body, context_node, context_position, context_size, builder)?;
     executor.execute_end_tag(tag_name.as_bytes(), builder);
     Ok(())
 }
@@ -111,7 +101,9 @@ pub(crate) fn handle_attribute<'s, 'a, N: DataSourceNode<'a> + 'a>(
 ) -> Result<(), ExecutionError> {
     struct TextCollector(String);
     impl OutputBuilder for TextCollector {
-        fn add_text(&mut self, text: &str) { self.0.push_str(text); }
+        fn add_text(&mut self, text: &str) {
+            self.0.push_str(text);
+        }
         fn start_block(&mut self, _: &PreparsedStyles) {}
         fn end_block(&mut self) {}
         fn start_flex_container(&mut self, _: &PreparsedStyles) {}
@@ -145,12 +137,19 @@ pub(crate) fn handle_attribute<'s, 'a, N: DataSourceNode<'a> + 'a>(
 
     let name = {
         let merged_vars = executor.get_merged_variables();
-        let e_ctx = executor.get_eval_context(context_node, &merged_vars, context_position, context_size);
+        let e_ctx =
+            executor.get_eval_context(context_node, &merged_vars, context_position, context_size);
         executor.evaluate_avt(name_avt, &e_ctx)?
     };
 
     let mut text_builder = TextCollector(String::new());
-    executor.execute_template(body, context_node, context_position, context_size, &mut text_builder)?;
+    executor.execute_template(
+        body,
+        context_node,
+        context_position,
+        context_size,
+        &mut text_builder,
+    )?;
 
     builder.set_attribute(&name, &text_builder.0);
     Ok(())

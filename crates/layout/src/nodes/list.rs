@@ -1,16 +1,14 @@
 // src/core/layout/nodes/list.rs
 
-use petty_idf::IRNode;
-use crate::engine::{LayoutEngine, LayoutStore};
-use petty_types::geometry::{BoxConstraints, Size};
-use crate::interface::{
-    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
-};
 use super::RenderNode;
+use crate::LayoutError;
+use crate::engine::{LayoutEngine, LayoutStore};
+use crate::interface::{LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState};
 use crate::nodes::block::BlockNode;
 use crate::nodes::list_item::ListItemNode;
 use crate::style::ComputedStyle;
-use crate::LayoutError;
+use petty_idf::IRNode;
+use petty_types::geometry::{BoxConstraints, Size};
 use std::sync::Arc;
 
 #[derive(Debug)]
@@ -26,7 +24,9 @@ impl<'a> ListNode<'a> {
         parent_style: Arc<ComputedStyle>,
         store: &'a LayoutStore,
     ) -> Result<RenderNode<'a>, LayoutError> {
-        let node = store.bump.alloc(Self::new_with_depth(node, engine, parent_style, 0, store)?);
+        let node = store
+            .bump
+            .alloc(Self::new_with_depth(node, engine, parent_style, 0, store)?);
         Ok(RenderNode::List(node))
     }
 
@@ -55,11 +55,19 @@ impl<'a> ListNode<'a> {
         for (i, child_ir) in ir_children.iter().enumerate() {
             if let IRNode::List { .. } = child_ir {
                 // Recursive list
-                let child_node = Self::new_with_depth(child_ir, engine, style.clone(), depth + 1, store)?;
+                let child_node =
+                    Self::new_with_depth(child_ir, engine, style.clone(), depth + 1, store)?;
                 children_vec.push(RenderNode::List(store.bump.alloc(child_node)));
             } else if let IRNode::ListItem { .. } = child_ir {
                 // List item with context
-                let child_node = ListItemNode::new(child_ir, engine, style.clone(), i + start_index, depth, store)?;
+                let child_node = ListItemNode::new(
+                    child_ir,
+                    engine,
+                    style.clone(),
+                    i + start_index,
+                    depth,
+                    store,
+                )?;
                 children_vec.push(RenderNode::ListItem(store.bump.alloc(child_node)));
             } else {
                 // Other nodes in list container
@@ -78,7 +86,11 @@ impl<'a> LayoutNode for ListNode<'a> {
         self.block.style()
     }
 
-    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<Size, LayoutError> {
+    fn measure(
+        &self,
+        env: &LayoutEnvironment,
+        constraints: BoxConstraints,
+    ) -> Result<Size, LayoutError> {
         self.block.measure(env, constraints)
     }
 

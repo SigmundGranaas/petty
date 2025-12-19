@@ -1,14 +1,14 @@
-use petty_idf::{IRNode, TextStr};
+use super::RenderNode;
+use crate::LayoutError;
+use crate::algorithms::flex_solver::computed_style_to_taffy;
 use crate::engine::{LayoutEngine, LayoutStore};
-use petty_types::geometry::{self, BoxConstraints};
 use crate::interface::{
     FlexState, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
 };
-use super::RenderNode;
 use crate::painting::box_painter::create_background_and_borders;
-use crate::algorithms::flex_solver::computed_style_to_taffy;
 use crate::style::ComputedStyle;
-use crate::LayoutError;
+use petty_idf::{IRNode, TextStr};
+use petty_types::geometry::{self, BoxConstraints};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -45,7 +45,8 @@ impl<'a> FlexNode<'a> {
             return Err(LayoutError::BuilderMismatch("FlexContainer", node.kind()));
         };
 
-        let mut children_vec = engine.build_layout_node_children(ir_children, style.clone(), store)?;
+        let mut children_vec =
+            engine.build_layout_node_children(ir_children, style.clone(), store)?;
         children_vec.sort_by_key(|c| c.style().flex.order);
         let children = store.bump.alloc_slice_copy(&children_vec);
 
@@ -81,7 +82,8 @@ impl<'a> FlexNode<'a> {
 
         for (i, child) in self.children.iter().enumerate() {
             let child_style = computed_style_to_taffy(child.style());
-            let node = taffy.new_leaf_with_context(child_style, i)
+            let node = taffy
+                .new_leaf_with_context(child_style, i)
                 .map_err(|e| LayoutError::Generic(format!("Taffy new_leaf error: {:?}", e)))?;
             child_nodes.push(node);
         }
@@ -95,7 +97,8 @@ impl<'a> FlexNode<'a> {
             root_style.size.height = taffy::style::Dimension::length(constraints.max_height);
         }
 
-        let root_node = taffy.new_with_children(root_style, &child_nodes)
+        let root_node = taffy
+            .new_with_children(root_style, &child_nodes)
             .map_err(|e| LayoutError::Generic(format!("Taffy new_with_children error: {:?}", e)))?;
 
         let available_space = taffy::geometry::Size {
@@ -146,7 +149,7 @@ impl<'a> FlexNode<'a> {
                                 width: size.width.ceil(),
                                 height: size.height,
                             }
-                        },
+                        }
                         Err(e) => {
                             measure_error = Some(e);
                             taffy::geometry::Size::ZERO
@@ -160,17 +163,22 @@ impl<'a> FlexNode<'a> {
             return Err(e);
         }
 
-        let root_layout = taffy.layout(root_node).map_err(|_| LayoutError::Generic("Taffy layout missing".into()))?;
+        let root_layout = taffy
+            .layout(root_node)
+            .map_err(|_| LayoutError::Generic("Taffy layout missing".into()))?;
         let size = geometry::Size::new(root_layout.size.width, root_layout.size.height);
 
         let mut child_layouts = Vec::with_capacity(child_nodes.len());
         for &id in &child_nodes {
-            let l = taffy.layout(id).map_err(|_| LayoutError::Generic("Taffy child layout missing".into()))?;
+            let l = taffy
+                .layout(id)
+                .map_err(|_| LayoutError::Generic("Taffy child layout missing".into()))?;
             child_layouts.push(*l);
         }
 
         let duration = start.elapsed();
-        env.engine.record_perf("FlexNode::compute_flex_layout_data", duration);
+        env.engine
+            .record_perf("FlexNode::compute_flex_layout_data", duration);
 
         Ok(FlexLayoutOutput {
             size,
@@ -184,7 +192,11 @@ impl<'a> LayoutNode for FlexNode<'a> {
         self.style.as_ref()
     }
 
-    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<geometry::Size, LayoutError> {
+    fn measure(
+        &self,
+        env: &LayoutEnvironment,
+        constraints: BoxConstraints,
+    ) -> Result<geometry::Size, LayoutError> {
         Ok(self.compute_flex_layout_data(env, constraints)?.size)
     }
 
@@ -200,10 +212,7 @@ impl<'a> LayoutNode for FlexNode<'a> {
 
         let (start_index, mut child_resume_state) = if let Some(state) = break_state {
             let flex_state = state.as_flex()?;
-            (
-                flex_state.child_index,
-                flex_state.child_state.map(|b| *b),
-            )
+            (flex_state.child_index, flex_state.child_state.map(|b| *b))
         } else {
             (0, None)
         };
@@ -221,7 +230,10 @@ impl<'a> LayoutNode for FlexNode<'a> {
         let cache_key = self.get_cache_key();
         let cached_output = if let Some(key) = cache_key {
             let cache = ctx.env.cache.borrow();
-            cache.get(&key).and_then(|v| v.downcast_ref::<FlexLayoutOutput>()).cloned()
+            cache
+                .get(&key)
+                .and_then(|v| v.downcast_ref::<FlexLayoutOutput>())
+                .cloned()
         } else {
             None
         };
@@ -231,7 +243,10 @@ impl<'a> LayoutNode for FlexNode<'a> {
         } else {
             let output = self.compute_flex_layout_data(&ctx.env, constraints)?;
             if let Some(key) = cache_key {
-                ctx.env.cache.borrow_mut().insert(key, Box::new(output.clone()));
+                ctx.env
+                    .cache
+                    .borrow_mut()
+                    .insert(key, Box::new(output.clone()));
             }
             output
         };

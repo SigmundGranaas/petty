@@ -1,6 +1,6 @@
 #![cfg(test)]
-use petty_idf::{IRNode, NodeMetadata};
 use crate::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
+use petty_idf::{IRNode, NodeMetadata};
 use petty_style::dimension::{Dimension, Margins, PageSize};
 use petty_style::stylesheet::{ElementStyle, PageLayout, Stylesheet};
 use std::collections::HashMap;
@@ -25,7 +25,10 @@ fn test_image_splits_to_next_page() {
         page_masters: HashMap::from([(
             "master".to_string(),
             PageLayout {
-                size: PageSize::Custom { width: 500.0, height: 100.0 },
+                size: PageSize::Custom {
+                    width: 500.0,
+                    height: 100.0,
+                },
                 margins: Some(Margins::all(10.0)),
                 ..Default::default()
             },
@@ -59,7 +62,10 @@ fn test_image_with_margins() {
         page_masters: HashMap::from([(
             "master".to_string(),
             PageLayout {
-                size: PageSize::Custom { width: 500.0, height: 100.0 },
+                size: PageSize::Custom {
+                    width: 500.0,
+                    height: 100.0,
+                },
                 margins: Some(Margins::all(10.0)),
                 ..Default::default()
             },
@@ -69,7 +75,11 @@ fn test_image_with_margins() {
     };
     let image_style = ElementStyle {
         height: Some(Dimension::Pt(30.0)),
-        margin: Some(Margins { top: 15.0, bottom: 5.0, ..Default::default() }),
+        margin: Some(Margins {
+            top: 15.0,
+            bottom: 5.0,
+            ..Default::default()
+        }),
         ..Default::default()
     };
     let nodes = vec![
@@ -104,7 +114,10 @@ fn test_image_taller_than_page_is_skipped() {
         page_masters: HashMap::from([(
             "master".to_string(),
             PageLayout {
-                size: PageSize::Custom { width: 500.0, height: 100.0 },
+                size: PageSize::Custom {
+                    width: 500.0,
+                    height: 100.0,
+                },
                 margins: Some(Margins::all(10.0)), // Content height = 80
                 ..Default::default()
             },

@@ -1,14 +1,14 @@
-use petty_idf::{IRNode, TextStr};
+use super::RenderNode;
+use crate::LayoutError;
 use crate::engine::{LayoutEngine, LayoutStore};
-use petty_types::geometry::{self, BoxConstraints, Size};
 use crate::interface::{
     BlockState, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
 };
-use super::RenderNode;
-use crate::style::ComputedStyle;
-use crate::LayoutError;
 use crate::painting::box_painter::create_background_and_borders;
+use crate::style::ComputedStyle;
+use petty_idf::{IRNode, TextStr};
 use petty_style::dimension::Dimension;
+use petty_types::geometry::{self, BoxConstraints, Size};
 use std::sync::Arc;
 
 #[derive(Debug, Clone)]
@@ -77,13 +77,19 @@ impl<'a> LayoutNode for BlockNode<'a> {
         self.style.as_ref()
     }
 
-    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<Size, LayoutError> {
+    fn measure(
+        &self,
+        env: &LayoutEnvironment,
+        constraints: BoxConstraints,
+    ) -> Result<Size, LayoutError> {
         let h_deduction = self.style.padding_x() + self.style.border_x();
         let padding_y = self.style.padding_y();
         let border_y = self.style.border_y();
         let margin_y = self.style.box_model.margin.top + self.style.box_model.margin.bottom;
 
-        if let (Some(Dimension::Pt(w)), Some(Dimension::Pt(h))) = (&self.style.box_model.width, &self.style.box_model.height) {
+        if let (Some(Dimension::Pt(w)), Some(Dimension::Pt(h))) =
+            (&self.style.box_model.width, &self.style.box_model.height)
+        {
             return Ok(Size::new(w + h_deduction, h + margin_y));
         }
 
@@ -127,10 +133,7 @@ impl<'a> LayoutNode for BlockNode<'a> {
 
         let (start_index, mut child_resume_state) = if let Some(state) = break_state {
             let block_state = state.as_block()?;
-            (
-                block_state.child_index,
-                block_state.child_state.map(|b| *b),
-            )
+            (block_state.child_index, block_state.child_state.map(|b| *b))
         } else {
             (0, None)
         };
@@ -213,8 +216,6 @@ impl<'a> LayoutNode for BlockNode<'a> {
             // We use push_element_at(..., 0.0, 0.0) to avoid double-adding ctx.cursor.
             ctx.push_element_at(el, 0.0, 0.0);
         }
-
-        
 
         match split_res {
             LayoutResult::Finished => {
