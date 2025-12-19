@@ -152,8 +152,10 @@ impl SharedFontLibrary {
     /// Only available with the `system-fonts` feature enabled.
     #[cfg(feature = "system-fonts")]
     pub fn with_system_fonts(self, enable: bool) -> Self {
-        if enable && let Ok(mut db) = self.db.write() {
-            db.load_system_fonts();
+        if enable {
+            if let Ok(mut db) = self.db.write() {
+                db.load_system_fonts();
+            }
         }
         self
     }
@@ -351,11 +353,11 @@ impl SharedFontLibrary {
 
         // Fast path: check unified cache
         {
-            if let Ok(cache) = self.font_data_cache.read()
-                && let Some(data) = cache.get(&cache_key)
-            {
-                log::debug!("  → Found in cache");
-                return Ok(data.clone());
+            if let Ok(cache) = self.font_data_cache.read() {
+                if let Some(data) = cache.get(&cache_key) {
+                    log::debug!("  → Found in cache");
+                    return Ok(data.clone());
+                }
             }
         }
 

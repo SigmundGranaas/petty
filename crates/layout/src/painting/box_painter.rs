@@ -81,19 +81,19 @@ pub fn create_background_and_borders(
     let bounds_width = bounds.width;
 
     let mut draw_border = |b: &Option<Border>, rect: Rect| {
-        if let Some(border) = b
-            && border.width > 0.0
-        {
-            let mut border_data = ComputedStyleData::default();
-            border_data.misc.background_color = Some(border.color.clone());
-            let border_style = ComputedStyle::new(border_data);
+        if let Some(border) = b {
+            if border.width > 0.0 {
+                let mut border_data = ComputedStyleData::default();
+                border_data.misc.background_color = Some(border.color.clone());
+                let border_style = ComputedStyle::new(border_data);
 
-            let positioned_rect = PositionedElement {
-                element: LayoutElement::Rectangle(RectElement),
-                style: Arc::new(border_style),
-                ..PositionedElement::from_rect(rect)
-            };
-            push(positioned_rect, 0.0, start_y);
+                let positioned_rect = PositionedElement {
+                    element: LayoutElement::Rectangle(RectElement),
+                    style: Arc::new(border_style),
+                    ..PositionedElement::from_rect(rect)
+                };
+                push(positioned_rect, 0.0, start_y);
+            }
         }
     };
 

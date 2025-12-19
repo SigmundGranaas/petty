@@ -273,21 +273,22 @@ fn finalize_line(
     // This serves two purposes:
     // 1. It makes `effective_width` accurate (visual width of text).
     // 2. It simplifies gap counting (we don't count the last space as a gap to fill).
-    if matches!(align, TextAlign::Justify)
-        && let Some(last) = items.last_mut()
-        && last.end_glyph > 0
-    {
-        let run = &runs[last.run_index];
-        if last.end_glyph <= run.glyphs.len() {
-            let last_glyph_idx = last.end_glyph - 1;
-            let last_glyph = &run.glyphs[last_glyph_idx];
-            let cluster = last_glyph.cluster as usize;
+    if matches!(align, TextAlign::Justify) {
+        if let Some(last) = items.last_mut() {
+            if last.end_glyph > 0 {
+                let run = &runs[last.run_index];
+                if last.end_glyph <= run.glyphs.len() {
+                    let last_glyph_idx = last.end_glyph - 1;
+                    let last_glyph = &run.glyphs[last_glyph_idx];
+                    let cluster = last_glyph.cluster as usize;
 
-            if cluster < full_text.len() && full_text.as_bytes()[cluster] == b' ' {
-                // Found trailing space. Trim it.
-                effective_width -= last_glyph.x_advance;
-                last.width -= last_glyph.x_advance;
-                last.end_glyph -= 1;
+                    if cluster < full_text.len() && full_text.as_bytes()[cluster] == b' ' {
+                        // Found trailing space. Trim it.
+                        effective_width -= last_glyph.x_advance;
+                        last.width -= last_glyph.x_advance;
+                        last.end_glyph -= 1;
+                    }
+                }
             }
         }
     }

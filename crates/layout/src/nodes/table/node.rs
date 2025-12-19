@@ -226,11 +226,11 @@ impl<'a> TableNode<'a> {
         }
 
         for row in self.body_rows {
-            if let Some(max_h) = max_height_hint
-                && total_accumulated > max_h
-            {
-                row_heights.push(0.0);
-                continue;
+            if let Some(max_h) = max_height_hint {
+                if total_accumulated > max_h {
+                    row_heights.push(0.0);
+                    continue;
+                }
             }
             let h = row.measure_height(env, col_widths)?;
             row_heights.push(h);
