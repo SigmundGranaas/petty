@@ -6,8 +6,9 @@ use crate::pipeline::concurrency::{
 };
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::renderer::RenderingStrategy;
-use petty_core::render::lopdf_renderer::LopdfRenderer;
-use petty_core::render::DocumentRenderer;
+use petty_render_lopdf::LopdfRenderer;
+use petty_render_core::DocumentRenderer;
+use crate::MapRenderError;
 use log::{info, warn};
 use std::io::{Seek, Write};
 use std::sync::Arc;
@@ -15,7 +16,7 @@ use tokio::sync::Semaphore;
 use tokio::task;
 
 // Need to import LayoutEngine for the consumer stage.
-use petty_core::core::layout::LayoutEngine;
+use petty_core::layout::LayoutEngine;
 
 /// A rendering strategy that streams the document directly to the output.
 #[derive(Clone)]
@@ -76,8 +77,8 @@ impl RenderingStrategy for SinglePassStreamingRenderer {
         let final_stylesheet = context.compiled_template.stylesheet();
 
         // Pass Arc<Stylesheet> correctly
-        let mut renderer = LopdfRenderer::new(final_layout_engine, final_stylesheet.clone())?;
-        renderer.begin_document(writer)?;
+        let mut renderer = LopdfRenderer::new(final_layout_engine, final_stylesheet.clone()).map_render_err()?;
+        renderer.begin_document(writer).map_render_err()?;
 
         let (page_width, page_height) =
             renderer.stylesheet.get_default_page_layout().size.dimensions_pt();
@@ -91,7 +92,7 @@ impl RenderingStrategy for SinglePassStreamingRenderer {
             semaphore
         )?;
 
-        let writer = Box::new(renderer).finish(all_page_ids)?;
+        let writer = Box::new(renderer).finish(all_page_ids).map_render_err()?;
 
         producer.abort();
         for worker in workers {
@@ -105,8 +106,9 @@ impl RenderingStrategy for SinglePassStreamingRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use petty_core::core::layout::fonts::SharedFontLibrary;
-    use petty_core::parser::json::processor::JsonParser;
+    use petty_core::layout::fonts::SharedFontLibrary;
+    use petty_json_template::JsonParser;
+    use crate::pipeline::adapters::TemplateParserAdapter;
     use petty_core::parser::processor::TemplateParser;
     use crate::pipeline::provider::passthrough::PassThroughProvider;
     use crate::pipeline::provider::DataSourceProvider;
@@ -128,7 +130,7 @@ mod tests {
             }
         });
         let template_str = serde_json::to_string(&template_json).unwrap();
-        let parser = JsonParser;
+        let parser = TemplateParserAdapter::new(JsonParser);
         let features = parser.parse(&template_str, PathBuf::new()).unwrap();
         let library = SharedFontLibrary::new();
         library.load_fallback_font();
@@ -137,8 +139,7 @@ mod tests {
             compiled_template: features.main_template,
             role_templates: Arc::new(features.role_templates),
             font_library: Arc::new(library),
-            resource_provider: Arc::new(crate::resource::InMemoryResourceProvider::new()),
-            executor: crate::executor::ExecutorImpl::Sync(crate::executor::SyncExecutor::new()),
+            resource_provider: Arc::new(petty_resource::InMemoryResourceProvider::new()),
             cache_config: Default::default(),
         };
 

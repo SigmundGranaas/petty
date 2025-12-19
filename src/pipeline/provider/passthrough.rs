@@ -8,9 +8,9 @@ use crate::pipeline::context::PipelineContext;
 pub struct PassThroughProvider;
 
 impl DataSourceProvider for PassThroughProvider {
-    fn provide<'a, I>(
+    fn provide<I>(
         &self,
-        _context: &'a PipelineContext,
+        _context: &PipelineContext,
         data_iterator: I,
     ) -> Result<PreparedDataSources, PipelineError>
     where
@@ -27,8 +27,9 @@ impl DataSourceProvider for PassThroughProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use petty_core::core::layout::fonts::SharedFontLibrary;
-    use petty_core::parser::json::processor::JsonParser;
+    use petty_core::layout::fonts::SharedFontLibrary;
+    use petty_json_template::JsonParser;
+    use crate::pipeline::adapters::TemplateParserAdapter;
     use petty_core::parser::processor::TemplateParser;
     use serde_json::json;
     use std::collections::HashMap;
@@ -37,7 +38,7 @@ mod tests {
 
     #[test]
     fn pass_through_provider_works() {
-        let parser = JsonParser;
+        let parser = TemplateParserAdapter::new(JsonParser);
         let template_str = r#"
         {
             "_stylesheet": {
@@ -52,8 +53,7 @@ mod tests {
             compiled_template: features.main_template,
             role_templates: Arc::new(HashMap::new()),
             font_library: Arc::new(SharedFontLibrary::new()),
-            resource_provider: Arc::new(crate::resource::InMemoryResourceProvider::new()),
-            executor: crate::executor::ExecutorImpl::Sync(crate::executor::SyncExecutor::new()),
+            resource_provider: Arc::new(petty_resource::InMemoryResourceProvider::new()),
             cache_config: Default::default(),
         };
 

@@ -1,4 +1,3 @@
-// FILE: examples/xslt_invoice.rs
 use petty::{PipelineBuilder, PipelineError};
 use serde_json::{from_str, Value};
 use std::env;

@@ -1,0 +1,201 @@
+{
+  "_stylesheet": {
+    "defaultPageMaster": "default",
+    "pageMasters": {
+      "default": {
+        "margins": "2cm",
+        "size": "A4"
+      }
+    },
+    "styles": {
+      "body-text": {
+        "color": "#333333",
+        "fontSize": "12pt",
+        "lineHeight": "18pt",
+        "marginBottom": "6pt"
+      },
+      "code-block": {
+        "backgroundColor": "#f5f5f5",
+        "border": "1pt solid #dddddd",
+        "fontFamily": "Courier",
+        "fontSize": "10pt",
+        "marginBottom": "6pt",
+        "marginTop": "6pt",
+        "padding": "8pt"
+      },
+      "highlight-box": {
+        "backgroundColor": "#f0f8ff",
+        "border": "1pt solid #4682b4",
+        "fontSize": "11pt",
+        "marginBottom": "8pt",
+        "marginTop": "8pt",
+        "padding": "10pt"
+      },
+      "section-header": {
+        "borderBottom": "2pt solid #cccccc",
+        "color": "#2a4d69",
+        "fontSize": "18pt",
+        "fontWeight": "bold",
+        "marginBottom": "8pt",
+        "marginTop": "15pt",
+        "paddingBottom": "4pt"
+      },
+      "title": {
+        "color": "#1a3d5c",
+        "fontSize": "28pt",
+        "fontWeight": "bold",
+        "marginBottom": "12pt",
+        "textAlign": "center"
+      }
+    }
+  },
+  "_template": {
+    "children": [
+      {
+        "children": [
+          {
+            "content": "CSS-Like Dimension Parsing Demo",
+            "type": "Text"
+          }
+        ],
+        "styleNames": [
+          "title"
+        ],
+        "type": "Paragraph"
+      },
+      {
+        "children": [
+          {
+            "content": "String Dimensions",
+            "type": "Text"
+          }
+        ],
+        "styleNames": [
+          "section-header"
+        ],
+        "type": "Paragraph"
+      },
+      {
+        "children": [
+          {
+            "content": "JSON templates now support CSS-like string dimensions. Instead of requiring numeric values, you can use intuitive strings like \"24pt\", \"1.5cm\", or \"18pt\" for sizes.",
+            "type": "Text"
+          }
+        ],
+        "styleNames": [
+          "body-text"
+        ],
+        "type": "Paragraph"
+      },
+      {
+        "children": [
+          {
+            "children": [
+              {
+                "content": "Note: ",
+                "type": "Text"
+              }
+            ],
+            "styleOverride": {
+              "fontWeight": "bold"
+            },
+            "type": "StyledSpan"
+          },
+          {
+            "content": "This paragraph uses backgroundColor, border, and padding all specified with string dimensions in the stylesheet.",
+            "type": "Text"
+          }
+        ],
+        "styleNames": [
+          "highlight-box"
+        ],
+        "type": "Paragraph"
+      },
+      {
+        "children": [
+          {
+            "content": "Color Parsing",
+            "type": "Text"
+          }
+        ],
+        "styleNames": [
+          "section-header"
+        ],
+        "type": "Paragraph"
+      },
+      {
+        "children": [
+          {
+            "content": "Colors can be specified as hex values (#RGB or #RRGGBB) or named colors (black, white, red, green, blue). The title uses #1a3d5c, section headers use #2a4d69.",
+            "type": "Text"
+          }
+        ],
+        "styleNames": [
+          "body-text"
+        ],
+        "type": "Paragraph"
+      },
+      {
+        "children": [
+          {
+            "content": "Border Specifications",
+            "type": "Text"
+          }
+        ],
+        "styleNames": [
+          "section-header"
+        ],
+        "type": "Paragraph"
+      },
+      {
+        "children": [
+          {
+            "content": "Borders can use CSS-like syntax: \"2pt solid #cccccc\" combines width, style, and color in one string. Section headers use this feature for their bottom border.",
+            "type": "Text"
+          }
+        ],
+        "styleNames": [
+          "body-text"
+        ],
+        "type": "Paragraph"
+      },
+      {
+        "children": [
+          {
+            "content": "Example stylesheet:\n  \"fontSize\": \"12pt\",\n  \"color\": \"#2a4d69\",\n  \"border\": \"1pt solid #dddddd\",\n  \"padding\": \"8pt\"",
+            "type": "Text"
+          }
+        ],
+        "styleNames": [
+          "code-block"
+        ],
+        "type": "Paragraph"
+      },
+      {
+        "children": [
+          {
+            "content": "Flexible Field Naming",
+            "type": "Text"
+          }
+        ],
+        "styleNames": [
+          "section-header"
+        ],
+        "type": "Paragraph"
+      },
+      {
+        "children": [
+          {
+            "content": "The deserializer supports both camelCase (fontSize, marginTop) and kebab-case (font-size, margin-top) field names, making it easy to migrate from existing CSS or match your preferred coding style.",
+            "type": "Text"
+          }
+        ],
+        "styleNames": [
+          "body-text"
+        ],
+        "type": "Paragraph"
+      }
+    ],
+    "type": "Block"
+  }
+}

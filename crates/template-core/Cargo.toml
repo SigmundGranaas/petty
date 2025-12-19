@@ -1,0 +1,16 @@
+[package]
+name = "petty-template-core"
+version = "0.1.0"
+edition = "2021"
+description = "Core abstractions for template parsing and compilation in Petty PDF"
+license = "MIT"
+repository = "https://github.com/yourusername/petty"
+
+[dependencies]
+# Foundation crates
+petty-types = { path = "../types" }
+petty-style = { path = "../style" }
+petty-idf = { path = "../idf" }
+
+# For error handling
+thiserror = "2.0.12"

@@ -1,0 +1,14 @@
+[package]
+name = "petty-template-dsl"
+version = "0.1.0"
+edition = "2024"
+description = "Fluent builder API for creating Petty PDF templates programmatically"
+
+[dependencies]
+petty-types = { path = "../types" }
+petty-style = { path = "../style" }
+petty-json-template = { path = "../json-template" }
+serde_json = "1.0"
+
+[dev-dependencies]
+serde_json = "1.0"

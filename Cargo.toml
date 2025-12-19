@@ -1,5 +1,30 @@
 [workspace]
-members = ["petty-core"]
+members = [
+    # Foundation crates
+    "crates/types",
+    "crates/style",
+    "crates/idf",
+    "crates/traits",
+    # Algorithm crates
+    "crates/xpath1",
+    "crates/layout",
+    "crates/jpath",
+    # Template crates
+    "crates/template-core",
+    "crates/json-template",
+    "crates/xslt",
+    # Render crates
+    "crates/render-core",
+    "crates/render-lopdf",
+    "crates/pdf-composer",
+    # Platform crates
+    "crates/executor",
+    "crates/source",
+    "crates/resource",
+    "crates/template-dsl",
+    # Integration layer
+    "crates/core",
+]
 resolver = "2"
 
 [package]
@@ -9,8 +34,35 @@ edition = "2024"
 description = "High-performance PDF generation engine with pluggable executors and resource providers"
 
 [dependencies]
-# Core library (platform-agnostic)
-petty-core = { path = "petty-core" }
+# Foundation crates
+petty-types = { path = "crates/types" }
+petty-style = { path = "crates/style" }
+petty-idf = { path = "crates/idf" }
+petty-traits = { path = "crates/traits" }
+
+# Algorithm crates
+petty-xpath1 = { path = "crates/xpath1" }
+petty-layout = { path = "crates/layout" }
+petty-jpath = { path = "crates/jpath" }
+
+# Template crates
+petty-template-core = { path = "crates/template-core" }
+petty-json-template = { path = "crates/json-template" }
+petty-xslt = { path = "crates/xslt" }
+
+# Render crates
+petty-render-core = { path = "crates/render-core" }
+petty-render-lopdf = { path = "crates/render-lopdf" }
+petty-pdf-composer = { path = "crates/pdf-composer" }
+
+# Core library (integration layer)
+petty-core = { path = "crates/core" }
+
+# Platform crates
+petty-executor = { path = "crates/executor" }
+petty-source = { path = "crates/source" }
+petty-resource = { path = "crates/resource" }
+petty-template-dsl = { path = "crates/template-dsl" }
 
 # Platform-specific dependencies (stay in petty crate)
 # System allocator
@@ -101,3 +153,7 @@ path = "examples/xslt_toc.rs"
 [[example]]
 name = "perf_toc"
 path = "examples/perf_toc.rs"
+
+[[example]]
+name = "json_css_dimensions"
+path = "examples/json_css_dimensions.rs"

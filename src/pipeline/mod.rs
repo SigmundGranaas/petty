@@ -3,6 +3,7 @@
 mod builder;
 mod config;
 mod orchestrator;
+mod adapters;
 pub mod api;
 pub mod provider;
 pub mod renderer;

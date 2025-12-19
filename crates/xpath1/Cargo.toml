@@ -1,0 +1,13 @@
+[package]
+name = "petty-xpath1"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+nom = "7.1"
+thiserror = "2.0.12"
+
+[dev-dependencies]
+# For testing XML/JSON data sources
+roxmltree = "0.20.0"
+serde_json = "1.0"

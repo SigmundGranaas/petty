@@ -1,0 +1,13 @@
+[package]
+name = "petty-jpath"
+version = "0.1.0"
+edition = "2024"
+description = "Lightweight JSON path expression language"
+
+[dependencies]
+nom = "7.1"
+serde_json = "1.0"
+thiserror = "2.0.12"
+
+[dev-dependencies]
+serde_json = "1.0"

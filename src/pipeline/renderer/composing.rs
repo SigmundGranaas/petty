@@ -3,15 +3,17 @@ use petty_core::parser::processor::{DataSourceFormat, ExecutionConfig};
 use crate::pipeline::api::{Anchor, Document, PreparedDataSources};
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::renderer::RenderingStrategy;
-use petty_core::render::composer::{merge_documents, overlay_content};
-use petty_core::render::lopdf_renderer::LopdfRenderer;
-use petty_core::render::DocumentRenderer;
+use petty_pdf_composer::{merge_documents, overlay_content};
+use petty_render_lopdf::LopdfRenderer;
+use petty_render_core::DocumentRenderer;
+use crate::MapRenderError;
 use log::{info, warn};
 use lopdf::{dictionary, Document as LopdfDocument, Object, ObjectId, StringFormat};
 use serde_json::json;
 use std::collections::{HashMap};
 use std::io::{Cursor, Seek, Write};
-use petty_core::core::layout::{LayoutElement, LayoutEngine, LayoutStore, PositionedElement};
+use petty_core::layout::{LayoutEngine, LayoutStore};
+use petty_layout::{LayoutElement, PositionedElement};
 
 #[derive(Clone)]
 pub struct ComposingRenderer;
@@ -69,11 +71,11 @@ impl RenderingStrategy for ComposingRenderer {
 
                 let layout_engine = LayoutEngine::new(&context.font_library, context.cache_config);
                 // Pass Arc<Stylesheet> correctly
-                let mut temp_renderer = LopdfRenderer::new(layout_engine, stylesheet.clone())?;
-                temp_renderer.begin_document(Cursor::new(Vec::new()))?;
+                let mut temp_renderer = LopdfRenderer::new(layout_engine, stylesheet.clone()).map_render_err()?;
+                temp_renderer.begin_document(Cursor::new(Vec::new())).map_render_err()?;
 
                 let store = LayoutStore::new();
-                let ir_root = petty_core::core::idf::IRNode::Root(ir_nodes);
+                let ir_root = petty_core::idf::IRNode::Root(ir_nodes);
                 let root_node = temp_renderer.layout_engine.build_render_tree(&ir_root, &store)
                     .map_err(|e| PipelineError::Layout(e.to_string()))?;
 
@@ -99,19 +101,20 @@ impl RenderingStrategy for ComposingRenderer {
                         .collect();
 
                     for page_elements in laid_out_pages {
-                        let content_id = temp_renderer.render_page_content(page_elements, &font_map, page_width, page_height)?;
-                        let page_id = temp_renderer.write_page_object(vec![content_id], vec![], page_width, page_height)?;
+                        let content_id = temp_renderer.render_page_content(page_elements, &font_map, page_width, page_height).map_render_err()?;
+                        let page_id = temp_renderer.write_page_object(vec![content_id], vec![], page_width, page_height).map_render_err()?;
                         new_page_ids.push(page_id);
                     }
 
                     // Call finish_into_buffer directly on the concrete type, not Box
-                    let role_pdf_bytes = temp_renderer.finish_into_buffer(new_page_ids)?;
+                    let role_pdf_bytes = temp_renderer.finish_into_buffer(new_page_ids).map_render_err()?;
                     let role_doc = LopdfDocument::load_mem(&role_pdf_bytes)?;
                     let role_page_count = role_doc.get_pages().len();
 
                     info!("[COMPOSER] Prepending {} pages from role '{}'", role_page_count, role);
                     prepended_pages += role_page_count;
-                    merge_documents(&mut main_doc, role_doc, true)?;
+                    merge_documents(&mut main_doc, role_doc, true)
+                        .map_err(|e| PipelineError::Render(e.to_string()))?;
 
                     let current_pages = main_doc.get_pages();
 
@@ -145,11 +148,11 @@ impl RenderingStrategy for ComposingRenderer {
                 let ir_nodes = template.execute(&doc_json_str, exec_config)?;
 
                 let layout_engine = LayoutEngine::new(&context.font_library, context.cache_config);
-                let mut temp_renderer = LopdfRenderer::new(layout_engine, stylesheet.clone())?;
-                temp_renderer.begin_document(Cursor::new(Vec::new()))?;
+                let mut temp_renderer = LopdfRenderer::new(layout_engine, stylesheet.clone()).map_render_err()?;
+                temp_renderer.begin_document(Cursor::new(Vec::new())).map_render_err()?;
 
                 let store = LayoutStore::new();
-                let ir_root = petty_core::core::idf::IRNode::Root(ir_nodes);
+                let ir_root = petty_core::idf::IRNode::Root(ir_nodes);
                 let root_node = temp_renderer.layout_engine.build_render_tree(&ir_root, &store)
                     .map_err(|e| PipelineError::Layout(e.to_string()))?;
 
@@ -173,16 +176,17 @@ impl RenderingStrategy for ComposingRenderer {
                         .collect();
 
                     for page_elements in laid_out_pages {
-                        let content_id = temp_renderer.render_page_content(page_elements, &font_map, page_width, page_height)?;
-                        let page_id = temp_renderer.write_page_object(vec![content_id], vec![], page_width, page_height)?;
+                        let content_id = temp_renderer.render_page_content(page_elements, &font_map, page_width, page_height).map_render_err()?;
+                        let page_id = temp_renderer.write_page_object(vec![content_id], vec![], page_width, page_height).map_render_err()?;
                         new_page_ids.push(page_id);
                     }
 
-                    let role_pdf_bytes = temp_renderer.finish_into_buffer(new_page_ids)?;
+                    let role_pdf_bytes = temp_renderer.finish_into_buffer(new_page_ids).map_render_err()?;
                     let role_doc = LopdfDocument::load_mem(&role_pdf_bytes)?;
 
                     info!("[COMPOSER] Appending {} pages from role '{}'", role_doc.get_pages().len(), role);
-                    merge_documents(&mut main_doc, role_doc, false)?;
+                    merge_documents(&mut main_doc, role_doc, false)
+                        .map_err(|e| PipelineError::Render(e.to_string()))?;
                 }
             }
         }
@@ -206,7 +210,7 @@ impl RenderingStrategy for ComposingRenderer {
                     let ir_nodes = template.execute(&overlay_context_str, exec_config)?;
 
                     let store = LayoutStore::new();
-                    let ir_root = petty_core::core::idf::IRNode::Root(ir_nodes);
+                    let ir_root = petty_core::idf::IRNode::Root(ir_nodes);
                     let root_node = layout_engine.build_render_tree(&ir_root, &store)
                         .map_err(|e| PipelineError::Layout(e.to_string()))?;
 
@@ -229,8 +233,9 @@ impl RenderingStrategy for ComposingRenderer {
                             .enumerate()
                             .map(|(i, f)| (f.postscript_name.clone(), format!("F{}", i + 1)))
                             .collect();
-                        let content = petty_core::render::lopdf_helpers::render_elements_to_content(elements, &font_map, page_width, page_height)?;
-                        overlay_content(&mut main_doc, *page_id, content.encode()?)?;
+                        let content = petty_render_lopdf::render_elements_to_content(elements, &font_map, page_width, page_height).map_render_err()?;
+                        overlay_content(&mut main_doc, *page_id, content.encode()?)
+                            .map_err(|e| PipelineError::Render(e.to_string()))?;
                     }
                 }
             }
@@ -249,12 +254,11 @@ impl RenderingStrategy for ComposingRenderer {
                 }
             }
 
-            if let Some(outline_root_id) = build_outlines_for_doc(&mut main_doc, &doc_metadata, &final_page_ids, page_height, prepended_pages)? {
-                if let Ok(Object::Dictionary(root_dict_mut)) = main_doc.get_object_mut(root_id) {
+            if let Some(outline_root_id) = build_outlines_for_doc(&mut main_doc, &doc_metadata, &final_page_ids, page_height, prepended_pages)?
+                && let Ok(Object::Dictionary(root_dict_mut)) = main_doc.get_object_mut(root_id) {
                     root_dict_mut.set("Outlines", outline_root_id);
                     root_dict_mut.set("PageMode", "UseOutlines");
                 }
-            }
         } else {
             info!("[COMPOSER] No fixups required. Passing document through.");
         }
@@ -270,17 +274,15 @@ fn collect_links_from_layout(pages: &[Vec<PositionedElement>]) -> Vec<PendingLin
     let mut links = Vec::new();
     for (page_idx, elements) in pages.iter().enumerate() {
         for el in elements {
-            if let LayoutElement::Text(text_node) = &el.element {
-                if let Some(href) = &text_node.href {
-                    if let Some(target) = href.strip_prefix('#') {
+            if let LayoutElement::Text(text_node) = &el.element
+                && let Some(href) = &text_node.href
+                    && let Some(target) = href.strip_prefix('#') {
                         links.push(PendingLink {
                             local_page_idx: page_idx,
                             rect: [el.x, el.y, el.x + el.width, el.y + el.height],
                             target_id: target.to_string()
                         });
                     }
-                }
-            }
         }
     }
     links
@@ -307,18 +309,16 @@ fn append_annotations_to_page(
                 annots.push(Object::Reference(id));
             }
         }
-    } else {
-        if let Ok(Object::Dictionary(page_dict)) = doc.get_object_mut(page_id) {
-            if page_dict.has(b"Annots") {
-                if let Ok(Object::Array(annots)) = page_dict.get_mut(b"Annots") {
-                    for id in annot_ids {
-                        annots.push(Object::Reference(id));
-                    }
+    } else if let Ok(Object::Dictionary(page_dict)) = doc.get_object_mut(page_id) {
+        if page_dict.has(b"Annots") {
+            if let Ok(Object::Array(annots)) = page_dict.get_mut(b"Annots") {
+                for id in annot_ids {
+                    annots.push(Object::Reference(id));
                 }
-            } else {
-                let annots_array = annot_ids.into_iter().map(Object::Reference).collect();
-                page_dict.set("Annots", Object::Array(annots_array));
             }
+        } else {
+            let annots_array = annot_ids.into_iter().map(Object::Reference).collect();
+            page_dict.set("Annots", Object::Array(annots_array));
         }
     }
     Ok(())

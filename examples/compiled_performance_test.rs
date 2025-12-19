@@ -1,8 +1,8 @@
-use petty::core::style::dimension::{Dimension, Margins};
-use petty::core::style::flex::JustifyContent;
-use petty::core::style::font::FontWeight;
-use petty::core::style::stylesheet::PageLayout;
-use petty::core::style::text::TextAlign;
+use petty::style::dimension::{Dimension, Margins};
+use petty::style::flex::JustifyContent;
+use petty::style::font::FontWeight;
+use petty::style::stylesheet::PageLayout;
+use petty::style::text::TextAlign;
 use petty::templating::builders::*;
 use petty::templating::{h1, h2, h3, p, subtitle, Template};
 use petty::{PdfBackend, PipelineBuilder, PipelineError};
@@ -12,7 +12,7 @@ use rand::SeedableRng;
 use serde_json::{json, Value};
 use std::env;
 use std::time::Instant;
-use petty::core::base::color::Color;
+use petty::types_base::color::Color;
 
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]

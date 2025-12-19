@@ -1,8 +1,8 @@
 // src/pipeline/worker.rs
 
-use petty_core::core::idf::{IRNode, InlineNode, SharedData};
-use petty_core::core::layout::{IndexEntry, LayoutEngine, LayoutStore};
-use petty_core::core::style::stylesheet::Stylesheet;
+use petty_core::idf::{IRNode, InlineNode, SharedData};
+use petty_core::layout::{IndexEntry, LayoutEngine, LayoutStore};
+use petty_core::style_types::stylesheet::Stylesheet;
 use petty_core::error::PipelineError;
 use log::{debug, info, trace};
 use petty_core::traits::ResourceProvider;
@@ -145,15 +145,14 @@ fn ensure_heading_ids(nodes: &mut [IRNode]) {
 fn collect_toc_entries(node: &IRNode, entries: &mut Vec<TocEntry>) {
     match node {
         IRNode::Heading { meta, level, children, .. } => {
-            if *level > 0 {
-                if let Some(id) = &meta.id {
+            if *level > 0
+                && let Some(id) = &meta.id {
                     entries.push(TocEntry {
                         level: *level,
                         text: extract_text_from_inlines(children),
                         target_id: id.clone(),
                     });
                 }
-            }
         }
         IRNode::Root(children)
         | IRNode::Block { children, .. }

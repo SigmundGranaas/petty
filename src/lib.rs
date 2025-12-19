@@ -22,21 +22,60 @@
 //! pipeline.generate_to_file(vec![data], "output.pdf")?;
 //! ```
 
+// Re-export foundation crates
+pub use petty_types as types_base;
+pub use petty_style as style;
+pub use petty_idf as idf;
+pub use petty_traits as traits;
+
+// Re-export algorithm crates
+pub use petty_xpath1 as xpath;
+pub use petty_layout as layout;
+pub use petty_jpath as jpath;
+
+// Re-export parser crates
+pub use petty_json_template as json_template;
+pub use petty_xslt as xslt;
+
+// Re-export render crates
+pub use petty_render_core as render_core;
+pub use petty_render_lopdf as render_lopdf;
+pub use petty_pdf_composer as pdf_composer;
+
 // Re-export core modules from petty-core
+pub use petty_core as core_internal;
 pub use petty_core::core;
 pub use petty_core::parser;
-pub use petty_core::render;
 pub use petty_core::error;
 pub use petty_core::types;
 pub use petty_core::PipelineError;
 pub use petty_core::{LaidOutSequence, TocEntry, ApiIndexEntry};
 
-// Platform-specific modules (remain in this crate)
-pub mod executor;
+// Convenience re-exports from foundation crates
+pub use types_base::{Color, Size, Rect, BoxConstraints};
+pub use style::{FontWeight, FontStyle, ElementStyle, Dimension};
+pub use idf::{IRNode, InlineNode};
+pub use traits::{FontProvider, ResourceProvider, Executor};
+
+// Re-export platform crates
+pub use petty_executor as executor;
+pub use petty_source as source;
+pub use petty_resource as resource;
+pub use petty_template_dsl as templating;
+
+// Pipeline module (orchestration layer - stays in main crate)
 mod pipeline;
-pub mod resource;
-pub mod source;
-pub mod templating;
 
 // Public API
 pub use crate::pipeline::{PdfBackend, PipelineBuilder, GenerationMode};
+
+// Helper trait for error conversion
+pub(crate) trait MapRenderError<T> {
+    fn map_render_err(self) -> Result<T, PipelineError>;
+}
+
+impl<T> MapRenderError<T> for Result<T, render_core::RenderError> {
+    fn map_render_err(self) -> Result<T, PipelineError> {
+        self.map_err(|e| PipelineError::Render(e.to_string()))
+    }
+}

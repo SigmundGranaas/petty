@@ -1,4 +1,4 @@
-use petty_core::core::layout::LayoutEngine;
+use petty_core::layout::LayoutEngine;
 use petty_core::error::PipelineError;
 use crate::pipeline::api::{Anchor, Document, Heading, Hyperlink, PreparedDataSources};
 use crate::pipeline::concurrency::{
@@ -6,13 +6,14 @@ use crate::pipeline::concurrency::{
 };
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::provider::DataSourceProvider;
-use petty_core::render::lopdf_renderer::LopdfRenderer;
-use petty_core::render::renderer::Pass1Result;
-use petty_core::render::DocumentRenderer;
+use petty_render_lopdf::LopdfRenderer;
+use petty_render_core::Pass1Result;
+use petty_render_core::DocumentRenderer;
+use crate::MapRenderError;
 use chrono::Utc;
 use log::info;
 use serde_json::Value;
-use std::io::{BufWriter, Cursor, Seek, SeekFrom};
+use std::io::{BufWriter, Seek, SeekFrom};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::task;
@@ -22,9 +23,9 @@ use tokio::task;
 pub struct MetadataGeneratingProvider;
 
 impl DataSourceProvider for MetadataGeneratingProvider {
-    fn provide<'a, I>(
+    fn provide<I>(
         &self,
-        context: &'a PipelineContext,
+        context: &PipelineContext,
         data_iterator: I,
     ) -> Result<PreparedDataSources, PipelineError>
     where
@@ -77,8 +78,8 @@ impl DataSourceProvider for MetadataGeneratingProvider {
             let final_stylesheet = context.compiled_template.stylesheet();
 
             // Pass Arc<Stylesheet> correctly
-            let mut renderer = LopdfRenderer::new(final_layout_engine, final_stylesheet.clone())?;
-            renderer.begin_document(buf_writer)?;
+            let mut renderer = LopdfRenderer::new(final_layout_engine, final_stylesheet.clone()).map_render_err()?;
+            renderer.begin_document(buf_writer).map_render_err()?;
 
             let (page_width, page_height) =
                 renderer.stylesheet.get_default_page_layout().size.dimensions_pt();
@@ -93,7 +94,7 @@ impl DataSourceProvider for MetadataGeneratingProvider {
             )?;
             pass1_result = p1_result;
 
-            Box::new(renderer).finish(page_ids)?
+            Box::new(renderer).finish(page_ids).map_render_err()?
         };
 
         info!(
@@ -175,12 +176,13 @@ fn build_document_from_pass1_result(pass1_result: Pass1Result) -> Document {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use petty_core::core::layout::fonts::SharedFontLibrary;
-    use petty_core::parser::json::processor::JsonParser;
+    use petty_core::layout::fonts::SharedFontLibrary;
+    use petty_json_template::JsonParser;
+    use crate::pipeline::adapters::TemplateParserAdapter;
     use petty_core::parser::processor::TemplateParser;
     use crate::pipeline::api::IndexEntry;
     use crate::pipeline::context::PipelineContext;
-    use petty_core::render::renderer::{HyperlinkLocation, ResolvedAnchor};
+    use petty_render_core::{HyperlinkLocation, ResolvedAnchor};
     use crate::pipeline::worker::TocEntry;
     use serde_json::json;
     use std::collections::HashMap;
@@ -251,7 +253,7 @@ mod tests {
             ]}
         });
         let template_str = serde_json::to_string(&template_json).unwrap();
-        let parser = JsonParser;
+        let parser = TemplateParserAdapter::new(JsonParser);
         let features = parser.parse(&template_str, PathBuf::new()).unwrap();
         let library = SharedFontLibrary::new();
         library.load_fallback_font();
@@ -260,8 +262,7 @@ mod tests {
             compiled_template: features.main_template,
             role_templates: Arc::new(features.role_templates),
             font_library: Arc::new(library),
-            resource_provider: Arc::new(crate::resource::InMemoryResourceProvider::new()),
-            executor: crate::executor::ExecutorImpl::Sync(crate::executor::SyncExecutor::new()),
+            resource_provider: Arc::new(petty_resource::InMemoryResourceProvider::new()),
             cache_config: Default::default(),
         };
 

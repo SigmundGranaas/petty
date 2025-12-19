@@ -1,4 +1,3 @@
-// FILE: examples/cv.rs
 use clap::Parser;
 use petty::{PdfBackend, PipelineBuilder, PipelineError};
 use serde_json::{from_str, Value};
