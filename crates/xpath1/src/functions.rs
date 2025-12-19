@@ -601,17 +601,16 @@ fn func_lang<'a, 'd, N: DataSourceNode<'a>>(
 
     while let Some(node) = current {
         for attr in node.attributes() {
-            if let Some(name) = attr.name()
-                && name.prefix == Some("xml")
-                && name.local_part == "lang"
-            {
-                let node_lang = attr.string_value().to_lowercase();
-                // Check for exact match or subcode match (e.g., "en" matches "en-GB")
-                if node_lang == test_lang || node_lang.starts_with(&format!("{}-", test_lang)) {
-                    return Ok(XPathValue::Boolean(true));
+            if let Some(name) = attr.name() {
+                if name.prefix == Some("xml") && name.local_part == "lang" {
+                    let node_lang = attr.string_value().to_lowercase();
+                    // Check for exact match or subcode match (e.g., "en" matches "en-GB")
+                    if node_lang == test_lang || node_lang.starts_with(&format!("{}-", test_lang)) {
+                        return Ok(XPathValue::Boolean(true));
+                    }
+                    // If we found an xml:lang, we don't need to check higher up.
+                    return Ok(XPathValue::Boolean(false));
                 }
-                // If we found an xml:lang, we don't need to check higher up.
-                return Ok(XPathValue::Boolean(false));
             }
         }
         current = node.parent();
