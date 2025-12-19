@@ -198,7 +198,7 @@ impl SharedFontLibrary {
                 let style = match face_info.style {
                     fontdb::Style::Normal => FontStyle::Normal,
                     fontdb::Style::Italic => FontStyle::Italic,
-                    fontdb::Style::Oblique => FontStyle::Italic,  // Treat oblique as italic
+                    fontdb::Style::Oblique => FontStyle::Italic,
                 };
 
                 log::debug!("Font metadata from fontdb: family='{}', ps_name='{}', weight={:?}, style={:?}",
