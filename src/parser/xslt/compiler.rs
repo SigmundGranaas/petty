@@ -1,5 +1,3 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/compiler.rs
-// FILE: src/parser/xslt/compiler.rs
 //! Defines the CompilerBuilder, which constructs a `CompiledStylesheet` by listening to a parser driver.
 use super::ast::{
     CompiledStylesheet, KeyDefinition, PreparsedStyles, PreparsedTemplate, When, XsltInstruction,
@@ -9,6 +7,7 @@ use super::pattern;
 use super::util::{get_attr_owned_optional, get_attr_owned_required, get_line_col_from_pos, OwnedAttributes};
 use super::xpath;
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
+use crate::parser::processor::TemplateFlags;
 use crate::parser::style;
 use crate::parser::xslt::ast::{NamedTemplate, TemplateRule};
 use crate::parser::ParseError;
@@ -43,6 +42,10 @@ pub(crate) enum BuilderState {
     NamedTemplate {
         name: String,
         params: Vec<super::ast::Param>,
+    },
+    RoleTemplate {
+        role_name: String,
+        attrs: OwnedAttributes,
     },
     AttributeSet {
         name: String,
@@ -84,9 +87,11 @@ pub struct CompilerBuilder {
     pub(crate) stylesheet: Stylesheet,
     pub(crate) template_rules: HashMap<Option<String>, Vec<TemplateRule>>,
     pub(crate) named_templates: HashMap<String, Arc<NamedTemplate>>,
+    pub(crate) role_template_modes: HashMap<String, String>,
     pub(crate) keys: Vec<KeyDefinition>,
     pub(crate) instruction_stack: Vec<Vec<XsltInstruction>>,
     pub(crate) state_stack: Vec<BuilderState>,
+    pub(crate) features: TemplateFlags,
 }
 
 impl CompilerBuilder {
@@ -95,9 +100,11 @@ impl CompilerBuilder {
             stylesheet: Stylesheet::default(),
             template_rules: HashMap::new(),
             named_templates: HashMap::new(),
+            role_template_modes: HashMap::new(),
             keys: Vec::new(),
             instruction_stack: vec![],
             state_stack: vec![BuilderState::Stylesheet],
+            features: TemplateFlags::default(),
         }
     }
 
@@ -112,17 +119,53 @@ impl CompilerBuilder {
         }
 
         Ok(CompiledStylesheet {
-            stylesheet: self.stylesheet,
+            stylesheet: Arc::new(self.stylesheet),
             template_rules: self.template_rules,
             named_templates: self.named_templates,
             keys: self.keys,
             resource_base_path,
+            role_template_modes: self.role_template_modes,
+            features: self.features,
         })
+    }
+
+    pub(crate) fn parse_xpath_and_detect_features(&mut self, expr_str: &str) -> Result<xpath::Expression, ParseError> {
+        let expr = xpath::parse_expression(expr_str)?;
+        if self.ast_contains_function(&expr, "petty:index") {
+            self.features.uses_index_function = true;
+        }
+        Ok(expr)
+    }
+
+    fn ast_contains_function(&self, expr: &xpath::Expression, name: &str) -> bool {
+        match expr {
+            xpath::Expression::FunctionCall { name: func_name, args, .. } => {
+                if func_name == name {
+                    return true;
+                }
+                args.iter().any(|arg| self.ast_contains_function(arg, name))
+            }
+            xpath::Expression::BinaryOp { left, right, .. } => {
+                self.ast_contains_function(left, name) || self.ast_contains_function(right, name)
+            }
+            xpath::Expression::UnaryOp { expr, .. } => {
+                self.ast_contains_function(expr, name)
+            }
+            xpath::Expression::LocationPath(lp) => {
+                let check_start = if let Some(sp) = &lp.start_point {
+                    self.ast_contains_function(sp, name)
+                } else { false };
+                check_start || lp.steps.iter().any(|s| s.predicates.iter().any(|p| self.ast_contains_function(p, name)))
+            }
+            _ => false
+        }
     }
 
     pub(crate) fn resolve_styles(&self, attrs: &OwnedAttributes, location: crate::parser::Location) -> Result<PreparsedStyles, ParseError> {
         let mut style_sets = Vec::new();
         let mut style_override = ElementStyle::default();
+
+        let id = get_attr_owned_optional(attrs, b"id")?;
 
         // 1. Process `use-attribute-sets`
         if let Some(sets_str) = get_attr_owned_optional(attrs, b"use-attribute-sets")? {
@@ -150,6 +193,7 @@ impl CompilerBuilder {
         }
 
         Ok(PreparsedStyles {
+            id,
             style_sets,
             style_override: if style_override == ElementStyle::default() {
                 None
@@ -173,7 +217,7 @@ impl CompilerBuilder {
         let key_def = KeyDefinition {
             name,
             pattern: pattern::parse(&match_str)?,
-            use_expr: xpath::parse_expression(&use_str)?,
+            use_expr: self.parse_xpath_and_detect_features(&use_str)?,
         };
         self.keys.push(key_def);
         Ok(())
@@ -200,7 +244,7 @@ impl StylesheetBuilder for CompilerBuilder {
             b"xsl:text" => self.handle_text_start(),
             b"fo:table" | b"table" => self.handle_table_start(attrs),
             b"columns" => self.handle_table_columns_start(),
-            b"header" | b"fo:table-header" => self.handle_table_header_start(),
+            b"header" | b"fo:table-header" | b"thead" => self.handle_table_header_start(),
             b"xsl:call-template" => self.handle_call_template_start(attrs, pos, source)?,
             b"xsl:choose" => self.handle_choose_start(),
             b"xsl:when" => self.handle_when_start(attrs, pos, source)?,
@@ -235,7 +279,15 @@ impl StylesheetBuilder for CompilerBuilder {
             b"xsl:variable" => self.handle_variable(attrs, pos, source)?,
             b"xsl:apply-templates" => self.handle_apply_templates_empty(attrs)?,
             b"page-break" => self.handle_page_break(attrs)?,
+            b"toc" | b"fo:table-of-contents" => {
+                self.features.has_table_of_contents = true;
+                // This tag is now just a feature marker and does not produce an instruction.
+            }
             b"column" | b"fo:table-column" => self.handle_table_column(attrs)?,
+            b"page-number-placeholder" => {
+                self.features.has_page_number_placeholders = true;
+                // This tag doesn't produce an instruction itself, it's just a marker.
+            }
             _ => {
                 // Handle literal result elements which are not XSLT instructions
                 let instr = self.handle_empty_literal_result_element(e, attrs, location)?;
@@ -263,6 +315,9 @@ impl StylesheetBuilder for CompilerBuilder {
             b"xsl:if" => self.handle_if_end(current_state, body, pos, source)?,
             b"xsl:copy" => self.handle_copy_end(current_state, body, pos, source)?,
             b"fo:table" | b"table" => self.handle_table_end(current_state, body, pos, source)?,
+            b"columns" | b"header" | b"fo:table-header" | b"thead" => {
+                // These are handled by handle_table_end popping them from the state stack
+            }
             b"xsl:call-template" => self.handle_call_template_end(current_state)?,
             b"xsl:when" => self.handle_when_end(current_state, body, pos, source)?,
             b"xsl:otherwise" => self.handle_otherwise_end(current_state, body, pos, source)?,
@@ -270,6 +325,9 @@ impl StylesheetBuilder for CompilerBuilder {
             b"xsl:for-each" => self.handle_for_each_end(current_state, body, pos, source)?,
             // An empty xsl:apply-templates is handled in empty_element. This handles a non-empty one.
             b"xsl:apply-templates" => { /* This is now handled by the generic sortable logic */ }
+            b"page-number-placeholder" => {
+                self.features.has_page_number_placeholders = true;
+            }
             _ => self.handle_literal_result_element_end(e, current_state, body, pos, source)?,
         }
         Ok(())

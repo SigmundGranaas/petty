@@ -2,6 +2,7 @@
 // FILE: src/parser/xslt/ast.rs
 use crate::core::style::dimension::Dimension;
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
+use crate::parser::processor::TemplateFlags;
 use crate::parser::xslt::xpath::Expression;
 use crate::parser::xslt::pattern::Pattern;
 use std::collections::HashMap;
@@ -15,6 +16,7 @@ pub struct PreparsedTemplate(pub Vec<XsltInstruction>);
 /// A struct to hold pre-resolved styles for a single instruction.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct PreparsedStyles {
+    pub id: Option<String>,
     pub style_sets: Vec<Arc<ElementStyle>>,
     pub style_override: Option<ElementStyle>,
 }
@@ -57,11 +59,15 @@ pub struct KeyDefinition {
 
 #[derive(Debug, Clone)]
 pub struct CompiledStylesheet {
-    pub stylesheet: Stylesheet,
+    pub stylesheet: Arc<Stylesheet>,
     pub template_rules: HashMap<Option<String>, Vec<TemplateRule>>,
     pub named_templates: HashMap<String, Arc<NamedTemplate>>,
     pub keys: Vec<KeyDefinition>,
     pub resource_base_path: PathBuf,
+    /// Maps a role name (e.g., "page-header") to a unique, generated mode name.
+    pub role_template_modes: HashMap<String, String>,
+    /// Flags for features detected across the entire stylesheet.
+    pub features: TemplateFlags,
 }
 
 /// Represents a compiled `<xsl:when>` block.

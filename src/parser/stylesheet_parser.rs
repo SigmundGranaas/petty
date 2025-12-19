@@ -1,9 +1,10 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/stylesheet_parser.rs
 //! This module is deprecated as of the XSLT compiler refactoring.
 //! Its functionality for parsing stylesheet definitions has been merged into the new
 //! single-pass parser/builder mechanism in `parser::xslt::compiler` and `parser::xslt::parser`.
 //! This file is retained to prevent build failures in modules that may still reference it,
 //! but it should be removed once all dependencies are updated.
+
+#![allow(deprecated)]
 
 use crate::core::style::stylesheet::Stylesheet;
 use crate::parser::ParseError;

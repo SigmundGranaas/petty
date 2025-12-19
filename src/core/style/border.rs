@@ -1,9 +1,10 @@
-use super::color::Color;
+use crate::core::base::color::Color;
 use crate::parser::ParseError;
 use serde::{Deserialize, Serialize};
+use std::hash::{Hash, Hasher};
 use std::str::FromStr;
 
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, Hash)]
 #[serde(rename_all = "camelCase")]
 pub enum BorderStyle {
     None,
@@ -33,6 +34,16 @@ pub struct Border {
     pub width: f32,
     pub style: BorderStyle,
     pub color: Color,
+}
+
+impl Eq for Border {}
+
+impl Hash for Border {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.width.to_bits().hash(state);
+        self.style.hash(state);
+        self.color.hash(state);
+    }
 }
 
 impl From<(f32, &str, Color)> for Border {

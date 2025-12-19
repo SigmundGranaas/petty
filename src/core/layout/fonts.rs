@@ -1,207 +1,186 @@
-use crate::core::layout::style::ComputedStyle;
+use crate::core::layout::ComputedStyle;
 use crate::core::style::font::{FontStyle, FontWeight};
-use fontdb::{Database, ID, Query, Style, Weight, Family};
-use fontdue::{Font, FontSettings};
-use lru::LruCache;
-use std::num::NonZeroUsize;
+use std::collections::HashMap;
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, RwLock};
 
-const FONT_CACHE_SIZE: usize = 20;
-
-/// Manages loading, querying, and caching fonts from various sources using a font database.
-#[derive(Clone)]
-pub struct FontManager {
-    db: Arc<Database>,
-    // Cache for parsed font objects, keyed by their ID in the database.
-    font_cache: Arc<Mutex<LruCache<ID, Arc<Font>>>>,
+/// A thread-safe handle to font data.
+pub struct FontInstance {
+    pub data: Arc<Vec<u8>>,
 }
 
-impl FontManager {
-    /// Creates a new, empty `FontManager`.
+impl std::fmt::Debug for FontInstance {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FontInstance")
+            .field("data_len", &self.data.len())
+            .finish()
+    }
+}
+
+impl FontInstance {
+    pub fn new(data: Arc<Vec<u8>>) -> Self {
+        Self { data }
+    }
+
+    /// Creates a lightweight Face view over the font data.
+    /// This is cheap (parsing header) and avoids self-referential struct issues.
+    pub fn as_face(&self) -> Option<rustybuzz::Face<'_>> {
+        rustybuzz::Face::from_slice(&self.data, 0)
+    }
+}
+
+pub type FontData = Arc<FontInstance>;
+
+/// Holds configuration and raw data to initialize font systems.
+#[derive(Clone)]
+pub struct SharedFontLibrary {
+    pub db: Arc<RwLock<fontdb::Database>>,
+    /// Cache of loaded font binaries, keyed by fontdb::ID.
+    font_data_cache: Arc<RwLock<HashMap<fontdb::ID, FontData>>>,
+}
+
+impl SharedFontLibrary {
     pub fn new() -> Self {
         Self {
-            db: Arc::new(Database::new()),
-            font_cache: Arc::new(Mutex::new(LruCache::new(
-                NonZeroUsize::new(FONT_CACHE_SIZE).unwrap(),
-            ))),
+            db: Arc::new(RwLock::new(fontdb::Database::new())),
+            font_data_cache: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
-    /// Provides access to the underlying font database for renderers.
-    pub fn db(&self) -> &Database {
-        &self.db
-    }
-
-    /// Loads the built-in Helvetica fonts and sets it as the ultimate fallback.
-    pub fn load_fallback_font(&mut self) {
-        let db: &mut Database = Arc::make_mut(&mut self.db);
-        // Regular
-        db.load_font_data(include_bytes!("../../../assets/fonts/Helvetica.ttf").to_vec());
-        // Bold
-        db.load_font_data(include_bytes!("../../../assets/fonts/helvetica-bold.ttf").to_vec());
-    }
-
-    /// Scans a directory for fonts and adds them to the database.
-    pub fn load_fonts_from_dir(&mut self, path: &Path) {
-        log::info!("Scanning for fonts in '{}'...", path.display());
-        let db: &mut Database = Arc::make_mut(&mut self.db);
-        db.load_fonts_dir(path);
-    }
-
-    /// Loads system-installed fonts into the database.
-    pub fn load_system_fonts(&mut self) {
-        log::info!("Loading system fonts...");
-        let db: &mut Database = Arc::make_mut(&mut self.db);
-        db.load_system_fonts();
-        log::info!("Finished loading system fonts. Total font faces: {}", db.len());
-    }
-
-    /// Gets a parsed `fontdue::Font` object by its database ID, using a cache.
-    fn get_font(&self, id: ID) -> Option<Arc<Font>> {
-        let mut cache = self.font_cache.lock().unwrap();
-        if let Some(font) = cache.get(&id) {
-            return Some(Arc::clone(font));
+    pub fn with_system_fonts(self, enable: bool) -> Self {
+        if enable {
+            // gracefully ignore lock poisoning
+            if let Ok(mut db) = self.db.write() {
+                db.load_system_fonts();
+            }
         }
+        self
+    }
 
-        // Font not in cache, parse it from the database.
-        let face = self.db.face(id)?;
-        let face_index = face.index;
-        let post_script_name = &face.post_script_name;
-
-        let parsed_font = self.db.with_face_data(id, |data, _| {
-            Font::from_bytes(
-                data,
-                FontSettings {
-                    collection_index: face_index,
-                    ..Default::default()
-                },
-            )
-        });
-
-        match parsed_font {
-            Some(Ok(font)) => {
-                let font_arc = Arc::new(font);
-                cache.put(id, Arc::clone(&font_arc));
-                Some(font_arc)
-            }
-            Some(Err(e)) => {
-                log::error!(
-                    "Failed to parse font (ID: {:?}, PostScript: {}): {}",
-                    id,
-                    post_script_name,
-                    e
-                );
-                None
-            }
-            None => {
-                log::error!(
-                    "Could not read font data for font (ID: {:?}, PostScript: {})",
-                    id,
-                    post_script_name
-                );
-                None
-            }
+    pub fn add_fallback_font(&self, data: Vec<u8>) {
+        if let Ok(mut db) = self.db.write() {
+            db.load_font_data(data);
         }
     }
 
-    /// Finds the best font matching the style and measures text with it.
-    pub fn measure_text(&self, text: &str, style: &Arc<ComputedStyle>) -> f32 {
-        let query = Query {
-            families: &[Family::Name(&style.font_family)],
-            weight: map_font_weight(style.font_weight.clone()),
-            style: map_font_style(style.font_style.clone()),
-            ..Default::default()
+    pub fn add_font_dir<P: AsRef<Path>>(&self, path: P) {
+        if let Ok(mut db) = self.db.write() {
+            db.load_fonts_dir(path);
+        }
+    }
+
+    pub fn load_fallback_font(&self) {
+        if let Ok(regular) = std::fs::read("assets/fonts/Helvetica.ttf") {
+            self.add_fallback_font(regular);
+        }
+        if let Ok(bold) = std::fs::read("assets/fonts/helvetica-bold.ttf") {
+            self.add_fallback_font(bold);
+        }
+    }
+
+    /// Resolves the raw font data for a given style.
+    pub fn resolve_font_data(&self, style: &ComputedStyle) -> Option<FontData> {
+        let family = style.text.font_family.as_str();
+        let weight = map_weight(style.text.font_weight.clone());
+        let font_style = map_style(style.text.font_style.clone());
+
+        let query = fontdb::Query {
+            families: &[fontdb::Family::Name(family), fontdb::Family::SansSerif],
+            weight,
+            stretch: fontdb::Stretch::Normal,
+            style: font_style,
         };
 
-        // `db.query` performs the matching and fallback logic.
-        let font_id = self.db.query(&query).unwrap_or_else(|| {
-            log::warn!(
-                "Font query failed for family '{}' (weight {:?}, style {:?}). Using default fallback.",
-                style.font_family, style.font_weight, style.font_style
-            );
-            self.db
-                .query(&Query {
-                    families: &[Family::Name("Helvetica")],
-                    ..Default::default()
+        let id = {
+            let db = self.db.read().ok()?;
+            db.query(&query).or_else(|| {
+                db.query(&fontdb::Query {
+                    families: &[fontdb::Family::SansSerif],
+                    weight,
+                    stretch: fontdb::Stretch::Normal,
+                    style: font_style,
                 })
-                .expect("Critical error: Default fallback font 'Helvetica' is missing!")
-        });
+            })?
+        };
 
-        let font = self
-            .get_font(font_id)
-            .expect("Failed to load font from database ID.");
-
-        let mut total_width = 0.0;
-        for character in text.chars() {
-            let metrics = font.metrics(character, style.font_size);
-            total_width += metrics.advance_width;
+        // Fast path: check data cache
+        {
+            if let Ok(cache) = self.font_data_cache.read() {
+                if let Some(data) = cache.get(&id) {
+                    return Some(data.clone());
+                }
+            }
         }
-        total_width
+
+        // Slow path: load data
+        // We need to re-acquire the DB lock. If it's poisoned now, we abort.
+        let db = self.db.read().ok()?;
+
+        if let Some(face_info) = db.face(id) {
+            match &face_info.source {
+                fontdb::Source::Binary(data) => {
+                    let vec_data = data.as_ref().as_ref().to_vec();
+                    let data_arc = Arc::new(vec_data);
+                    let instance = Arc::new(FontInstance::new(data_arc));
+
+                    if let Ok(mut cache) = self.font_data_cache.write() {
+                        cache.insert(id, instance.clone());
+                    }
+                    Some(instance)
+                }
+                fontdb::Source::File(path) => {
+                    if let Ok(data) = std::fs::read(path) {
+                        let data_arc = Arc::new(data);
+                        let instance = Arc::new(FontInstance::new(data_arc));
+
+                        if let Ok(mut cache) = self.font_data_cache.write() {
+                            cache.insert(id, instance.clone());
+                        }
+                        Some(instance)
+                    } else {
+                        None
+                    }
+                }
+                _ => None,
+            }
+        } else {
+            None
+        }
     }
 }
 
-/// Maps our internal `FontWeight` enum to the `fontdb::Weight` enum.
-fn map_font_weight(weight: FontWeight) -> Weight {
-    match weight {
-        FontWeight::Thin => Weight::THIN,
-        FontWeight::Light => Weight::LIGHT,
-        FontWeight::Regular => Weight::NORMAL,
-        FontWeight::Medium => Weight::MEDIUM,
-        FontWeight::Bold => Weight::BOLD,
-        FontWeight::Black => Weight::BLACK,
-        FontWeight::Numeric(val) => Weight(val),
+impl Default for SharedFontLibrary {
+    fn default() -> Self {
+        let lib = Self::new();
+        lib.load_fallback_font();
+        lib
     }
 }
 
-/// Maps our internal `FontStyle` enum to the `fontdb::Style` enum.
-fn map_font_style(style: FontStyle) -> Style {
-    match style {
-        FontStyle::Normal => Style::Normal,
-        FontStyle::Italic => Style::Italic,
-        FontStyle::Oblique => Style::Oblique,
+pub struct LocalFontContext {}
+
+impl LocalFontContext {
+    pub fn new(_library: &SharedFontLibrary) -> Self {
+        LocalFontContext {}
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::layout::style::ComputedStyle;
-    use crate::core::style::font::FontWeight;
-    use std::sync::Arc;
+fn map_weight(w: FontWeight) -> fontdb::Weight {
+    match w {
+        FontWeight::Thin => fontdb::Weight::THIN,
+        FontWeight::Light => fontdb::Weight::LIGHT,
+        FontWeight::Regular => fontdb::Weight::NORMAL,
+        FontWeight::Medium => fontdb::Weight::MEDIUM,
+        FontWeight::Bold => fontdb::Weight::BOLD,
+        FontWeight::Black => fontdb::Weight::BLACK,
+        FontWeight::Numeric(n) => fontdb::Weight(n),
+    }
+}
 
-    #[test]
-    fn test_bold_font_selection_and_fallback() {
-        let mut manager = FontManager::new();
-        let helvetica_reg_data = include_bytes!("../../../assets/fonts/Helvetica.ttf").to_vec();
-        let helvetica_bold_data =
-            include_bytes!("../../../assets/fonts/helvetica-bold.ttf").to_vec();
-
-        let db = Arc::make_mut(&mut manager.db);
-        db.load_font_data(helvetica_reg_data);
-        db.load_font_data(helvetica_bold_data);
-
-        let text = "Bold Text";
-        let mut regular_style = ComputedStyle::default();
-        regular_style.font_family = Arc::from("Helvetica".to_string());
-
-        let mut bold_style = regular_style.clone();
-        bold_style.font_weight = FontWeight::Bold;
-
-        let regular_width = manager.measure_text(text, &Arc::new(regular_style.clone()));
-        let bold_width = manager.measure_text(text, &Arc::new(bold_style));
-        assert!(
-            bold_width > regular_width,
-            "Bold text should be wider than regular text"
-        );
-
-        let mut missing_font_style = ComputedStyle::default();
-        missing_font_style.font_family = "NonExistentFont123".to_string().into();
-
-        let fallback_width = manager.measure_text(text, &Arc::new(missing_font_style));
-        assert_eq!(
-            fallback_width, regular_width,
-            "Should fall back to regular Helvetica width"
-        );
+fn map_style(s: FontStyle) -> fontdb::Style {
+    match s {
+        FontStyle::Normal => fontdb::Style::Normal,
+        FontStyle::Italic => fontdb::Style::Italic,
+        FontStyle::Oblique => fontdb::Style::Oblique,
     }
 }

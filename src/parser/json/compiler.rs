@@ -1,4 +1,3 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/json/compiler.rs
 //! Implements the "Compilation" phase for the JSON parser.
 //! It transforms the Serde-parsed AST into a validated, executable instruction set.
 
@@ -75,16 +74,21 @@ pub enum JsonInstruction {
     Text { content: CompiledString },
     StyledSpan { styles: CompiledStyles, children: Vec<JsonInstruction> },
     Hyperlink { styles: CompiledStyles, href: CompiledString, children: Vec<JsonInstruction> },
+    PageReference { target_id: String },
     InlineImage { styles: CompiledStyles, src: CompiledString },
     LineBreak,
     PageBreak { master_name: Option<String> },
     RenderTemplate { name: String },
     ForEach { select: Expression, body: Vec<JsonInstruction> },
     If { test: Expression, then_branch: Vec<JsonInstruction>, else_branch: Vec<JsonInstruction> },
+    Heading { level: u8, styles: CompiledStyles, children: Vec<JsonInstruction> },
+    TableOfContents { styles: CompiledStyles },
+    IndexMarker { term: CompiledString },
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct CompiledStyles {
+    pub id: Option<String>,
     pub static_styles: Vec<Arc<ElementStyle>>,
     pub dynamic_style_templates: Vec<CompiledString>,
     pub style_override: Option<ElementStyle>,
@@ -145,17 +149,21 @@ impl<'a> Compiler<'a> {
 
     fn compile_static_node(&self, node: &JsonNode) -> Result<JsonInstruction, ParseError> {
         match node {
-            JsonNode::Block(c) => Ok(JsonInstruction::Block { styles: self.compile_styles(&c.style_names, &c.style_override)?, children: self.compile_children(&c.children)? }),
-            JsonNode::FlexContainer(c) => Ok(JsonInstruction::FlexContainer { styles: self.compile_styles(&c.style_names, &c.style_override)?, children: self.compile_children(&c.children)? }),
-            JsonNode::List(c) => Ok(JsonInstruction::List { styles: self.compile_styles(&c.style_names, &c.style_override)?, children: self.compile_children(&c.children)? }),
-            JsonNode::ListItem(c) => Ok(JsonInstruction::ListItem { styles: self.compile_styles(&c.style_names, &c.style_override)?, children: self.compile_children(&c.children)? }),
-            JsonNode::Paragraph(p) => Ok(JsonInstruction::Paragraph { styles: self.compile_styles(&p.style_names, &p.style_override)?, children: self.compile_children(&p.children)? }),
-            JsonNode::Image(i) => Ok(JsonInstruction::Image { styles: self.compile_styles(&i.style_names, &i.style_override)?, src: parse_expression_string(&i.src)? }),
+            JsonNode::Block(c) => Ok(JsonInstruction::Block { styles: self.compile_styles(&c.style_names, &c.style_override, c.id.clone())?, children: self.compile_children(&c.children)? }),
+            JsonNode::FlexContainer(c) => Ok(JsonInstruction::FlexContainer { styles: self.compile_styles(&c.style_names, &c.style_override, c.id.clone())?, children: self.compile_children(&c.children)? }),
+            JsonNode::List(c) => Ok(JsonInstruction::List { styles: self.compile_styles(&c.style_names, &c.style_override, c.id.clone())?, children: self.compile_children(&c.children)? }),
+            JsonNode::ListItem(c) => Ok(JsonInstruction::ListItem { styles: self.compile_styles(&c.style_names, &c.style_override, c.id.clone())?, children: self.compile_children(&c.children)? }),
+            JsonNode::Paragraph(p) => Ok(JsonInstruction::Paragraph { styles: self.compile_styles(&p.style_names, &p.style_override, p.id.clone())?, children: self.compile_children(&p.children)? }),
+            JsonNode::Image(i) => Ok(JsonInstruction::Image { styles: self.compile_styles(&i.style_names, &i.style_override, i.id.clone())?, src: parse_expression_string(&i.src)? }),
             JsonNode::Table(t) => self.compile_table_node(t),
+            JsonNode::Heading(h) => Ok(JsonInstruction::Heading { level: h.level, styles: self.compile_styles(&h.style_names, &h.style_override, h.id.clone())?, children: self.compile_children(&h.children)? }),
+            JsonNode::TableOfContents(c) => Ok(JsonInstruction::TableOfContents { styles: self.compile_styles(&c.style_names, &c.style_override, c.id.clone())? }),
+            JsonNode::IndexMarker { term } => Ok(JsonInstruction::IndexMarker { term: parse_expression_string(term)? }),
             JsonNode::Text { content } => Ok(JsonInstruction::Text { content: parse_expression_string(content)? }),
-            JsonNode::StyledSpan(c) => Ok(JsonInstruction::StyledSpan { styles: self.compile_styles(&c.style_names, &c.style_override)?, children: self.compile_children(&c.children)? }),
-            JsonNode::Hyperlink(h) => Ok(JsonInstruction::Hyperlink { styles: self.compile_styles(&h.style_names, &h.style_override)?, href: parse_expression_string(&h.href)?, children: self.compile_children(&h.children)? }),
-            JsonNode::InlineImage(i) => Ok(JsonInstruction::InlineImage { styles: self.compile_styles(&i.style_names, &i.style_override)?, src: parse_expression_string(&i.src)? }),
+            JsonNode::StyledSpan(c) => Ok(JsonInstruction::StyledSpan { styles: self.compile_styles(&c.style_names, &c.style_override, c.id.clone())?, children: self.compile_children(&c.children)? }),
+            JsonNode::Hyperlink(h) => Ok(JsonInstruction::Hyperlink { styles: self.compile_styles(&h.style_names, &h.style_override, h.id.clone())?, href: parse_expression_string(&h.href)?, children: self.compile_children(&h.children)? }),
+            JsonNode::PageReference { target_id } => Ok(JsonInstruction::PageReference { target_id: target_id.clone() }),
+            JsonNode::InlineImage(i) => Ok(JsonInstruction::InlineImage { styles: self.compile_styles(&i.style_names, &i.style_override, i.id.clone())?, src: parse_expression_string(&i.src)? }),
             JsonNode::LineBreak => Ok(JsonInstruction::LineBreak),
             JsonNode::PageBreak { master_name } => Ok(JsonInstruction::PageBreak { master_name: master_name.clone() }),
             JsonNode::RenderTemplate { name } => {
@@ -168,10 +176,42 @@ impl<'a> Compiler<'a> {
     }
 
     fn compile_table_node(&self, table: &ast::JsonTable) -> Result<JsonInstruction, ParseError> {
+        let columns = table
+            .columns
+            .iter()
+            .map(|c| {
+                let style = c
+                    .style
+                    .as_ref()
+                    .and_then(|name| self.stylesheet.styles.get(name))
+                    .map(|arc_style| (**arc_style).clone());
+
+                let header_style = c
+                    .header_style
+                    .as_ref()
+                    .and_then(|name| self.stylesheet.styles.get(name))
+                    .map(|arc_style| (**arc_style).clone());
+
+                TableColumnDefinition {
+                    width: c.width.clone(),
+                    style,
+                    header_style,
+                }
+            })
+            .collect();
+
         Ok(JsonInstruction::Table(CompiledTable {
-            styles: self.compile_styles(&table.style_names, &table.style_override)?,
-            columns: table.columns.iter().map(|c| TableColumnDefinition { width: c.width.clone(), style: c.style.clone(), header_style: c.header_style.clone() }).collect(),
-            header: table.header.as_ref().map(|h| self.compile_children(&h.rows)).transpose()?,
+            styles: self.compile_styles(
+                &table.style_names,
+                &table.style_override,
+                table.id.clone(),
+            )?,
+            columns,
+            header: table
+                .header
+                .as_ref()
+                .map(|h| self.compile_children(&h.rows))
+                .transpose()?,
             body: self.compile_children(&table.body.rows)?,
         }))
     }
@@ -187,6 +227,7 @@ impl<'a> Compiler<'a> {
         &self,
         names: &[String],
         style_override: &ElementStyle,
+        id: Option<String>,
     ) -> Result<CompiledStyles, ParseError> {
         let mut static_styles = Vec::new();
         let mut dynamic_style_templates = Vec::new();
@@ -203,6 +244,7 @@ impl<'a> Compiler<'a> {
             }
         }
         Ok(CompiledStyles {
+            id,
             static_styles,
             dynamic_style_templates,
             style_override: if *style_override == ElementStyle::default() {

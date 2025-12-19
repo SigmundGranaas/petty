@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq, Hash)]
 pub enum FontWeight {
     Thin,
     Light,
@@ -8,17 +8,16 @@ pub enum FontWeight {
     Medium,
     Bold,
     Black,
-    #[serde(untagged)]
     Numeric(u16),
 }
 
 impl Default for FontWeight {
     fn default() -> Self {
-        FontWeight::Regular
+        Self::Regular
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub enum FontStyle {
     Normal,
     Italic,
@@ -27,6 +26,6 @@ pub enum FontStyle {
 
 impl Default for FontStyle {
     fn default() -> Self {
-        FontStyle::Normal
+        Self::Normal
     }
 }

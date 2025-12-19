@@ -1,46 +1,79 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/page_break.rs
+// src/core/layout/nodes/page_break.rs
 
-use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult};
+use crate::core::idf::{IRNode, TextStr};
+use crate::core::layout::engine::{LayoutEngine, LayoutStore};
+use crate::core::base::geometry::{BoxConstraints, Size};
+use crate::core::layout::interface::{
+    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
+};
+use super::RenderNode;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::LayoutError;
-use std::any::Any;
 use std::sync::Arc;
 
-/// A special `LayoutNode` that represents an explicit page break.
-/// Its primary purpose is to act as a marker during the layout process.
 #[derive(Debug, Clone)]
-pub struct PageBreakNode {
-    pub master_name: Option<String>,
-    style: Arc<ComputedStyle>, // Needs a style to satisfy the trait
+pub struct PageBreakNode<'a> {
+    pub master_name: Option<&'a str>,
+    style: Arc<ComputedStyle>,
 }
 
-impl PageBreakNode {
-    pub fn new(master_name: Option<String>) -> Self {
-        Self {
-            master_name,
-            style: Arc::new(ComputedStyle::default()),
+impl<'a> PageBreakNode<'a> {
+    pub fn build(
+        node: &IRNode,
+        _engine: &LayoutEngine,
+        _parent_style: Arc<ComputedStyle>,
+        store: &'a LayoutStore,
+    ) -> Result<RenderNode<'a>, LayoutError> {
+        let master_name = match node {
+            IRNode::PageBreak { master_name } => master_name,
+            _ => return Err(LayoutError::BuilderMismatch("PageBreak", node.kind())),
+        };
+
+        let master_ref = master_name.as_ref().map(|s| store.alloc_str(s));
+        // Needs dummy style
+        let style = Arc::new(ComputedStyle::default());
+        let style_ref = store.cache_style(style);
+
+        let node = store.bump.alloc(Self {
+            master_name: master_ref,
+            style: style_ref,
+        });
+        Ok(RenderNode::PageBreak(node))
+    }
+}
+
+impl<'a> LayoutNode for PageBreakNode<'a> {
+    fn style(&self) -> &ComputedStyle {
+        self.style.as_ref()
+    }
+
+    fn measure(&self, _env: &LayoutEnvironment, _constraints: BoxConstraints) -> Result<Size, LayoutError> {
+        Ok(Size::zero())
+    }
+
+    fn layout(
+        &self,
+        ctx: &mut LayoutContext,
+        _constraints: BoxConstraints,
+        break_state: Option<NodeState>,
+    ) -> Result<LayoutResult, LayoutError> {
+        if break_state.is_some() {
+            // We've already broken, so we are finished
+            return Ok(LayoutResult::Finished);
         }
-    }
-}
 
-impl LayoutNode for PageBreakNode {
-    fn style(&self) -> &Arc<ComputedStyle> {
-        &self.style
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
-        // A page break should force a new page if it's not at the very top.
-        if !ctx.is_empty() || ctx.cursor.1 > 0.0 {
-            // By returning Partial with ourselves as the remainder, we signal to the
-            // layout engine that a break is needed.
-            Ok(LayoutResult::Partial(Box::new(self.clone())))
+        // Force a break unless we are at the very top of an empty page (unlikely for a manual break)
+        // If we just return Break, the engine will create a new page.
+        if !ctx.is_empty() || ctx.cursor_y() > 0.0 {
+            Ok(LayoutResult::Break(NodeState::Atomic))
         } else {
-            // If we are at the top of a page, we do nothing and are consumed.
-            Ok(LayoutResult::Full)
+            // Already at top of page, consume the break
+            Ok(LayoutResult::Finished)
         }
+    }
+
+    fn check_for_page_break(&self) -> Option<Option<TextStr>> {
+        // Convert &'a str to String for interface compatibility.
+        Some(self.master_name.map(|s| s.to_string()))
     }
 }

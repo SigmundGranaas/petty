@@ -1,4 +1,3 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/templating/text.rs
 use crate::core::style::stylesheet::ElementStyle;
 use crate::parser::json::ast::{JsonHyperlink, JsonImage, JsonInlineContainer, JsonNode, TemplateNode};
 use crate::templating::node::TemplateBuilder;
@@ -29,6 +28,7 @@ impl TemplateBuilder for Text {
 /// Builder for a `<StyledSpan>` node.
 #[derive(Default, Clone)]
 pub struct Span {
+    id: Option<String>,
     style_names: Vec<String>,
     style_override: ElementStyle,
     children: Vec<Box<dyn TemplateBuilder>>,
@@ -57,6 +57,7 @@ impl Span {
 impl TemplateBuilder for Span {
     fn build(self: Box<Self>) -> TemplateNode {
         TemplateNode::Static(JsonNode::StyledSpan(JsonInlineContainer {
+            id: self.id,
             style_names: self.style_names,
             style_override: self.style_override,
             children: self.children.into_iter().map(|c| c.build()).collect(),
@@ -67,6 +68,7 @@ impl TemplateBuilder for Span {
 /// Builder for a `<Hyperlink>` node.
 #[derive(Clone)]
 pub struct Hyperlink {
+    id: Option<String>,
     href: String,
     style_names: Vec<String>,
     style_override: ElementStyle,
@@ -76,6 +78,7 @@ pub struct Hyperlink {
 impl Hyperlink {
     pub fn new(href: &str) -> Self {
         Self {
+            id: None,
             href: href.to_string(),
             style_names: vec![],
             style_override: Default::default(),
@@ -101,6 +104,7 @@ impl Hyperlink {
 impl TemplateBuilder for Hyperlink {
     fn build(self: Box<Self>) -> TemplateNode {
         TemplateNode::Static(JsonNode::Hyperlink(JsonHyperlink {
+            id: self.id,
             href: self.href,
             style_names: self.style_names,
             style_override: self.style_override,
@@ -112,6 +116,7 @@ impl TemplateBuilder for Hyperlink {
 /// Builder for an `<InlineImage>` node.
 #[derive(Clone)]
 pub struct InlineImage {
+    id: Option<String>,
     src: String,
     style_names: Vec<String>,
     style_override: ElementStyle,
@@ -120,6 +125,7 @@ pub struct InlineImage {
 impl InlineImage {
     pub fn new(src: &str) -> Self {
         Self {
+            id: None,
             src: src.to_string(),
             style_names: vec![],
             style_override: Default::default(),
@@ -135,6 +141,7 @@ impl InlineImage {
 impl TemplateBuilder for InlineImage {
     fn build(self: Box<Self>) -> TemplateNode {
         TemplateNode::Static(JsonNode::InlineImage(JsonImage {
+            id: self.id,
             src: self.src,
             style_names: self.style_names,
             style_override: self.style_override,

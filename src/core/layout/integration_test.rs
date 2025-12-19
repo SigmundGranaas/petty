@@ -1,6 +1,7 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/integration_test.rs
-use crate::core::idf::{IRNode, InlineNode};
-use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
+use crate::core::idf::{IRNode, InlineNode, NodeMetadata};
+use crate::core::layout::test_utils::{
+    create_paragraph, find_first_text_box_with_content, paginate_test_nodes,
+};
 use crate::core::style::dimension::{Dimension, Margins, PageSize};
 use crate::core::style::stylesheet::{ElementStyle, PageLayout, Stylesheet};
 use std::collections::HashMap;
@@ -20,23 +21,37 @@ fn test_nested_blocks_with_padding_and_margin() {
         ..Default::default()
     };
     let nodes = vec![IRNode::Block {
-        style_sets: vec![],
-        style_override: Some(ElementStyle {
-            margin: Some(Margins { top: 5.0, ..Default::default() }),
-            padding: Some(Margins { top: 2.0, ..Default::default() }),
-            ..Default::default()
-        }),
-        children: vec![IRNode::Paragraph {
-            style_sets: vec![],
+        meta: NodeMetadata {
             style_override: Some(ElementStyle {
-                margin: Some(Margins { top: 10.0, ..Default::default() }),
+                margin: Some(Margins {
+                    top: 5.0,
+                    ..Default::default()
+                }),
+                padding: Some(Margins {
+                    top: 2.0,
+                    ..Default::default()
+                }),
                 ..Default::default()
             }),
+            ..Default::default()
+        },
+        children: vec![IRNode::Paragraph {
+            meta: NodeMetadata {
+                style_override: Some(ElementStyle {
+                    margin: Some(Margins {
+                        top: 10.0,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
             children: vec![InlineNode::Text("Hello".to_string())],
         }],
     }];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    // Use paginate_test_nodes helper which handles the iterator aggregation
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
 
     assert_eq!(page1.len(), 1);
@@ -65,7 +80,10 @@ fn test_flex_container_with_percentages() {
         page_masters: HashMap::from([(
             "master".to_string(),
             PageLayout {
-                size: PageSize::Custom { width: 520.0, height: 500.0 },
+                size: PageSize::Custom {
+                    width: 520.0,
+                    height: 500.0,
+                },
                 margins: Some(Margins::all(10.0)),
                 ..Default::default()
             },
@@ -74,32 +92,39 @@ fn test_flex_container_with_percentages() {
         ..Default::default()
     };
     let nodes = vec![IRNode::FlexContainer {
-        style_sets: vec![],
-        style_override: None,
+        meta: Default::default(),
         children: vec![
             IRNode::Block {
                 // Left Column
-                style_sets: vec![],
-                style_override: Some(ElementStyle {
-                    width: Some(Dimension::Percent(30.0)),
+                meta: NodeMetadata {
+                    style_override: Some(ElementStyle {
+                        width: Some(Dimension::Percent(30.0)),
+                        ..Default::default()
+                    }),
                     ..Default::default()
-                }),
+                },
                 children: vec![create_paragraph("Left")],
             },
             IRNode::Block {
                 // Right Column
-                style_sets: vec![],
-                style_override: Some(ElementStyle {
-                    width: Some(Dimension::Percent(70.0)),
-                    padding: Some(Margins { left: 10.0, ..Default::default() }),
+                meta: NodeMetadata {
+                    style_override: Some(ElementStyle {
+                        width: Some(Dimension::Percent(70.0)),
+                        padding: Some(Margins {
+                            left: 10.0,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    }),
                     ..Default::default()
-                }),
+                },
                 children: vec![create_paragraph("Right")],
             },
         ],
     }];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    // Use paginate_test_nodes helper which handles the iterator aggregation
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
 
     let left_text = find_first_text_box_with_content(page1, "Left").unwrap();

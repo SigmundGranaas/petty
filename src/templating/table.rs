@@ -9,6 +9,7 @@ use crate::templating::style::impl_styled_widget;
 /// Builder for a table cell. A cell is a block-level container.
 #[derive(Default, Clone)]
 pub struct Cell {
+    id: Option<String>,
     style_names: Vec<String>,
     style_override: ElementStyle,
     children: Vec<Box<dyn TemplateBuilder>>,
@@ -34,6 +35,7 @@ impl TemplateBuilder for Cell {
     /// A cell is represented as a "Block" in the JSON AST
     fn build(self: Box<Self>) -> TemplateNode {
         TemplateNode::Static(JsonNode::Block(JsonContainer {
+            id: self.id,
             style_names: self.style_names,
             style_override: self.style_override,
             children: self.children.into_iter().map(|c| c.build()).collect(),
@@ -46,6 +48,7 @@ impl_styled_widget!(Cell);
 /// Builder for a table row.
 #[derive(Default, Clone)]
 pub struct Row {
+    id: Option<String>,
     cells: Vec<Cell>,
 }
 
@@ -58,12 +61,18 @@ impl Row {
         self.cells.push(cell);
         self
     }
+
+    pub fn id(mut self, id: &str) -> Self {
+        self.id = Some(id.to_string());
+        self
+    }
 }
 
 impl TemplateBuilder for Row {
     /// A row is represented as a "Block" containing cell "Blocks" in the JSON AST
     fn build(self: Box<Self>) -> TemplateNode {
         TemplateNode::Static(JsonNode::Block(JsonContainer {
+            id: self.id,
             style_names: vec![],
             style_override: Default::default(),
             children: self.cells.into_iter().map(|c| Box::new(c).build()).collect(),
@@ -100,6 +109,7 @@ impl Column {
 /// Builder for a `<Table>` node.
 #[derive(Default, Clone)]
 pub struct Table {
+    id: Option<String>,
     style_names: Vec<String>,
     style_override: ElementStyle,
     columns: Vec<Column>,
@@ -159,6 +169,7 @@ impl TemplateBuilder for Table {
         };
 
         TemplateNode::Static(JsonNode::Table(JsonTable {
+            id: self.id,
             style_names: self.style_names,
             style_override: self.style_override,
             columns: self

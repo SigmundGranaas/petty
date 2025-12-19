@@ -1,6 +1,7 @@
 //! Defines primitives for size, position, and spacing.
 use crate::parser::style_parsers;
 use serde::{de, ser::SerializeMap, Deserialize, Deserializer, Serialize, Serializer};
+use std::hash::{Hash, Hasher};
 
 #[derive(Deserialize, Serialize, Debug, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
@@ -10,6 +11,32 @@ pub enum Dimension {
     Auto,
 }
 
+impl Hash for Dimension {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            Dimension::Pt(v) => {
+                0u8.hash(state);
+                v.to_bits().hash(state);
+            }
+            Dimension::Percent(v) => {
+                1u8.hash(state);
+                v.to_bits().hash(state);
+            }
+            Dimension::Auto => {
+                2u8.hash(state);
+            }
+        }
+    }
+}
+
+impl Eq for Dimension {}
+
+impl Default for Dimension {
+    fn default() -> Self {
+        Dimension::Auto
+    }
+}
+
 #[derive(Serialize, Debug, Default, Clone, PartialEq)]
 pub struct Margins {
     pub top: f32,
@@ -17,6 +44,17 @@ pub struct Margins {
     pub bottom: f32,
     pub left: f32,
 }
+
+impl Hash for Margins {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.top.to_bits().hash(state);
+        self.right.to_bits().hash(state);
+        self.bottom.to_bits().hash(state);
+        self.left.to_bits().hash(state);
+    }
+}
+
+impl Eq for Margins {}
 
 impl Margins {
     pub fn all(value: f32) -> Self {
@@ -92,6 +130,23 @@ pub enum PageSize {
     Letter,
     Legal,
     Custom { width: f32, height: f32 },
+}
+
+impl Eq for PageSize {}
+
+impl Hash for PageSize {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            PageSize::A4 => 0u8.hash(state),
+            PageSize::Letter => 1u8.hash(state),
+            PageSize::Legal => 2u8.hash(state),
+            PageSize::Custom { width, height } => {
+                3u8.hash(state);
+                width.to_bits().hash(state);
+                height.to_bits().hash(state);
+            }
+        }
+    }
 }
 
 impl Serialize for PageSize {

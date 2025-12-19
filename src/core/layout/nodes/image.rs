@@ -1,97 +1,171 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/image.rs
-use crate::core::idf::IRNode;
-use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult};
+use crate::core::layout::engine::{LayoutEngine, LayoutStore};
+use crate::core::base::geometry::{self, BoxConstraints, Size};
+use crate::core::layout::interface::{
+    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
+};
+use super::RenderNode;
 use crate::core::layout::style::ComputedStyle;
-use crate::core::layout::{ImageElement, LayoutElement, LayoutEngine, LayoutError, PositionedElement};
+use crate::core::layout::{LayoutElement, LayoutError, PositionedElement, ImageElement};
 use crate::core::style::dimension::Dimension;
-use std::any::Any;
+use crate::core::layout::painting::box_painter::create_background_and_borders;
 use std::sync::Arc;
+use crate::core::idf::IRNode;
 
 #[derive(Debug, Clone)]
-pub struct ImageNode {
-    src: String,
+pub struct ImageNode<'a> {
+    id: Option<&'a str>,
+    src: &'a str,
     style: Arc<ComputedStyle>,
-    width: f32,
-    height: f32,
+    _marker: std::marker::PhantomData<&'a ()>,
 }
 
-impl ImageNode {
-    pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Self {
-        let src = match node {
-            IRNode::Image { src, .. } => src.clone(),
-            _ => panic!("ImageNode must be created from IRNode::Image"),
-        };
-        let style = engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
-
-        Self {
-            src,
-            style,
-            width: 0.0, // Resolved in measure pass
-            height: 0.0,
-        }
+impl<'a> ImageNode<'a> {
+    pub fn build(
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+        store: &'a LayoutStore,
+    ) -> Result<RenderNode<'a>, LayoutError> {
+        let node = store.bump.alloc(Self::new(node, engine, parent_style, store)?);
+        Ok(RenderNode::Image(node))
     }
 
-    fn resolve_sizes(&mut self, available_width: f32) {
-        self.width = match &self.style.width {
-            Some(Dimension::Pt(w)) => *w,
-            Some(Dimension::Percent(p)) => available_width * (p / 100.0),
-            _ => available_width,
+    pub fn new(
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+        store: &'a LayoutStore,
+    ) -> Result<Self, LayoutError> {
+        let (id_str, src_str, meta) = match node {
+            IRNode::Image { meta, src } => (&meta.id, src, meta),
+            _ => return Err(LayoutError::BuilderMismatch("Image", node.kind())),
         };
-        self.height = match &self.style.height {
-            Some(Dimension::Pt(h)) => *h,
-            // A percentage height for a block image usually resolves against the container height,
-            // which we don't know here. We'll treat it as auto.
-            Some(Dimension::Percent(_)) | _ => self.width, // Assume square aspect ratio for auto
-        };
+
+        let style = engine.compute_style(
+            &meta.style_sets,
+            meta.style_override.as_ref(),
+            &parent_style,
+        );
+
+        let style_ref = store.cache_style(style);
+        // Alloc string content into the bump arena for lifetime 'a
+        let src_ref = store.alloc_str(src_str);
+        let id_ref = id_str.as_ref().map(|s| store.alloc_str(s));
+
+        Ok(Self {
+            id: id_ref,
+            src: src_ref,
+            style: style_ref,
+            _marker: std::marker::PhantomData,
+        })
+    }
+
+    pub fn new_inline(
+        meta: &crate::core::idf::InlineMetadata,
+        src: String,
+        engine: &LayoutEngine,
+        parent_style: &Arc<ComputedStyle>,
+        store: &'a LayoutStore,
+    ) -> Result<Self, LayoutError> {
+        let style = engine.compute_style(
+            &meta.style_sets,
+            meta.style_override.as_ref(),
+            parent_style,
+        );
+        let style_ref = store.cache_style(style);
+        let src_ref = store.alloc_str(&src);
+
+        Ok(Self {
+            id: None,
+            src: src_ref,
+            style: style_ref,
+            _marker: std::marker::PhantomData,
+        })
     }
 }
 
-impl LayoutNode for ImageNode {
-    fn style(&self) -> &Arc<ComputedStyle> {
-        &self.style
+impl<'a> LayoutNode for ImageNode<'a> {
+    fn style(&self) -> &ComputedStyle {
+        self.style.as_ref()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
+    fn measure(&self, _env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<Size, LayoutError> {
+        let w = match self.style.box_model.width {
+            Some(Dimension::Pt(v)) => v,
+            _ => 100.0,
+        };
+
+        let h = match self.style.box_model.height {
+            Some(Dimension::Pt(v)) => v,
+            _ => 100.0,
+        };
+
+        let width = constraints.constrain_width(w + self.style.padding_x() + self.style.border_x());
+        let height = constraints.constrain_height(h + self.style.padding_y() + self.style.border_y());
+
+        Ok(Size::new(width, height))
     }
 
-    fn measure(&mut self, _engine: &LayoutEngine, available_width: f32) {
-        self.resolve_sizes(available_width);
-    }
-
-    fn measure_content_height(&mut self, _engine: &LayoutEngine, available_width: f32) -> f32 {
-        self.resolve_sizes(available_width);
-        self.style.margin.top + self.height + self.style.margin.bottom
-    }
-
-    fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
-        let total_height = self.style.margin.top + self.height + self.style.margin.bottom;
-
-        if total_height > ctx.bounds.height {
-            return Err(LayoutError::ElementTooLarge(total_height, ctx.bounds.height));
+    fn layout(
+        &self,
+        ctx: &mut LayoutContext,
+        constraints: BoxConstraints,
+        _break_state: Option<NodeState>,
+    ) -> Result<LayoutResult, LayoutError> {
+        if let Some(id) = self.id {
+            ctx.register_anchor(id);
         }
 
-        if total_height > ctx.available_height() && (!ctx.is_empty() || ctx.cursor.1 > 0.0) {
-            return Ok(LayoutResult::Partial(Box::new(self.clone())));
+        // If we have a break state (Atomic), it means we pushed to the next page.
+        // We should just continue layout as normal (from scratch) on this new page.
+        // We don't return Finished immediately.
+
+        let size = self.measure(&ctx.env, constraints)?;
+
+        // Safety check: if image is taller than the page, skip it to avoid infinite loops
+        if size.height > ctx.bounds().height {
+            return Ok(LayoutResult::Finished);
         }
 
-        ctx.advance_cursor(self.style.margin.top);
+        if ctx.prepare_for_block(self.style.box_model.margin.top) {
+            return Ok(LayoutResult::Break(NodeState::Atomic));
+        }
 
-        let element = PositionedElement {
-            x: self.style.margin.left,
-            y: 0.0,
-            width: self.width,
-            height: self.height,
-            element: LayoutElement::Image(ImageElement {
-                src: self.src.clone(),
-            }),
+        if size.height > ctx.available_height() && !ctx.is_empty() {
+            return Ok(LayoutResult::Break(NodeState::Atomic));
+        }
+
+        let start_y = ctx.cursor_y();
+
+        let bg_elements = create_background_and_borders(
+            ctx.bounds(),
+            &self.style,
+            start_y,
+            size.height,
+            true, true
+        );
+        for el in bg_elements {
+            ctx.push_element_at(el, 0.0, 0.0);
+        }
+
+        let content_rect = geometry::Rect {
+            x: self.style.border_left_width() + self.style.box_model.padding.left,
+            y: start_y + self.style.border_top_width() + self.style.box_model.padding.top,
+            width: size.width - self.style.padding_x() - self.style.border_x(),
+            height: size.height - self.style.padding_y() - self.style.border_y(),
+        };
+
+        let image_el = PositionedElement {
+            element: LayoutElement::Image(ImageElement { src: self.src.to_string() }),
             style: self.style.clone(),
+            ..PositionedElement::from_rect(content_rect)
         };
-        ctx.push_element(element);
 
-        ctx.advance_cursor(self.height);
-        ctx.advance_cursor(self.style.margin.bottom);
+        ctx.push_element_at(image_el, 0.0, 0.0);
 
-        Ok(LayoutResult::Full)
+        ctx.set_cursor_y(start_y + size.height);
+        ctx.finish_block(self.style.box_model.margin.bottom);
+
+        Ok(LayoutResult::Finished)
     }
 }

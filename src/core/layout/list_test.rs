@@ -1,8 +1,8 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/list_test.rs
+// src/core/layout/nodes/list_test.rs
 #![cfg(test)]
 
 use super::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
-use crate::core::idf::IRNode;
+use crate::core::idf::{IRNode, NodeMetadata};
 use crate::core::layout::{LayoutElement, TextElement};
 use crate::core::style::dimension::{Margins, PageSize};
 use crate::core::style::list::{ListStylePosition, ListStyleType};
@@ -11,24 +11,24 @@ use std::collections::HashMap;
 
 fn create_list_item(text: &str) -> IRNode {
     IRNode::ListItem {
-        style_sets: vec![],
-        style_override: None,
+        meta: Default::default(),
         children: vec![create_paragraph(text)],
     }
 }
 
 fn create_list_item_with_children(children: Vec<IRNode>) -> IRNode {
     IRNode::ListItem {
-        style_sets: vec![],
-        style_override: None,
+        meta: Default::default(),
         children,
     }
 }
 
 fn create_list(children: Vec<IRNode>, style: Option<ElementStyle>, start: Option<usize>) -> IRNode {
     IRNode::List {
-        style_sets: vec![],
-        style_override: style,
+        meta: NodeMetadata {
+            style_override: style,
+            ..Default::default()
+        },
         start,
         children,
     }
@@ -51,7 +51,7 @@ fn test_unordered_list_layout() {
 
     let nodes = vec![create_list(vec![create_list_item("Item 1"), create_list_item("Item 2")], None, None)];
 
-    let mut pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (mut pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page = pages.remove(0);
 
     // Each item produces a marker box and a text box.
@@ -91,7 +91,7 @@ fn test_ordered_list_layout() {
     };
     let nodes = vec![create_list(vec![create_list_item("First"), create_list_item("Second")], Some(style), None)];
 
-    let mut pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (mut pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page = pages.remove(0);
 
     assert_eq!(page.len(), 4);
@@ -136,7 +136,7 @@ fn test_nested_ordered_list_numbering_cycles_correctly() {
     )];
 
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
 
     let marker1 = find_first_text_box_with_content(page1, "1.").expect("Marker '1.' not found");
@@ -173,7 +173,7 @@ fn test_list_style_position_inside() {
     };
     let nodes = vec![create_list(vec![create_list_item("Item 1")], Some(style), None)];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
 
     // With 'inside', the marker and text are part of the same text element.
@@ -200,7 +200,7 @@ fn test_ordered_list_upper_alpha_roman() {
         create_list(vec![create_list_item("I"), create_list_item("II")], style_ur, None),
     ];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
 
     assert!(find_first_text_box_with_content(page1, "A.").is_some());
@@ -218,7 +218,7 @@ fn test_ordered_list_start_attribute() {
     let style = Some(ElementStyle { list_style_type: Some(ListStyleType::Decimal), ..Default::default() });
     let nodes = vec![create_list(vec![create_list_item("Third"), create_list_item("Fourth")], style, Some(3))];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
 
     assert!(find_first_text_box_with_content(page1, "3.").is_some());
@@ -245,13 +245,13 @@ fn test_list_with_complex_item_splits_correctly() {
     let style_override = Some(ElementStyle { widows: Some(1), ..Default::default() });
     let mut p1 = create_paragraph("Line 1\nLine 2");
     let mut p2 = create_paragraph("Line 3\nLine 4\nLine 5");
-    if let IRNode::Paragraph { style_override: so, .. } = &mut p1 { *so = style_override.clone(); }
-    if let IRNode::Paragraph { style_override: so, .. } = &mut p2 { *so = style_override; }
+    if let IRNode::Paragraph { meta, .. } = &mut p1 { meta.style_override = style_override.clone(); }
+    if let IRNode::Paragraph { meta, .. } = &mut p2 { meta.style_override = style_override; }
 
     let complex_item = create_list_item_with_children(vec![p1, p2]);
     let nodes = vec![create_list(vec![complex_item], None, None)];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     assert_eq!(pages.len(), 2, "Expected list item to split across pages");
 
     let page1 = &pages[0];

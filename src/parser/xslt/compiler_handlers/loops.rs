@@ -1,10 +1,7 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/compiler_handlers/loops.rs
-// FILE: src/parser/xslt/compiler_handlers/loops.rs
 use crate::parser::xslt::ast::{PreparsedTemplate, SortDataType, SortKey, SortOrder, XsltInstruction};
 use crate::parser::xslt::compiler::{BuilderState, CompilerBuilder};
 use crate::parser::ParseError;
 use crate::parser::xslt::util::{get_attr_owned_optional, get_attr_owned_required, get_line_col_from_pos, OwnedAttributes};
-use crate::parser::xslt::xpath;
 
 impl CompilerBuilder {
     pub(crate) fn handle_sortable_start(&mut self, attrs: OwnedAttributes) {
@@ -22,6 +19,10 @@ impl CompilerBuilder {
         source: &str,
     ) -> Result<(), ParseError> {
         let location = get_line_col_from_pos(source, pos).into();
+
+        let select_str = get_attr_owned_optional(&attrs, b"select")?.unwrap_or_else(|| ".".to_string());
+        let select_expr = self.parse_xpath_and_detect_features(&select_str)?;
+
         if let Some(BuilderState::Sortable { sort_keys, saw_non_sort_child, .. }) = self.state_stack.last_mut()
         {
             if *saw_non_sort_child {
@@ -30,7 +31,6 @@ impl CompilerBuilder {
                     location,
                 });
             }
-            let select_str = get_attr_owned_optional(&attrs, b"select")?.unwrap_or_else(|| ".".to_string());
             let order = match get_attr_owned_optional(&attrs, b"order")?.as_deref() {
                 Some("descending") => SortOrder::Descending,
                 _ => SortOrder::Ascending,
@@ -40,7 +40,7 @@ impl CompilerBuilder {
                 _ => SortDataType::Text,
             };
             sort_keys.push(SortKey {
-                select: xpath::parse_expression(&select_str)?,
+                select: select_expr,
                 order,
                 data_type,
             });
@@ -61,14 +61,15 @@ impl CompilerBuilder {
         source: &str,
     ) -> Result<(), ParseError> {
         if let BuilderState::Sortable { attrs, sort_keys, .. } = current_state {
+            let select_str = get_attr_owned_required(
+                &attrs,
+                b"select",
+                b"xsl:for-each",
+                pos,
+                source,
+            )?;
             let instr = XsltInstruction::ForEach {
-                select: xpath::parse_expression(&get_attr_owned_required(
-                    &attrs,
-                    b"select",
-                    b"xsl:for-each",
-                    pos,
-                    source,
-                )?)?,
+                select: self.parse_xpath_and_detect_features(&select_str)?,
                 sort_keys,
                 body: PreparsedTemplate(body),
             };
@@ -80,12 +81,15 @@ impl CompilerBuilder {
     }
 
     pub(crate) fn handle_apply_templates_empty(&mut self, attrs: OwnedAttributes) -> Result<(), ParseError> {
+        let select_expr = if let Some(select_str) = get_attr_owned_optional(&attrs, b"select")? {
+            Some(self.parse_xpath_and_detect_features(&select_str)?)
+        } else {
+            None
+        };
         let instr = XsltInstruction::ApplyTemplates {
-            select: get_attr_owned_optional(&attrs, b"select")?
-                .map(|s| xpath::parse_expression(&s))
-                .transpose()?,
+            select: select_expr,
             mode: get_attr_owned_optional(&attrs, b"mode")?
-                .map(|s| crate::parser::xslt::util::parse_avt(&s))
+                .map(|s| crate::parser::xslt::util::parse_avt(self, &s))
                 .transpose()?,
             sort_keys: vec![],
         };

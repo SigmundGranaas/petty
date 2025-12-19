@@ -1,471 +1,339 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/flex.rs
-use crate::core::idf::IRNode;
-use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult};
-use crate::core::layout::nodes::block::draw_background_and_borders;
+use crate::core::idf::{IRNode, TextStr};
+use crate::core::layout::engine::{LayoutEngine, LayoutStore};
+use crate::core::base::geometry::{self, BoxConstraints};
+use crate::core::layout::interface::{
+    FlexState, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
+};
+use super::RenderNode;
+use crate::core::layout::painting::box_painter::create_background_and_borders;
+use crate::core::layout::algorithms::flex_solver::computed_style_to_taffy;
 use crate::core::layout::style::ComputedStyle;
-use crate::core::layout::{geom, LayoutEngine, LayoutError};
-use crate::core::style::dimension::Dimension;
-use crate::core::style::flex::{AlignItems, AlignSelf, FlexDirection, FlexWrap, JustifyContent};
-use std::any::Any;
+use crate::core::layout::LayoutError;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use std::time::Instant;
+use taffy::prelude::*;
 
 #[derive(Debug, Clone)]
-pub struct FlexNode {
-    children: Vec<Box<dyn LayoutNode>>,
+struct FlexLayoutOutput {
+    size: geometry::Size,
+    child_layouts: Vec<taffy::Layout>,
+}
+
+#[derive(Debug)]
+pub struct FlexNode<'a> {
+    id: Option<TextStr>,
+    children: &'a [RenderNode<'a>],
     style: Arc<ComputedStyle>,
-    lines: Vec<FlexLine>,
 }
 
-impl FlexNode {
-    pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Self {
+impl<'a> FlexNode<'a> {
+    pub fn build(
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+        store: &'a LayoutStore,
+    ) -> Result<RenderNode<'a>, LayoutError> {
         let style = engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
-        let ir_children = match node {
-            IRNode::FlexContainer { children, .. } => children,
-            _ => panic!("FlexNode must be created from an IRNode::FlexContainer"),
-        };
-        let children = ir_children
-            .iter()
-            .map(|c| engine.build_layout_node_tree(c, style.clone()))
-            .collect();
 
-        Self {
+        let IRNode::FlexContainer {
+            meta,
+            children: ir_children,
+        } = node
+        else {
+            return Err(LayoutError::BuilderMismatch("FlexContainer", node.kind()));
+        };
+
+        let mut children_vec = engine.build_layout_node_children(ir_children, style.clone(), store)?;
+        children_vec.sort_by_key(|c| c.style().flex.order);
+        let children = store.bump.alloc_slice_copy(&children_vec);
+
+        let style_ref = store.cache_style(style);
+
+        let node = store.bump.alloc(Self {
+            id: meta.id.clone(),
             children,
-            style,
-            lines: vec![],
+            style: style_ref,
+        });
+
+        Ok(RenderNode::Flex(node))
+    }
+
+    fn get_cache_key(&self) -> Option<u64> {
+        self.id.as_ref().map(|id| {
+            let mut s = DefaultHasher::new();
+            id.hash(&mut s);
+            4u8.hash(&mut s); // Domain 4: Flex Layout
+            s.finish()
+        })
+    }
+
+    fn compute_flex_layout_data(
+        &self,
+        env: &LayoutEnvironment,
+        constraints: BoxConstraints,
+    ) -> Result<FlexLayoutOutput, LayoutError> {
+        let start = Instant::now();
+
+        let mut taffy = TaffyTree::<usize>::new();
+        let mut child_nodes = Vec::with_capacity(self.children.len());
+
+        for (i, child) in self.children.iter().enumerate() {
+            let child_style = computed_style_to_taffy(child.style());
+            let node = taffy.new_leaf_with_context(child_style, i)
+                .map_err(|e| LayoutError::Generic(format!("Taffy new_leaf error: {:?}", e)))?;
+            child_nodes.push(node);
         }
+
+        let mut root_style = computed_style_to_taffy(&self.style);
+
+        if constraints.has_bounded_width() && self.style.box_model.width.is_none() {
+            root_style.size.width = taffy::style::Dimension::length(constraints.max_width);
+        }
+        if constraints.is_tight() && self.style.box_model.height.is_none() {
+            root_style.size.height = taffy::style::Dimension::length(constraints.max_height);
+        }
+
+        let root_node = taffy.new_with_children(root_style, &child_nodes)
+            .map_err(|e| LayoutError::Generic(format!("Taffy new_with_children error: {:?}", e)))?;
+
+        let available_space = taffy::geometry::Size {
+            width: if constraints.has_bounded_width() {
+                taffy::style::AvailableSpace::Definite(constraints.max_width)
+            } else {
+                taffy::style::AvailableSpace::MaxContent
+            },
+            height: if constraints.has_bounded_height() {
+                taffy::style::AvailableSpace::Definite(constraints.max_height)
+            } else {
+                taffy::style::AvailableSpace::MaxContent
+            },
+        };
+
+        // Capture measurement error to propagate out of the closure
+        let mut measure_error = None;
+
+        taffy
+            .compute_layout_with_measure(
+                root_node,
+                available_space,
+                |known_dims, available_space, _node_id, context, _style| {
+                    if measure_error.is_some() {
+                        return taffy::geometry::Size::ZERO;
+                    }
+
+                    let Some(index) = context else {
+                        return taffy::geometry::Size::ZERO;
+                    };
+
+                    let child = &self.children[*index];
+
+                    let min_w = known_dims.width.unwrap_or(0.0);
+                    let max_w = match available_space.width {
+                        AvailableSpace::Definite(w) => w,
+                        AvailableSpace::MaxContent => f32::INFINITY,
+                        AvailableSpace::MinContent => 0.0,
+                    };
+
+                    let child_constraints = BoxConstraints::new(min_w, max_w, 0.0, f32::INFINITY);
+
+                    match child.measure(env, child_constraints) {
+                        Ok(size) => {
+                            Size {
+                                // Ceil the width to ensure Taffy allocates enough space to avoid
+                                // rounding errors causing wrapping during the strict layout pass.
+                                width: size.width.ceil(),
+                                height: size.height,
+                            }
+                        },
+                        Err(e) => {
+                            measure_error = Some(e);
+                            taffy::geometry::Size::ZERO
+                        }
+                    }
+                },
+            )
+            .map_err(|e| LayoutError::Generic(format!("Taffy layout error: {:?}", e)))?;
+
+        if let Some(e) = measure_error {
+            return Err(e);
+        }
+
+        let root_layout = taffy.layout(root_node).map_err(|_| LayoutError::Generic("Taffy layout missing".into()))?;
+        let size = geometry::Size::new(root_layout.size.width, root_layout.size.height);
+
+        let mut child_layouts = Vec::with_capacity(child_nodes.len());
+        for &id in &child_nodes {
+            let l = taffy.layout(id).map_err(|_| LayoutError::Generic("Taffy child layout missing".into()))?;
+            child_layouts.push(*l);
+        }
+
+        let duration = start.elapsed();
+        env.engine.record_perf("FlexNode::compute_flex_layout_data", duration);
+
+        Ok(FlexLayoutOutput {
+            size,
+            child_layouts,
+        })
     }
 }
 
-impl LayoutNode for FlexNode {
-    fn style(&self) -> &Arc<ComputedStyle> {
-        &self.style
+impl<'a> LayoutNode for FlexNode<'a> {
+    fn style(&self) -> &ComputedStyle {
+        self.style.as_ref()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
+    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<geometry::Size, LayoutError> {
+        Ok(self.compute_flex_layout_data(env, constraints)?.size)
     }
 
-    fn measure(&mut self, engine: &LayoutEngine, available_width: f32) {
-        let border_left_width = self.style.border_left.as_ref().map_or(0.0, |b| b.width);
-        let border_right_width = self.style.border_right.as_ref().map_or(0.0, |b| b.width);
-        let child_available_width = available_width
-            - self.style.padding.left
-            - self.style.padding.right
-            - border_left_width
-            - border_right_width;
-
-        for child in &mut self.children {
-            child.measure(engine, child_available_width);
+    fn layout(
+        &self,
+        ctx: &mut LayoutContext,
+        constraints: BoxConstraints,
+        break_state: Option<NodeState>,
+    ) -> Result<LayoutResult, LayoutError> {
+        if let Some(id) = &self.id {
+            ctx.register_anchor(id);
         }
-        self.lines = resolve_flex_lines(engine, &mut self.children, &self.style, child_available_width);
-    }
 
-    fn measure_content_height(&mut self, _engine: &LayoutEngine, _available_width: f32) -> f32 {
-        let border_top_width = self.style.border_top.as_ref().map_or(0.0, |b| b.width);
-        let border_bottom_width = self.style.border_bottom.as_ref().map_or(0.0, |b| b.width);
-        let content_height: f32 = self.lines.iter().map(|line| line.cross_size).sum();
-
-        self.style.margin.top
-            + border_top_width
-            + self.style.padding.top
-            + content_height
-            + self.style.padding.bottom
-            + border_bottom_width
-            + self.style.margin.bottom
-    }
-
-    fn measure_intrinsic_width(&self, engine: &LayoutEngine) -> f32 {
-        let border_left_width = self.style.border_left.as_ref().map_or(0.0, |b| b.width);
-        let border_right_width = self.style.border_right.as_ref().map_or(0.0, |b| b.width);
-        let own_width =
-            self.style.padding.left + self.style.padding.right + border_left_width + border_right_width;
-
-        let is_horiz = is_horizontal(&self.style.flex_direction);
-        if is_horiz {
-            // For a row, the intrinsic width is the sum of the children's intrinsic widths.
-            let children_width: f32 = self.children.iter().map(|c| c.measure_intrinsic_width(engine)).sum();
-            children_width + own_width
+        let (start_index, mut child_resume_state) = if let Some(state) = break_state {
+            let flex_state = state.as_flex()?;
+            (
+                flex_state.child_index,
+                flex_state.child_state.map(|b| *b),
+            )
         } else {
-            // For a column, it's the max of the children's intrinsic widths.
-            let children_width: f32 = self
-                .children
-                .iter()
-                .map(|c| c.measure_intrinsic_width(engine))
-                .fold(0.0, f32::max);
-            children_width + own_width
-        }
-    }
+            (0, None)
+        };
 
-    fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
-        // --- Box Model Setup ---
-        let margin_to_add = self.style.margin.top.max(ctx.last_v_margin);
-        if !ctx.is_empty() && margin_to_add > ctx.available_height() {
-            return Ok(LayoutResult::Partial(Box::new(self.clone())));
+        let is_continuation = start_index > 0 || child_resume_state.is_some();
+
+        if !is_continuation {
+            let margin_to_add = self.style.box_model.margin.top.max(ctx.last_v_margin);
+            ctx.advance_cursor(margin_to_add);
         }
-        ctx.advance_cursor(margin_to_add);
         ctx.last_v_margin = 0.0;
 
-        let border_top_width = self.style.border_top.as_ref().map_or(0.0, |b| b.width);
-        let border_bottom_width = self.style.border_bottom.as_ref().map_or(0.0, |b| b.width);
-        let border_left_width = self.style.border_left.as_ref().map_or(0.0, |b| b.width);
-        let border_right_width = self.style.border_right.as_ref().map_or(0.0, |b| b.width);
+        let start_y = ctx.cursor_y();
 
-        let block_start_y_in_ctx = ctx.cursor.1;
-        ctx.advance_cursor(border_top_width + self.style.padding.top);
-        let content_start_y_in_ctx = ctx.cursor.1;
-
-        // --- Flex Layout Logic ---
-        let child_bounds = geom::Rect {
-            x: ctx.bounds.x + border_left_width + self.style.padding.left,
-            y: ctx.bounds.y + content_start_y_in_ctx,
-            width: ctx.bounds.width
-                - self.style.padding.left
-                - self.style.padding.right
-                - border_left_width
-                - border_right_width,
-            height: ctx.available_height(),
+        let cache_key = self.get_cache_key();
+        let cached_output = if let Some(key) = cache_key {
+            let cache = ctx.env.cache.borrow();
+            cache.get(&key).and_then(|v| v.downcast_ref::<FlexLayoutOutput>()).cloned()
+        } else {
+            None
         };
 
-        let is_horiz = is_horizontal(&self.style.flex_direction);
-        let is_reverse = is_main_reverse(&self.style.flex_direction);
-        let container_main_size = child_bounds.width; // Use content-box width
-        let container_cross_size = child_bounds.height;
-
-        let total_lines_cross_size: f32 = self.lines.iter().map(|line| line.cross_size).sum();
-        let free_cross_space = container_cross_size - total_lines_cross_size;
-        let (mut cross_cursor, line_spacing) =
-            calculate_main_axis_alignment(free_cross_space, self.lines.len(), &self.style.align_content);
-
-        let mut child_idx_offset = 0;
-        let mut lines_on_this_page = 0;
-        let mut content_height_on_this_page = 0.0;
-
-        for line in &self.lines {
-            if line.cross_size > (child_bounds.height - content_height_on_this_page) && lines_on_this_page > 0 {
-                let remaining_children = self.children.drain(child_idx_offset..).collect();
-                draw_background_and_borders(ctx, &self.style, block_start_y_in_ctx, content_height_on_this_page);
-                ctx.cursor.1 = content_start_y_in_ctx
-                    + content_height_on_this_page
-                    + self.style.padding.bottom
-                    + border_bottom_width;
-                // Since flex items don't have collapsing margins with the container, last_v_margin is not set from children.
-
-                let mut remainder_node = FlexNode {
-                    children: remaining_children,
-                    style: self.style.clone(),
-                    lines: vec![], // Will be recalculated
-                };
-                remainder_node.measure(ctx.engine, ctx.bounds.width);
-                return Ok(LayoutResult::Partial(Box::new(remainder_node)));
+        let layout_output = if let Some(output) = cached_output {
+            output
+        } else {
+            let output = self.compute_flex_layout_data(&ctx.env, constraints)?;
+            if let Some(key) = cache_key {
+                ctx.env.cache.borrow_mut().insert(key, Box::new(output.clone()));
             }
-            lines_on_this_page += 1;
-            content_height_on_this_page += line.cross_size;
+            output
+        };
 
-            let mut effective_justify = self.style.justify_content.clone();
-            if is_reverse {
-                effective_justify = match effective_justify {
-                    JustifyContent::FlexStart => JustifyContent::FlexEnd,
-                    JustifyContent::FlexEnd => JustifyContent::FlexStart,
-                    _ => effective_justify,
-                };
-            }
+        let content_height = layout_output.size.height;
 
-            let free_space = container_main_size - line.main_size;
-            let (mut main_cursor, item_spacing) =
-                calculate_main_axis_alignment(free_space, line.items.len(), &effective_justify);
-
-            for item in &line.items {
-                main_cursor += if is_reverse { item.main_margin_end } else { item.main_margin_start };
-                let cross_offset_within_line = calculate_cross_axis_alignment(item, line.cross_size, &self.style.align_items);
-                let item_cross_offset = cross_cursor + cross_offset_within_line + if is_cross_reverse(&self.style.flex_wrap) {
-                    item.cross_margin_end
-                } else {
-                    item.cross_margin_start
-                };
-
-                let (x, y, width, height) = if is_horiz {
-                    (main_cursor, item_cross_offset, item.main_size, item.cross_size)
-                } else {
-                    (item_cross_offset, main_cursor, item.cross_size, item.main_size)
-                };
-
-                let item_bounds = geom::Rect {
-                    x: child_bounds.x + x,
-                    y: child_bounds.y + y,
-                    width,
-                    height,
-                };
-
-                let mut item_ctx = LayoutContext {
-                    engine: ctx.engine,
-                    bounds: item_bounds,
-                    cursor: (0.0, 0.0),
-                    elements: ctx.elements,
-                    last_v_margin: 0.0,
-                };
-
-                match self.children[item.original_index].layout(&mut item_ctx) {
-                    Ok(_) => {}
-                    Err(e) => log::warn!("Skipping flex item that failed to lay out: {}", e),
-                }
-                main_cursor += item.main_size + item_spacing + if is_reverse { item.main_margin_start } else { item.main_margin_end };
-            }
-            cross_cursor += line.cross_size + line_spacing;
-            child_idx_offset += line.items.len();
+        let mut scroll_offset_y = 0.0;
+        if start_index > 0 && start_index < layout_output.child_layouts.len() {
+            scroll_offset_y = layout_output.child_layouts[start_index].location.y;
         }
 
-        draw_background_and_borders(ctx, &self.style, block_start_y_in_ctx, content_height_on_this_page);
-        ctx.cursor.1 = content_start_y_in_ctx
-            + content_height_on_this_page
-            + self.style.padding.bottom
-            + border_bottom_width;
-        ctx.last_v_margin = self.style.margin.bottom;
-        Ok(LayoutResult::Full)
-    }
-}
+        let bg_elements = create_background_and_borders(
+            ctx.bounds(),
+            &self.style,
+            start_y,
+            content_height,
+            !is_continuation,
+            true,
+        );
+        for el in bg_elements {
+            // Backgrounds are absolute relative to bounds, so use push_element_at(0,0) to avoid double cursor offset
+            ctx.push_element_at(el, 0.0, 0.0);
+        }
 
-// --- Flexbox Algorithm Internals ---
+        let mut break_occurred = false;
+        let mut next_state_index = 0;
+        let mut next_child_state = None;
 
-#[derive(Clone, Debug)]
-struct FlexItem {
-    original_index: usize,
-    style: Arc<ComputedStyle>,
-    flex_basis: f32,
-    main_size: f32,
-    cross_size: f32,
-    main_margin_start: f32,
-    main_margin_end: f32,
-    cross_margin_start: f32,
-    cross_margin_end: f32,
-}
+        const EPSILON: f32 = 0.01;
+        let ctx_bounds = ctx.bounds();
 
-#[derive(Clone, Debug)]
-struct FlexLine {
-    items: Vec<FlexItem>,
-    main_size: f32,
-    cross_size: f32,
-}
+        for (i, layout) in layout_output.child_layouts.iter().enumerate() {
+            if i < start_index {
+                continue;
+            }
 
-fn is_horizontal(direction: &FlexDirection) -> bool {
-    matches!(direction, FlexDirection::Row | FlexDirection::RowReverse)
-}
+            let effective_y = layout.location.y - scroll_offset_y;
+            let abs_y = start_y + effective_y;
+            let child_h = layout.size.height;
 
-fn is_main_reverse(direction: &FlexDirection) -> bool {
-    matches!(direction, FlexDirection::RowReverse | FlexDirection::ColumnReverse)
-}
+            if abs_y > ctx_bounds.height + EPSILON {
+                break_occurred = true;
+                next_state_index = i;
+                break;
+            }
 
-fn is_cross_reverse(wrap: &FlexWrap) -> bool {
-    matches!(wrap, FlexWrap::WrapReverse)
-}
+            if abs_y + child_h > ctx_bounds.height + EPSILON && i != start_index {
+                break_occurred = true;
+                next_state_index = i;
+                break;
+            }
 
-fn resolve_flex_lines(
-    engine: &LayoutEngine,
-    children: &mut [Box<dyn LayoutNode>],
-    style: &Arc<ComputedStyle>,
-    available_width: f32,
-) -> Vec<FlexLine> {
-    let is_horiz = is_horizontal(&style.flex_direction);
-    let available_main_size = if is_horiz { available_width } else { f32::INFINITY };
+            let available_h_on_page = (ctx_bounds.height - abs_y).max(0.0);
 
-    let mut items: Vec<FlexItem> = children
-        .iter_mut()
-        .enumerate()
-        .map(|(i, child_node)| {
-            let item_style = child_node.style().clone();
-            let flex_basis = resolve_flex_basis(engine, child_node.as_mut(), &item_style, available_main_size, is_horiz);
-            let cross_size = child_node.measure_content_height(engine, if is_horiz { flex_basis } else { available_width });
-
-            let (main_margin_start, main_margin_end, cross_margin_start, cross_margin_end) = if is_horiz {
-                (item_style.margin.left, item_style.margin.right, item_style.margin.top, item_style.margin.bottom)
+            const LAYOUT_SLACK: f32 = 0.5;
+            let layout_bound_height = if child_h > available_h_on_page {
+                available_h_on_page
             } else {
-                (item_style.margin.top, item_style.margin.bottom, item_style.margin.left, item_style.margin.right)
+                child_h + LAYOUT_SLACK
             };
 
-            FlexItem {
-                original_index: i,
-                style: item_style,
-                flex_basis,
-                main_size: flex_basis,
-                cross_size: if is_horiz { cross_size } else { flex_basis },
-                main_margin_start,
-                main_margin_end,
-                cross_margin_start,
-                cross_margin_end,
-            }
-        })
-        .collect();
+            let child_rect = geometry::Rect {
+                x: ctx_bounds.x + layout.location.x,
+                y: ctx_bounds.y + abs_y,
+                width: layout.size.width,
+                height: layout_bound_height,
+            };
 
-    items.sort_by_key(|item| item.style.order);
-    if is_main_reverse(&style.flex_direction) {
-        items.reverse();
-    }
+            let child_constraints = BoxConstraints {
+                min_width: layout.size.width,
+                max_width: layout.size.width,
+                min_height: 0.0,
+                max_height: f32::INFINITY,
+            };
 
-    let mut lines = Vec::new();
-    let mut current_line_items = Vec::new();
-    let mut current_line_main_size = 0.0;
-
-    for item in items {
-        let item_total_main = item.main_size + item.main_margin_start + item.main_margin_end;
-        if style.flex_wrap != FlexWrap::NoWrap
-            && !current_line_items.is_empty()
-            && current_line_main_size + item_total_main > available_main_size
-        {
-            lines.push(FlexLine {
-                items: std::mem::take(&mut current_line_items),
-                main_size: current_line_main_size,
-                cross_size: 0.0,
-            });
-            current_line_main_size = 0.0;
-        }
-        current_line_main_size += item_total_main;
-        current_line_items.push(item);
-    }
-    if !current_line_items.is_empty() {
-        lines.push(FlexLine {
-            items: current_line_items,
-            main_size: current_line_main_size,
-            cross_size: 0.0,
-        });
-    }
-
-    if is_cross_reverse(&style.flex_wrap) {
-        lines.reverse();
-    }
-
-    for line in &mut lines {
-        resolve_flexible_lengths(line, available_main_size);
-        let max_cross_margin = line
-            .items
-            .iter()
-            .map(|i| i.cross_margin_start + i.cross_margin_end)
-            .fold(0.0, f32::max);
-        line.cross_size = line.items.iter().map(|i| i.cross_size).fold(0.0, f32::max) + max_cross_margin;
-    }
-    lines
-}
-
-fn resolve_flex_basis(
-    engine: &LayoutEngine,
-    node: &mut dyn LayoutNode,
-    style: &Arc<ComputedStyle>,
-    container_main_size: f32,
-    is_horiz: bool,
-) -> f32 {
-    let basis_prop = &style.flex_basis;
-    let size_prop = if is_horiz { &style.width } else { &style.height };
-
-    let resolved_basis_dim = if style.flex_basis == Dimension::Auto {
-        size_prop.as_ref().or(Some(basis_prop))
-    } else {
-        Some(basis_prop)
-    };
-
-    match resolved_basis_dim {
-        Some(Dimension::Pt(val)) => *val,
-        Some(Dimension::Percent(p)) => container_main_size * (p / 100.0),
-        _ => { // This is Dimension::Auto
-            if is_horiz {
-                // For 'auto', we need the intrinsic width of the content.
-                node.measure_intrinsic_width(engine)
+            let child_resume = if i == start_index {
+                child_resume_state.take()
             } else {
-                // For vertical flex, we need the intrinsic height.
-                node.measure_content_height(engine, container_main_size)
+                None
+            };
+
+            let mut child_ctx = ctx.child(child_rect);
+            let res = self.children[i].layout(&mut child_ctx, child_constraints, child_resume)?;
+
+            if let LayoutResult::Break(s) = res {
+                break_occurred = true;
+                next_state_index = i;
+                next_child_state = Some(s);
+                break;
             }
         }
-    }
-}
 
-fn resolve_flexible_lengths(line: &mut FlexLine, available_main_size: f32) {
-    let initial_main_size: f32 = line
-        .items
-        .iter()
-        .map(|i| i.main_size + i.main_margin_start + i.main_margin_end)
-        .sum();
-    let remaining_space = available_main_size - initial_main_size;
-
-    if remaining_space.abs() < 0.1 {
-        line.main_size = initial_main_size;
-        return;
-    }
-
-    if remaining_space > 0.0 {
-        let total_grow: f32 = line.items.iter().map(|i| i.style.flex_grow).sum();
-        if total_grow > 0.0 {
-            for item in &mut line.items {
-                if item.style.flex_grow > 0.0 {
-                    item.main_size += remaining_space * (item.style.flex_grow / total_grow);
-                }
-            }
+        if break_occurred {
+            ctx.set_cursor_y(ctx_bounds.height);
+            Ok(LayoutResult::Break(NodeState::Flex(FlexState {
+                child_index: next_state_index,
+                child_state: next_child_state.map(Box::new),
+            })))
+        } else {
+            let remaining_h = (content_height - scroll_offset_y).max(0.0);
+            ctx.set_cursor_y(start_y + remaining_h + self.style.box_model.margin.bottom);
+            Ok(LayoutResult::Finished)
         }
-    } else if remaining_space < 0.0 {
-        let total_shrink: f32 = line.items.iter().map(|i| i.style.flex_shrink * i.flex_basis).sum();
-        if total_shrink > 0.0 {
-            for item in &mut line.items {
-                if item.style.flex_shrink > 0.0 {
-                    let shrink_ratio = (item.style.flex_shrink * item.flex_basis) / total_shrink;
-                    item.main_size += remaining_space * shrink_ratio;
-                }
-            }
-        }
-    }
-    line.main_size = line
-        .items
-        .iter()
-        .map(|i| i.main_size + i.main_margin_start + i.main_margin_end)
-        .sum();
-}
-
-fn calculate_main_axis_alignment(
-    free_space: f32,
-    item_count: usize,
-    justify: &JustifyContent,
-) -> (f32, f32) {
-    if free_space <= 0.0 || item_count == 0 {
-        return (0.0, 0.0);
-    }
-    match justify {
-        JustifyContent::FlexStart => (0.0, 0.0),
-        JustifyContent::FlexEnd => (free_space, 0.0),
-        JustifyContent::Center => (free_space / 2.0, 0.0),
-        JustifyContent::SpaceBetween => {
-            if item_count > 1 {
-                (0.0, free_space / (item_count - 1) as f32)
-            } else {
-                (free_space / 2.0, 0.0)
-            }
-        }
-        JustifyContent::SpaceAround => {
-            let spacing = free_space / item_count as f32;
-            (spacing / 2.0, spacing)
-        }
-        JustifyContent::SpaceEvenly => {
-            let spacing = free_space / (item_count + 1) as f32;
-            (spacing, spacing)
-        }
-    }
-}
-
-fn calculate_cross_axis_alignment(item: &FlexItem, line_cross_size: f32, container_align: &AlignItems) -> f32 {
-    let item_total_cross_size = item.cross_size + item.cross_margin_start + item.cross_margin_end;
-    let align = match &item.style.align_self {
-        AlignSelf::Auto => container_align,
-        AlignSelf::Stretch => &AlignItems::Stretch,
-        AlignSelf::FlexStart => &AlignItems::FlexStart,
-        AlignSelf::FlexEnd => &AlignItems::FlexEnd,
-        AlignSelf::Center => &AlignItems::Center,
-        AlignSelf::Baseline => {
-            log::warn!("align-self: baseline is not supported, falling back to flex-start");
-            &AlignItems::FlexStart
-        }
-    };
-    match align {
-        AlignItems::Stretch => {
-            // Stretching is handled by the parent giving the child the full cross size.
-            // Here, we just align to the start.
-            0.0
-        }
-        AlignItems::FlexStart | AlignItems::Baseline => 0.0,
-        AlignItems::FlexEnd => line_cross_size - item_total_cross_size,
-        AlignItems::Center => (line_cross_size - item_total_cross_size) / 2.0,
     }
 }

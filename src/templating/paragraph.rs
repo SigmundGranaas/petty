@@ -7,6 +7,7 @@ use crate::templating::style::impl_styled_widget;
 /// Builder for a `<Paragraph>` node.
 #[derive(Default, Clone)]
 pub struct Paragraph {
+    id: Option<String>,
     style_names: Vec<String>,
     style_override: ElementStyle,
     children: Vec<Box<dyn TemplateBuilder>>,
@@ -17,6 +18,7 @@ impl Paragraph {
     /// The content can be a `&str`, `Text`, or `Span`.
     pub fn new<T: Into<Box<dyn TemplateBuilder>>>(content: T) -> Self {
         Self {
+            id: None,
             children: vec![content.into()],
             ..Default::default()
         }
@@ -57,6 +59,7 @@ impl Paragraph {
 impl TemplateBuilder for Paragraph {
     fn build(self: Box<Self>) -> TemplateNode {
         TemplateNode::Static(JsonNode::Paragraph(JsonParagraph {
+            id: self.id,
             style_names: self.style_names,
             style_override: self.style_override,
             children: self.children.into_iter().map(|c| c.build()).collect(),

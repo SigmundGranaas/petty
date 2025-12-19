@@ -1,4 +1,3 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/executor_handlers/table.rs
 use crate::core::style::dimension::Dimension;
 use crate::parser::xslt::ast::{PreparsedStyles, PreparsedTemplate};
 use crate::parser::xslt::datasource::DataSourceNode;
@@ -20,6 +19,7 @@ pub(crate) fn handle_table<'s, 'a, N: DataSourceNode<'a> + 'a>(
     builder.set_table_columns(columns);
 
     if let Some(header_template) = header {
+        builder.start_table_header();
         executor.execute_template(
             header_template,
             context_node,
@@ -27,6 +27,7 @@ pub(crate) fn handle_table<'s, 'a, N: DataSourceNode<'a> + 'a>(
             context_size,
             builder,
         )?;
+        builder.end_table_header();
     }
 
     executor.execute_template(

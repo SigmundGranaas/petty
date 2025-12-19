@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::super::pdf::{PageRenderState, PageRenderer, RenderContext};
 use crate::render::RenderError;
 use printpdf::ops::Op;

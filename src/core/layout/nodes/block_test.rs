@@ -1,11 +1,10 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/block_test.rs
 #![cfg(test)]
 
-use crate::core::idf::IRNode;
+use crate::core::idf::{IRNode, NodeMetadata};
 use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
 use crate::core::layout::LayoutElement;
 use crate::core::style::border::{Border, BorderStyle};
-use crate::core::style::color::Color;
+use crate::core::base::color::Color;
 use crate::core::style::dimension::{Margins, PageSize};
 use crate::core::style::stylesheet::{ElementStyle, PageLayout, Stylesheet};
 use std::collections::HashMap;
@@ -36,12 +35,14 @@ fn test_block_with_padding_indents_child() {
         ..Default::default()
     };
     let nodes = vec![IRNode::Block {
-        style_sets: vec![],
-        style_override: Some(block_style),
+        meta: NodeMetadata {
+            style_override: Some(block_style),
+            ..Default::default()
+        },
         children: vec![create_paragraph("Indented text.")],
     }];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
     let text_el = find_first_text_box_with_content(page1, "Indented").unwrap();
 
@@ -73,12 +74,14 @@ fn test_block_with_border_and_padding_indents_content() {
         ..Default::default()
     };
     let nodes = vec![IRNode::Block {
-        style_sets: vec![],
-        style_override: Some(block_style),
+        meta: NodeMetadata {
+            style_override: Some(block_style),
+            ..Default::default()
+        },
         children: vec![create_paragraph("Content")],
     }];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
     let text_el = find_first_text_box_with_content(page1, "Content").unwrap();
 
@@ -116,14 +119,16 @@ fn test_multipage_block_with_background_is_drawn_on_all_pages() {
         ..Default::default()
     };
     let nodes = vec![IRNode::Block {
-        style_sets: vec![],
-        style_override: Some(block_style_override),
+        meta: NodeMetadata {
+            style_override: Some(block_style_override),
+            ..Default::default()
+        },
         children: vec![
             create_paragraph("Line 1\nLine 2\nLine 3\nLine 4\nLine 5\nLine 6"), // 6 lines
         ],
     }];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     assert_eq!(pages.len(), 2, "Expected two pages");
 
     let page1_bg = pages[0]
@@ -171,15 +176,17 @@ fn test_block_splits_across_pages() {
         ..Default::default()
     };
     let nodes = vec![IRNode::Block {
-        style_sets: vec![],
-        style_override: Some(block_style_override),
+        meta: NodeMetadata {
+            style_override: Some(block_style_override),
+            ..Default::default()
+        },
         children: vec![
             create_paragraph("Line 1\nLine 2\nLine 3"), // 3 lines
             create_paragraph("Line 4\nLine 5\nLine 6"), // 3 lines
         ],
     }];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
 
     assert_eq!(pages.len(), 2, "Expected two pages");
 
@@ -223,18 +230,22 @@ fn test_vertical_margin_collapse() {
 
     let nodes = vec![
         IRNode::Block {
-            style_sets: vec![],
-            style_override: Some(block_style_1),
+            meta: NodeMetadata {
+                style_override: Some(block_style_1),
+                ..Default::default()
+            },
             children: vec![create_paragraph("Block 1")],
         },
         IRNode::Block {
-            style_sets: vec![],
-            style_override: Some(block_style_2),
+            meta: NodeMetadata {
+                style_override: Some(block_style_2),
+                ..Default::default()
+            },
             children: vec![create_paragraph("Block 2")],
         },
     ];
 
-    let pages = paginate_test_nodes(stylesheet, nodes).unwrap();
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
     let page1 = &pages[0];
 
     let text1 = find_first_text_box_with_content(page1, "Block 1").unwrap();

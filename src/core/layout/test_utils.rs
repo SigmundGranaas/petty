@@ -1,31 +1,62 @@
-#![cfg(test)]
-
-use crate::core::idf::{IRNode, InlineNode};
-use crate::core::layout::engine::LayoutEngine;
-use crate::core::layout::fonts::FontManager;
+use crate::core::layout::engine::{LayoutEngine, LayoutStore};
+use crate::core::layout::fonts::SharedFontLibrary;
+use crate::core::layout::interface::{AnchorLocation, IndexEntry};
 use crate::core::layout::{LayoutElement, PositionedElement, TextElement};
 use crate::core::style::stylesheet::Stylesheet;
 use crate::error::PipelineError;
-use std::sync::Arc;
+use std::collections::HashMap;
+
+use crate::core::idf::{IRNode, InlineNode, NodeMetadata};
 
 /// Creates a default layout engine for testing purposes.
 pub fn create_test_engine() -> LayoutEngine {
-    let mut font_manager = FontManager::new();
-    // FIX: load_fallback_font now returns (), so no unwrap is needed.
-    font_manager.load_fallback_font();
-    LayoutEngine::new(Arc::new(font_manager))
+    let library = SharedFontLibrary::new();
+    library.load_fallback_font();
+    LayoutEngine::new(&library, Default::default())
 }
 
-/// A convenience function to run the pagination process for a test.
 pub fn paginate_test_nodes(
     stylesheet: Stylesheet,
     nodes: Vec<IRNode>,
-) -> Result<Vec<Vec<PositionedElement>>, PipelineError> {
+) -> Result<
+    (
+        Vec<Vec<PositionedElement>>,
+        HashMap<String, AnchorLocation>,
+        HashMap<String, Vec<IndexEntry>>,
+    ),
+    PipelineError,
+> {
     let engine = create_test_engine();
-    engine.paginate(&stylesheet, nodes)
+    let store = LayoutStore::new();
+    let ir_root = IRNode::Root(nodes);
+
+    let root = engine.build_render_tree(&ir_root, &store)
+        .map_err(|e| PipelineError::Layout(e.to_string()))?;
+
+    let iterator = engine
+        .paginate(&stylesheet, root, &store)
+        .map_err(|e| PipelineError::Layout(e.to_string()))?;
+
+    let mut pages = Vec::new();
+    let mut all_anchors = HashMap::new();
+    let mut all_index_entries = HashMap::new();
+
+    for page_result in iterator {
+        let page = page_result.map_err(|e| PipelineError::Layout(e.to_string()))?;
+        pages.push(page.elements);
+        all_anchors.extend(page.anchors);
+
+        for (key, mut entries) in page.index_entries {
+            all_index_entries
+                .entry(key)
+                .or_insert_with(Vec::new)
+                .append(&mut entries);
+        }
+    }
+
+    Ok((pages, all_anchors, all_index_entries))
 }
 
-/// Creates a simple paragraph node for testing, converting `\n` to line breaks.
 pub fn create_paragraph(text: &str) -> IRNode {
     let mut children = Vec::new();
     for (i, line) in text.split('\n').enumerate() {
@@ -38,21 +69,19 @@ pub fn create_paragraph(text: &str) -> IRNode {
     }
 
     IRNode::Paragraph {
-        style_sets: vec![],
-        style_override: None,
+        meta: NodeMetadata::default(),
         children,
     }
 }
 
-
-/// Finds the first drawable text element on a page that contains the given substring.
 pub fn find_first_text_box_with_content<'a>(
     elements: &'a [PositionedElement],
     content: &str,
 ) -> Option<&'a PositionedElement> {
     elements.iter().find(|el| {
         if let LayoutElement::Text(TextElement {
-                                       content: text_content, ..
+                                       content: text_content,
+                                       ..
                                    }) = &el.element
         {
             text_content.contains(content)

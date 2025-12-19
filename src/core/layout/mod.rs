@@ -1,38 +1,57 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/mod.rs
 use thiserror::Error;
 
 #[derive(Error, Debug)]
 pub enum LayoutError {
     #[error("Node has a height of {0:.2} which exceeds the total page content height of {1:.2}.")]
     ElementTooLarge(f32, f32),
+    #[error("Builder mismatch: Expected {0} node, got {1}.")]
+    BuilderMismatch(&'static str, &'static str),
+    #[error("State mismatch: Expected state for {0}, got {1}.")]
+    StateMismatch(&'static str, &'static str),
+    #[error("Generic layout error: {0}")]
+    Generic(String),
 }
 
-/// The tree-based, multi-pass layout engine.
+// New modules from refactor
+pub mod cache;
 
-// Re-export the main entry point and key types for external use.
-pub use self::engine::LayoutEngine;
+// Existing modules
+pub(crate) mod engine;
+pub use self::engine::{LayoutEngine, LayoutStore};
+pub use self::interface::{AnchorLocation, IndexEntry, LayoutContext, LayoutEnvironment, NodeState};
 
-// Declare the modules that make up the layout engine.
 mod elements;
-mod engine;
-mod fonts;
-pub mod geom;
-pub mod node;
+pub mod config;
+pub mod fonts;
+pub mod interface;
+pub mod node_kind;
 pub mod nodes;
+pub mod perf;
 pub mod style;
+pub mod util;
+
+pub mod algorithms;
+pub mod painting;
 pub mod text;
 
-// Publicly expose types that are needed for the layout process but defined elsewhere.
-pub use crate::error::PipelineError;
+// Re-exports for convenience within the layout crate
 pub use self::elements::{ImageElement, LayoutElement, PositionedElement, TextElement};
-pub use self::fonts::FontManager;
+pub use self::fonts::{LocalFontContext, SharedFontLibrary};
 pub use self::style::ComputedStyle;
-use crate::core::idf::IRNode;
+pub use self::config::LayoutConfig;
+pub use crate::error::PipelineError;
+
+// Re-export geometry types used by nodes from base to prevent type mismatches
+pub use crate::core::base::geometry::{BoxConstraints, Size, Rect};
+
+// Re-export interface types used by nodes
+pub use self::interface::{
+    LayoutResult, LayoutNode,
+    BlockState, FlexState, ListItemState, ParagraphState, TableState
+};
 
 #[cfg(test)]
 mod integration_test;
-
-// Add declarations for the new test modules
 #[cfg(test)]
 mod list_test;
 #[cfg(test)]

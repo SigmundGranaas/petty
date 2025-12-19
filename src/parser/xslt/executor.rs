@@ -1,5 +1,3 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/executor.rs
-// FILE: src/parser/xslt/executor.rs
 //! The stateful executor for an XSLT program. It orchestrates the execution flow,
 //! manages state (like variables), and delegates output generation to an `OutputBuilder`.
 
@@ -172,13 +170,13 @@ impl<'s, 'a, N: DataSourceNode<'a> + 'a> TemplateExecutor<'s, 'a, N> {
     /// and executes the template to produce a final `IRNode` tree.
     pub fn build_tree(&mut self) -> Result<Vec<crate::core::idf::IRNode>, ExecutionError> {
         let mut builder = IdfBuilder::new();
-        self.execute(&mut builder)?;
+        self.execute_with_mode(None, &mut builder)?;
         Ok(builder.get_result())
     }
 
     /// Executes the entire XSLT transformation, delegating all output actions to the provided builder.
-    pub fn execute(&mut self, builder: &mut dyn OutputBuilder) -> Result<(), ExecutionError> {
-        self.apply_templates_to_nodes(&[self.root_node], None, builder)?;
+    pub fn execute_with_mode(&mut self, mode: Option<&str>, builder: &mut dyn OutputBuilder) -> Result<(), ExecutionError> {
+        self.apply_templates_to_nodes(&[self.root_node], mode, builder)?;
         Ok(())
     }
 
@@ -347,7 +345,17 @@ impl<'s, 'a, N: DataSourceNode<'a> + 'a> TemplateExecutor<'s, 'a, N> {
             XsltInstruction::Table { styles, columns, header, body } => {
                 executor_handlers::table::handle_table(self, styles, columns, header, body, context_node, context_position, context_size, builder)?
             }
-            _ => log::warn!("XSLT instruction not yet implemented: {:?}", instruction),
+            XsltInstruction::PageBreak { master_name } => {
+                let evaluated_name = if let Some(avt) = master_name {
+                    let merged_vars = self.get_merged_variables();
+                    let e_ctx =
+                        self.get_eval_context(context_node, &merged_vars, context_position, context_size);
+                    Some(self.evaluate_avt(avt, &e_ctx)?)
+                } else {
+                    None
+                };
+                builder.add_page_break(evaluated_name);
+            }
         }
         Ok(())
     }
@@ -450,6 +458,7 @@ impl<'s, 'a, N: DataSourceNode<'a> + 'a> TemplateExecutor<'s, 'a, N> {
             "fo:inline" | "span" | "strong" | "b" | "em" | "i" => builder.start_styled_span(styles),
             "fo:basic-link" | "a" | "link" => builder.start_hyperlink(styles),
             "fo:external-graphic" | "img" => builder.start_image(styles),
+            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => builder.start_heading(styles, tag_name.last().map_or(1, |&c| c - b'0')),
             // Table elements
             "table" | "fo:table" => builder.start_table(styles),
             "tbody" | "thead" | "header" => { /* These are structural and have no direct IDF equivalent; do nothing */ }
@@ -470,6 +479,7 @@ impl<'s, 'a, N: DataSourceNode<'a> + 'a> TemplateExecutor<'s, 'a, N> {
             "fo:inline" | "span" | "strong" | "b" | "em" | "i" => builder.end_styled_span(),
             "fo:basic-link" | "a" | "link" => builder.end_hyperlink(),
             "fo:external-graphic" | "img" => builder.end_image(),
+            "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => builder.end_heading(),
             // Table elements
             "table" | "fo:table" => builder.end_table(),
             "tbody" | "thead" | "header" => { /* No-op, see start_tag */ }

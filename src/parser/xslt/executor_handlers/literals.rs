@@ -1,6 +1,5 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/executor_handlers/literals.rs
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/executor_handlers/literals.rs
 // FILE: src/parser/xslt/executor_handlers/literals.rs
+
 //! Handlers for literal output, including text, `value-of`, and literal result elements.
 
 use crate::core::style::dimension::Dimension;
@@ -134,10 +133,15 @@ pub(crate) fn handle_attribute<'s, 'a, N: DataSourceNode<'a> + 'a>(
         fn start_table(&mut self, _: &PreparsedStyles) {}
         fn end_table(&mut self) {}
         fn set_table_columns(&mut self, _: &[Dimension]) {}
+        fn start_table_header(&mut self) {}
+        fn end_table_header(&mut self) {}
         fn start_table_row(&mut self, _: &PreparsedStyles) {}
         fn end_table_row(&mut self) {}
         fn start_table_cell(&mut self, _: &PreparsedStyles) {}
         fn end_table_cell(&mut self) {}
+        fn start_heading(&mut self, _: &PreparsedStyles, _: u8) {}
+        fn end_heading(&mut self) {}
+        fn add_page_break(&mut self, _: Option<String>) {}
     }
 
     let name = {

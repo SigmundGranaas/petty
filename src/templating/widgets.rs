@@ -1,5 +1,4 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/templating/widgets.rs
-use crate::core::style::color::Color;
+use crate::core::base::color::Color;
 use crate::core::style::font::FontWeight;
 use crate::core::style::text::TextAlign;
 use crate::templating::builders::*;

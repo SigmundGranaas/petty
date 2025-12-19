@@ -1,11 +1,11 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/xpath/functions.rs
-// FILE: src/parser/xpath/functions.rs
 //! Defines the registry and built-in implementations for XPath 1.0 functions.
 
 use super::engine::{EvaluationContext, XPathValue};
 use crate::parser::xslt::datasource::{DataSourceNode, NodeType};
 use crate::parser::xslt::executor::ExecutionError;
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
+use std::hash::Hasher;
 
 // A simple registry that just holds the names of built-in functions.
 pub struct FunctionRegistry {
@@ -20,7 +20,7 @@ impl FunctionRegistry {
         self.functions.insert(name, ());
     }
     pub fn get(&self, name: &str) -> Option<()> {
-        self.functions.get(name.to_lowercase().as_str()).copied()
+        self.functions.get(name).copied()
     }
 }
 
@@ -30,7 +30,7 @@ pub fn evaluate_function<'a, 'd, N: DataSourceNode<'a>>(
     args: Vec<XPathValue<N>>,
     e_ctx: &EvaluationContext<'a, 'd, N>,
 ) -> Result<XPathValue<N>, ExecutionError> {
-    match name.to_lowercase().as_str() {
+    match name {
         // Core & Node-Set
         "string" => func_string(args, e_ctx),
         "count" => func_count(args),
@@ -40,6 +40,7 @@ pub fn evaluate_function<'a, 'd, N: DataSourceNode<'a>>(
         "local-name" => func_local_name(args, e_ctx),
         "name" => func_name(args, e_ctx),
         "key" => func_key(args, e_ctx),
+        "generate-id" => func_generate_id(args, e_ctx),
 
         // String
         "concat" => func_concat(args),
@@ -64,12 +65,28 @@ pub fn evaluate_function<'a, 'd, N: DataSourceNode<'a>>(
         "ceiling" => func_ceiling(args),
         "round" => func_round(args),
 
+        // Petty extension functions
+        "petty:index" => func_petty_index(args, e_ctx),
+
         // "node" is not a real function, but registering it prevents "unknown function" errors
         // when the parser mistakes the node() test for a function call.
         "node" | "comment" | "processing-instruction" => Err(ExecutionError::FunctionError { function: name.to_string(), message: "This is a node-test, not a function.".to_string() }),
         _ => Err(ExecutionError::FunctionError { function: name.to_string(), message: "Unknown XPath function".to_string() }),
     }
 }
+
+// --- Petty Extension Functions ---
+
+fn func_petty_index<'a, 'd, N: DataSourceNode<'a>>(
+    _args: Vec<XPathValue<N>>,
+    _e_ctx: &EvaluationContext<'a, 'd, N>,
+) -> Result<XPathValue<N>, ExecutionError> {
+    // This is a stub function. It is detected at compile-time to flag the template
+    // as having an index dependency. The actual indexing happens in the layout engine,
+    // and this function's result is not used during the initial template execution pass.
+    Ok(XPathValue::NodeSet(vec![]))
+}
+
 
 // --- Core & Node-Set Functions ---
 
@@ -236,6 +253,47 @@ fn func_name<'a, 'd, N: DataSourceNode<'a>>(
         }
     })).unwrap_or_default();
     Ok(XPathValue::String(name))
+}
+
+fn func_generate_id<'a, 'd, N: DataSourceNode<'a>>(
+    mut args: Vec<XPathValue<N>>,
+    e_ctx: &EvaluationContext<'a, 'd, N>,
+) -> Result<XPathValue<N>, ExecutionError> {
+    if args.len() > 1 {
+        return Err(ExecutionError::FunctionError {
+            function: "generate-id()".to_string(),
+            message: "Expected 0 or 1 arguments".to_string(),
+        });
+    }
+
+    let node_to_id = if args.is_empty() {
+        Some(e_ctx.context_node)
+    } else {
+        match args.remove(0) {
+            XPathValue::NodeSet(mut nodes) => {
+                if nodes.is_empty() {
+                    None
+                } else {
+                    // The spec requires using the first node in document order.
+                    nodes.sort();
+                    nodes.first().copied()
+                }
+            }
+            // For non-node-set arguments, behavior is undefined; returning empty is safe.
+            _ => None,
+        }
+    };
+
+    if let Some(node) = node_to_id {
+        let mut hasher = DefaultHasher::new();
+        node.hash(&mut hasher);
+        let id = hasher.finish();
+        // Prefix with a letter to ensure it's a valid XML NCName.
+        Ok(XPathValue::String(format!("id{}", id)))
+    } else {
+        // If the node-set is empty, return an empty string.
+        Ok(XPathValue::String("".to_string()))
+    }
 }
 
 // --- String Functions ---
@@ -479,6 +537,7 @@ impl Default for FunctionRegistry {
         registry.register("local-name");
         registry.register("name");
         registry.register("key");
+        registry.register("generate-id");
         // String
         registry.register("concat");
         registry.register("starts-with");
@@ -503,6 +562,8 @@ impl Default for FunctionRegistry {
         registry.register("node");
         registry.register("comment");
         registry.register("processing-instruction");
+        // Petty extensions
+        registry.register("petty:index");
         registry
     }
 }

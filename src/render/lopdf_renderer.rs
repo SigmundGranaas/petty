@@ -1,57 +1,39 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/render/lopdf_renderer.rs
-use super::renderer::DocumentRenderer;
-use super::streaming_writer::internal_writer::write_object;
+// src/render/lopdf_renderer.rs
+use super::renderer::{DocumentRenderer, RenderError};
 use super::streaming_writer::StreamingPdfWriter;
-
-use crate::core::style::dimension::Margins;
-use crate::core::style::font::FontWeight;
-use crate::render::RenderError;
-use handlebars::Handlebars;
-use lopdf::content::{Content, Operation};
-use lopdf::{dictionary, Dictionary, Object, ObjectId, Stream, StringFormat};
-use once_cell::sync::Lazy;
-use serde::Serialize;
-use serde_json::Value;
-use std::collections::HashMap;
-use std::io::Write;
-use std::sync::Arc;
 use crate::core::idf::SharedData;
-use crate::core::layout::{ComputedStyle, ImageElement, LayoutElement, LayoutEngine, PositionedElement, TextElement};
-use crate::core::style::color::Color;
-use crate::core::style::stylesheet::{PageLayout, Stylesheet};
-use crate::core::style::text::TextAlign;
+use crate::core::layout::{LayoutEngine, PositionedElement};
+use crate::core::style::stylesheet::Stylesheet;
+use crate::render::{lopdf_helpers};
+use lopdf::{dictionary, Dictionary, Object, ObjectId};
+use std::any::Any;
+use std::collections::HashMap;
+use std::io::{Cursor, Seek, Write};
+use std::sync::Arc;
 
-static DEFAULT_LOPDF_FONT_NAME: Lazy<String> = Lazy::new(|| "F1".to_string());
-
-
-/// A streaming PDF renderer using the `lopdf` library.
-/// It writes the document's objects to the output stream as they are generated,
-/// minimizing peak memory usage.
-pub struct LopdfDocumentRenderer<W: Write + Send> {
-    pub writer: Option<StreamingPdfWriter<W>>,
+/// A PDF renderer using the `lopdf` library, capable of both streaming and buffering.
+pub struct LopdfRenderer<W: Write + Seek + Send> {
+    pub(crate) writer: Option<StreamingPdfWriter<W>>,
     pub stylesheet: Arc<Stylesheet>,
     pub layout_engine: LayoutEngine,
     font_map: HashMap<String, String>,
+    outline_root_id: Option<ObjectId>,
 }
 
-/// Generates the specific font family name based on style (e.g., "Helvetica-Bold").
-fn get_styled_font_name(style: &Arc<ComputedStyle>) -> String {
-    let family = &style.font_family;
-    match style.font_weight {
-        FontWeight::Bold | FontWeight::Black => format!("{}-Bold", family),
-        _ => family.to_string(),
-    }
-}
-
-impl<W: Write + Send> LopdfDocumentRenderer<W> {
-    pub fn new(layout_engine: LayoutEngine, stylesheet: Stylesheet) -> Result<Self, RenderError> {
-        let stylesheet = Arc::new(stylesheet);
+impl<W: Write + Seek + Send> LopdfRenderer<W> {
+    pub fn new(
+        layout_engine: LayoutEngine,
+        stylesheet: Arc<Stylesheet>,
+    ) -> Result<Self, RenderError> {
         let mut font_map = HashMap::new();
 
-        // --- FIX: Build the map from the FontManager's database ---
-        // It maps the font's PostScript name to an internal PDF name (F1, F2, etc.)
-        for (i, face) in layout_engine.font_manager.db().faces().enumerate() {
-            font_map.insert(face.post_script_name.clone(), format!("F{}", i + 1));
+        {
+            // Use the font_db() accessor
+            let db_lock = layout_engine.font_db();
+            let db = db_lock.read().unwrap();
+            for (i, face) in db.faces().enumerate() {
+                font_map.insert(face.post_script_name.clone(), format!("F{}", i + 1));
+            }
         }
 
         Ok(Self {
@@ -59,430 +41,175 @@ impl<W: Write + Send> LopdfDocumentRenderer<W> {
             stylesheet,
             layout_engine,
             font_map,
+            outline_root_id: None,
         })
     }
 
-    pub(crate) fn get_page_dimensions_pt(page_layout: &PageLayout) -> (f32, f32) {
-        page_layout.size.dimensions_pt()
+    #[allow(dead_code)]
+    pub fn writer_mut(&mut self) -> Option<&mut StreamingPdfWriter<W>> {
+        self.writer.as_mut()
+    }
+
+    #[allow(dead_code)]
+    pub fn write_page_object_at_id(
+        &mut self,
+        page_id: ObjectId,
+        content_stream_ids: Vec<ObjectId>,
+        annotations: Vec<ObjectId>,
+        page_width: f32,
+        page_height: f32,
+    ) -> Result<(), RenderError> {
+        let writer = self
+            .writer
+            .as_mut()
+            .ok_or_else(|| RenderError::Other("Document not started".into()))?;
+
+        let mut page_dict = dictionary! {
+            "Type" => "Page",
+            "Parent" => writer.pages_id,
+            "MediaBox" => vec![0.0.into(), 0.0.into(), page_width.into(), page_height.into()],
+            "Contents" => Object::Array(content_stream_ids.into_iter().map(Object::Reference).collect()),
+            "Resources" => writer.resources_id,
+        };
+        if !annotations.is_empty() {
+            page_dict.set(
+                "Annots",
+                Object::Array(
+                    annotations
+                        .into_iter()
+                        .map(Object::Reference)
+                        .collect(),
+                ),
+            );
+        }
+
+        writer.buffer_object_at_id(page_id, page_dict.into());
+        Ok(())
     }
 }
 
-impl<W: Write + Send> DocumentRenderer<W> for LopdfDocumentRenderer<W> {
+impl LopdfRenderer<Cursor<Vec<u8>>> {
+    /// Convenience method for in-memory completion used by ComposingRenderer
+    pub fn finish_into_buffer(mut self, page_ids: Vec<ObjectId>) -> Result<Vec<u8>, RenderError> {
+        if let Some(mut writer) = self.writer.take() {
+            writer.set_page_ids(page_ids);
+            writer.set_outline_root_id(self.outline_root_id);
+            let cursor = writer.finish()?;
+            Ok(cursor.into_inner())
+        } else {
+            Err(RenderError::Other(
+                "Document not started or already finished".into(),
+            ))
+        }
+    }
+}
+
+impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> {
     fn begin_document(&mut self, writer: W) -> Result<(), RenderError> {
-        // Build the font dictionary for the PDF Resources object
         let mut font_dict = Dictionary::new();
-        // --- FIX: Iterate over the database to build the font dictionary ---
-        for face in self.layout_engine.font_manager.db().faces() {
-            if let Some(internal_name) = self.font_map.get(&face.post_script_name) {
-                let single_font_dict = dictionary! {
-                    "Type" => "Font",
-                    "Subtype" => "Type1", // Simplified, would need TTF parsing for full correctness
-                    "BaseFont" => face.post_script_name.clone(),
-                    "Encoding" => "WinAnsiEncoding",
-                };
-                font_dict.set(internal_name.as_bytes(), Object::Dictionary(single_font_dict));
+
+        {
+            let db_lock = self.layout_engine.font_db();
+            let db = db_lock.read().unwrap();
+            for face in db.faces() {
+                if let Some(internal_name) = self.font_map.get(&face.post_script_name) {
+                    let single_font_dict = dictionary! {
+                        "Type" => "Font", "Subtype" => "Type1", "BaseFont" => face.post_script_name.clone(), "Encoding" => "WinAnsiEncoding",
+                    };
+                    font_dict.set(
+                        internal_name.as_bytes(),
+                        Object::Dictionary(single_font_dict),
+                    );
+                }
             }
         }
-
         self.writer = Some(StreamingPdfWriter::new(writer, "1.7", font_dict)?);
         Ok(())
     }
 
-    fn add_resources(&mut self, _resources: &HashMap<String, SharedData>) -> Result<(), RenderError> {
-        // Lopdf renderer does not yet support images, so this is a no-op.
-        Ok(())
-    }
-
-    fn render_page(
+    fn add_resources(
         &mut self,
-        context: &Value,
-        elements: Vec<PositionedElement>,
-        template_engine: &Handlebars,
+        _resources: &HashMap<String, SharedData>,
     ) -> Result<(), RenderError> {
-        let writer = self.writer.as_mut().ok_or_else(|| {
-            RenderError::Other("begin_document must be called before render_page".into())
-        })?;
-
-        let default_master_name = self.stylesheet.default_page_master_name.as_ref().unwrap();
-        let page_layout = self.stylesheet.page_masters.get(default_master_name).unwrap();
-        let (page_width, page_height) = Self::get_page_dimensions_pt(page_layout);
-
-        let mut page_ctx = PageContext::new(&self.layout_engine, page_height, &self.font_map);
-        page_ctx.stylesheet = Some(&self.stylesheet);
-        for element in elements {
-            page_ctx.draw_element(&element)?;
-        }
-
-        let page_num = writer.page_ids.len() + 1;
-        if let Some(footer_template) = &page_layout.footer_text {
-            page_ctx.draw_footer(
-                context,
-                template_engine,
-                footer_template,
-                page_layout,
-                page_num,
-            )?;
-        }
-
-        let content = page_ctx.finish();
-        let media_box = [0.0, 0.0, page_width, page_height];
-
-        writer.add_page(content, media_box)?;
-
         Ok(())
     }
 
-    fn finalize(mut self: Box<Self>) -> Result<(), RenderError> {
-        if let Some(writer) = self.writer.take() {
-            writer.finish()?;
-            Ok(())
+    fn render_page_content(
+        &mut self,
+        elements: Vec<PositionedElement>,
+        font_map: &HashMap<String, String>,
+        page_width: f32,
+        page_height: f32,
+    ) -> Result<ObjectId, RenderError> {
+        let writer = self
+            .writer
+            .as_mut()
+            .ok_or_else(|| RenderError::Other("Document not started".into()))?;
+        let content = lopdf_helpers::render_elements_to_content(
+            elements,
+            font_map,
+            page_width,
+            page_height,
+        )?;
+        // Use write_content_stream to stream immediately
+        let content_id = writer.write_content_stream(content)?;
+        Ok(content_id)
+    }
+
+    fn write_page_object(
+        &mut self,
+        content_stream_ids: Vec<ObjectId>,
+        annotations: Vec<ObjectId>,
+        page_width: f32,
+        page_height: f32,
+    ) -> Result<ObjectId, RenderError> {
+        let writer = self
+            .writer
+            .as_mut()
+            .ok_or_else(|| RenderError::Other("Document not started".into()))?;
+
+        let mut page_dict = dictionary! {
+            "Type" => "Page",
+            "Parent" => writer.pages_id,
+            "MediaBox" => vec![0.0.into(), 0.0.into(), page_width.into(), page_height.into()],
+            "Contents" => Object::Array(content_stream_ids.into_iter().map(Object::Reference).collect()),
+            "Resources" => writer.resources_id,
+        };
+        if !annotations.is_empty() {
+            page_dict.set(
+                "Annots",
+                Object::Array(
+                    annotations
+                        .into_iter()
+                        .map(Object::Reference)
+                        .collect(),
+                ),
+            );
+        }
+
+        let page_id = writer.write_object(page_dict.into())?;
+        Ok(page_id)
+    }
+
+    fn set_outline_root(&mut self, outline_root_id: ObjectId) {
+        self.outline_root_id = Some(outline_root_id);
+    }
+
+    fn finish(self: Box<Self>, page_ids: Vec<ObjectId>) -> Result<W, RenderError> {
+        let mut renderer = *self;
+        if let Some(mut internal_writer) = renderer.writer.take() {
+            internal_writer.set_page_ids(page_ids);
+            internal_writer.set_outline_root_id(renderer.outline_root_id);
+            let writer = internal_writer.finish()?;
+            Ok(writer)
         } else {
             Err(RenderError::Other(
                 "Document was never started with begin_document".into(),
             ))
         }
     }
-}
 
-// This struct holds the pre-allocated IDs for a single page.
-#[derive(Clone)]
-pub struct LopdfPageRenderTask {
-    pub page_object_id: ObjectId,
-    pub content_object_id: ObjectId,
-    pub elements: Vec<PositionedElement>,
-    pub context: Arc<Value>,
-}
-
-/// Renders a single page's elements and footer into raw bytes for its PDF objects.
-/// This is a pure function that can be run in parallel.
-pub fn render_lopdf_page_to_bytes(
-    task: LopdfPageRenderTask,
-    page_layout: &PageLayout,
-    page_num: usize,
-    resources_id: ObjectId,
-    parent_pages_id: ObjectId,
-    layout_engine: &LayoutEngine,
-    template_engine: &Handlebars,
-    stylesheet: &Stylesheet,
-) -> Result<Vec<u8>, RenderError> {
-    let mut buffer = Vec::with_capacity(4096); // Start with a 4KB buffer
-    let (page_width, page_height) =
-        LopdfDocumentRenderer::<&mut Vec<u8>>::get_page_dimensions_pt(page_layout);
-
-    // --- FIX: Create a font_map for the parallel rendering context ---
-    let mut font_map = HashMap::new();
-    for (i, face) in layout_engine.font_manager.db().faces().enumerate() {
-        font_map.insert(face.post_script_name.clone(), format!("F{}", i + 1));
-    }
-
-    let mut page_ctx = PageContext::new(
-        layout_engine,
-        page_height,
-        &font_map,
-    );
-
-    page_ctx.stylesheet = Some(stylesheet);
-    // Render main elements
-    for element in &task.elements {
-        page_ctx.draw_element(element)?;
-    }
-
-    // Render footer
-    if let Some(footer_template) = &page_layout.footer_text {
-        page_ctx.draw_footer(
-            &task.context,
-            template_engine,
-            footer_template,
-            page_layout,
-            page_num,
-        )?;
-    }
-
-    let content = page_ctx.finish();
-    let content_stream = Stream::new(dictionary! {}, content.encode()?);
-
-    // Manually write the objects to our byte buffer using the pre-allocated IDs.
-    buffer.extend_from_slice(
-        format!(
-            "{} {} obj\n",
-            task.content_object_id.0, task.content_object_id.1
-        )
-            .as_bytes(),
-    );
-    write_object(&mut buffer, &Object::Stream(content_stream))?;
-    buffer.extend_from_slice(b"\nendobj\n");
-
-    let page_dict = dictionary! {
-        "Type" => "Page",
-        "Parent" => parent_pages_id,
-        "MediaBox" => vec![0.0.into(), 0.0.into(), page_width.into(), page_height.into()],
-        "Contents" => task.content_object_id,
-        "Resources" => resources_id,
-    };
-    buffer.extend_from_slice(
-        format!(
-            "{} {} obj\n",
-            task.page_object_id.0, task.page_object_id.1
-        )
-            .as_bytes(),
-    );
-    write_object(&mut buffer, &Object::Dictionary(page_dict))?;
-    buffer.extend_from_slice(b"\nendobj\n");
-
-    Ok(buffer)
-}
-
-/// Helper to convert a UTF-8 string to a byte vector using WinAnsiEncoding rules.
-fn to_win_ansi(s: &str) -> Vec<u8> {
-    let mut bytes = Vec::with_capacity(s.len());
-    for ch in s.chars() {
-        match ch {
-            '•' => bytes.push(149), // U+2022 BULLET
-            '–' => bytes.push(150), // U+2013 EN DASH
-            '—' => bytes.push(151), // U+2014 EM DASH
-            '‘' => bytes.push(145), // U+2018 LEFT SINGLE QUOTATION MARK
-            '’' => bytes.push(146), // U+2019 RIGHT SINGLE QUOTATION MARK
-            '“' => bytes.push(147), // U+201C LEFT DOUBLE QUOTATION MARK
-            '”' => bytes.push(148), // U+201D RIGHT DOUBLE QUOTATION MARK
-            c if c as u32 <= 127 => bytes.push(c as u8), // ASCII passthrough
-            _ => bytes.push(b'?'), // Placeholder for unsupported characters
-        }
-    }
-    bytes
-}
-
-struct PageContext<'a> {
-    layout_engine: &'a LayoutEngine,
-    stylesheet: Option<&'a Stylesheet>,
-    page_height: f32,
-    content: Content,
-    state: LopdfPageRenderState,
-    font_map: &'a HashMap<String, String>,
-}
-
-#[derive(Default, Clone, PartialEq)]
-struct LopdfPageRenderState {
-    font_name: String,
-    font_size: f32,
-    fill_color: Color,
-}
-
-impl<'a> PageContext<'a> {
-    fn new(layout_engine: &'a LayoutEngine, page_height: f32, font_map: &'a HashMap<String, String>) -> Self {
-        Self {
-            layout_engine,
-            stylesheet: None,
-            page_height,
-            content: Content { operations: vec![] },
-            state: LopdfPageRenderState::default(),
-            font_map,
-        }
-    }
-
-    fn finish(self) -> Content {
-        self.content
-    }
-
-    fn draw_element(&mut self, el: &PositionedElement) -> Result<(), RenderError> {
-        self.draw_background_and_borders(el)?;
-        match &el.element {
-            LayoutElement::Text(text) => self.draw_text(text, el)?,
-            LayoutElement::Image(image) => self.draw_image(image, el)?,
-            LayoutElement::Rectangle(_) => {}
-        }
-        Ok(())
-    }
-
-    fn draw_background_and_borders(&mut self, el: &PositionedElement) -> Result<(), RenderError> {
-        let style = &el.style;
-        let x = el.x;
-        let y = self.page_height - (el.y + el.height);
-        if let Some(bg) = &style.background_color {
-            self.content.operations.push(Operation::new(
-                "rg",
-                vec![
-                    (bg.r as f32 / 255.0).into(),
-                    (bg.g as f32 / 255.0).into(),
-                    (bg.b as f32 / 255.0).into(),
-                ],
-            ));
-            self.content.operations.push(Operation::new(
-                "re",
-                vec![x.into(), y.into(), el.width.into(), el.height.into()],
-            ));
-            self.content.operations.push(Operation::new("f", vec![]));
-        }
-        if let Some(border) = &style.border_bottom {
-            self.content
-                .operations
-                .push(Operation::new("w", vec![border.width.into()]));
-            self.content.operations.push(Operation::new(
-                "RG",
-                vec![
-                    (border.color.r as f32 / 255.0).into(),
-                    (border.color.g as f32 / 255.0).into(),
-                    (border.color.b as f32 / 255.0).into(),
-                ],
-            ));
-            let line_y = self.page_height - (el.y + el.height);
-            self.content
-                .operations
-                .push(Operation::new("m", vec![el.x.into(), line_y.into()]));
-            self.content.operations.push(Operation::new(
-                "l",
-                vec![(el.x + el.width).into(), line_y.into()],
-            ));
-            self.content.operations.push(Operation::new("S", vec![]));
-        }
-        Ok(())
-    }
-
-    fn set_font(&mut self, style: &Arc<ComputedStyle>) {
-        let styled_font_name = get_styled_font_name(style);
-        let internal_font_name = match self.font_map.get(&styled_font_name) {
-            Some(name) => name,
-            None => {
-                // Fallback logic
-                if styled_font_name != style.font_family.as_str() {
-                    log::warn!(
-                        "Lopdf: Font style '{}' not found, falling back to base '{}'",
-                        styled_font_name, style.font_family
-                    );
-                }
-                self.font_map.get(style.font_family.as_str()).unwrap_or(&DEFAULT_LOPDF_FONT_NAME)
-            }
-        };
-
-        if self.state.font_name != *internal_font_name || self.state.font_size != style.font_size {
-            self.content.operations.push(Operation::new(
-                "Tf",
-                vec![Object::Name(internal_font_name.as_bytes().to_vec()), style.font_size.into()],
-            ));
-            self.state.font_name = internal_font_name.to_string();
-            self.state.font_size = style.font_size;
-        }
-    }
-
-    fn set_fill_color(&mut self, color: &Color) {
-        if self.state.fill_color != *color {
-            self.content.operations.push(Operation::new(
-                "rg",
-                vec![
-                    (color.r as f32 / 255.0).into(),
-                    (color.g as f32 / 255.0).into(),
-                    (color.b as f32 / 255.0).into(),
-                ],
-            ));
-            self.state.fill_color = color.clone();
-        }
-    }
-
-    fn draw_text(&mut self, text: &TextElement, el: &PositionedElement) -> Result<(), RenderError> {
-        if text.content.trim().is_empty() {
-            return Ok(());
-        }
-        self.content.operations.push(Operation::new("BT", vec![]));
-        self.set_font(&el.style);
-        self.set_fill_color(&el.style.color);
-        let baseline_y = el.y + el.style.font_size * 0.8;
-        let pdf_y = self.page_height - baseline_y;
-        self.content
-            .operations
-            .push(Operation::new("Td", vec![el.x.into(), pdf_y.into()]));
-
-        let encoded_bytes = to_win_ansi(&text.content);
-        let text_object = Object::String(encoded_bytes, StringFormat::Literal);
-
-        self.content.operations.push(Operation::new(
-            "Tj",
-            vec![text_object],
-        ));
-        self.content.operations.push(Operation::new("ET", vec![]));
-        Ok(())
-    }
-
-    fn draw_image(
-        &mut self,
-        image: &ImageElement,
-        _el: &PositionedElement,
-    ) -> Result<(), RenderError> {
-        log::warn!(
-            "Images are not supported in the lopdf streaming renderer yet: {}",
-            image.src
-        );
-        Ok(())
-    }
-
-    fn draw_footer(
-        &mut self,
-        context: &Value,
-        template_engine: &Handlebars,
-        footer_template: &str,
-        page_layout: &PageLayout,
-        page_num: usize,
-    ) -> Result<(), RenderError> {
-        let default_margins = Margins::default();
-        let margins = page_layout.margins.as_ref().unwrap_or(&default_margins);
-        let style_sets = if let Some(style_name) = page_layout.footer_style.as_deref() {
-            self.stylesheet
-                .and_then(|ss| {
-                    ss.styles
-                        .get(style_name)
-                        .map(|style_arc| vec![Arc::clone(style_arc)])
-                })
-                .unwrap_or_default()
-        } else {
-            vec![]
-        };
-
-        let style = self.layout_engine.compute_style(
-            &style_sets,
-            None,
-            &self.layout_engine.get_default_style(),
-        );
-
-        #[derive(Serialize)]
-        struct FooterCtx<'a> {
-            #[serde(flatten)]
-            data: &'a Value,
-            page_num: usize,
-        }
-        let ctx = FooterCtx {
-            data: context,
-            page_num,
-        };
-        let text = template_engine.render_template(footer_template, &ctx)?;
-        let (page_width, _) =
-            LopdfDocumentRenderer::<&mut Vec<u8>>::get_page_dimensions_pt(page_layout);
-
-        self.content.operations.push(Operation::new("BT", vec![]));
-        self.set_font(&style);
-        self.set_fill_color(&style.color);
-
-        let line_width = self.layout_engine.measure_text_width(&text, &style);
-        let y = margins.bottom - style.font_size;
-        let x = match style.text_align {
-            TextAlign::Left => margins.left,
-            TextAlign::Right => page_width - margins.right - line_width,
-            TextAlign::Center => {
-                let content_width =
-                    page_width - margins.left - margins.right;
-                margins.left + (content_width - line_width) / 2.0
-            }
-            TextAlign::Justify => margins.left,
-        };
-
-        self.content
-            .operations
-            .push(Operation::new("Td", vec![x.into(), y.into()]));
-
-        let encoded_bytes = to_win_ansi(&text);
-        let footer_text_object = Object::String(encoded_bytes, StringFormat::Literal);
-
-        self.content
-            .operations
-            .push(Operation::new("Tj", vec![footer_text_object]));
-        self.content.operations.push(Operation::new("ET", vec![]));
-        Ok(())
+    fn as_any_mut(&mut self) -> &mut dyn Any {
+        self
     }
 }

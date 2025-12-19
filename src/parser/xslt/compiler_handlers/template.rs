@@ -1,5 +1,3 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/xslt/compiler_handlers/template.rs
-// FILE: src/parser/xslt/compiler_handlers/template.rs
 //! Handlers for `<xsl:template>` and related instructions.
 
 use crate::parser::xslt::ast::{NamedTemplate, PreparsedTemplate, TemplateRule, XsltInstruction};
@@ -15,7 +13,9 @@ impl CompilerBuilder {
         pos: usize,
         source: &str,
     ) -> Result<(), ParseError> {
-        if let Some(template_name) = get_attr_owned_optional(&attrs, b"name")? {
+        if let Some(role_name) = get_attr_owned_optional(&attrs, b"petty:role")? {
+            self.state_stack.push(BuilderState::RoleTemplate { role_name, attrs });
+        } else if let Some(template_name) = get_attr_owned_optional(&attrs, b"name")? {
             self.state_stack.push(BuilderState::NamedTemplate {
                 name: template_name,
                 params: vec![],
@@ -62,6 +62,24 @@ impl CompilerBuilder {
                     body: PreparsedTemplate(body),
                 };
                 self.named_templates.insert(name, std::sync::Arc::new(template));
+            }
+            BuilderState::RoleTemplate { role_name, attrs } => {
+                // Generate a unique mode for this role template.
+                let unique_mode = format!("__petty_role_{}", role_name);
+                self.role_template_modes.insert(role_name, unique_mode.clone());
+
+                // A role template acts like a regular template rule, but with a specific mode.
+                // It defaults to matching the root node if no `match` is provided.
+                let match_str = get_attr_owned_optional(&attrs, b"match")?.unwrap_or_else(|| "/".to_string());
+                let pattern = pattern::parse(&match_str)?;
+
+                let rule = TemplateRule {
+                    pattern,
+                    priority: 1.0, // Role templates should have high priority if a match is specified.
+                    mode: Some(unique_mode),
+                    body: PreparsedTemplate(body),
+                };
+                self.template_rules.entry(rule.mode.clone()).or_default().push(rule);
             }
             _ => {} // Should not happen
         }

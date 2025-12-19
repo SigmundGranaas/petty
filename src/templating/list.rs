@@ -7,6 +7,7 @@ use crate::templating::style::impl_styled_widget;
 /// Builder for a `<List>` node.
 #[derive(Default, Clone)]
 pub struct List {
+    id: Option<String>,
     style_names: Vec<String>,
     style_override: ElementStyle,
     children: Vec<Box<dyn TemplateBuilder>>,
@@ -32,6 +33,7 @@ impl List {
 impl TemplateBuilder for List {
     fn build(self: Box<Self>) -> TemplateNode {
         TemplateNode::Static(JsonNode::List(JsonContainer {
+            id: self.id,
             style_names: self.style_names,
             style_override: self.style_override,
             children: self.children.into_iter().map(|c| c.build()).collect(),

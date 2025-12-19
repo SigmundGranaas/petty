@@ -1,275 +1,242 @@
-use crate::core::idf::IRNode;
-use crate::core::layout::elements::RectElement;
-use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult};
-use crate::core::layout::nodes::page_break::PageBreakNode;
+use crate::core::idf::{IRNode, TextStr};
+use crate::core::layout::engine::{LayoutEngine, LayoutStore};
+use crate::core::base::geometry::{self, BoxConstraints, Size};
+use crate::core::layout::interface::{
+    BlockState, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
+};
+use super::RenderNode;
 use crate::core::layout::style::ComputedStyle;
-use crate::core::layout::{geom, LayoutElement, LayoutEngine, LayoutError, PositionedElement};
-use crate::core::style::border::Border;
+use crate::core::layout::LayoutError;
+use crate::core::layout::painting::box_painter::create_background_and_borders;
 use crate::core::style::dimension::Dimension;
-use std::any::Any;
 use std::sync::Arc;
 
-/// A `LayoutNode` for block-level containers like `<div>`.
-/// It stacks its children vertically and is responsible for managing its own
-/// margins, padding, and background color.
 #[derive(Debug, Clone)]
-pub struct BlockNode {
-    children: Vec<Box<dyn LayoutNode>>,
-    style: Arc<ComputedStyle>,
+pub struct BlockNode<'a> {
+    pub id: Option<&'a str>,
+    pub children: &'a [RenderNode<'a>],
+    pub style: Arc<ComputedStyle>,
 }
 
-impl BlockNode {
-    pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Self {
-        let style = engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
-        let ir_children = match node {
-            IRNode::Block { children, .. } | IRNode::ListItem { children, .. } => children,
-            _ => panic!("BlockNode must be created from a compatible IRNode"),
-        };
-        let children = ir_children
-            .iter()
-            .map(|child_ir| engine.build_layout_node_tree(child_ir, style.clone()))
-            .collect();
-        Self { children, style }
-    }
-
-    pub fn new_root(
+impl<'a> BlockNode<'a> {
+    pub fn build(
         node: &IRNode,
         engine: &LayoutEngine,
-        _parent_style: Arc<ComputedStyle>,
-    ) -> Self {
-        let style = engine.get_default_style(); // Root has no specific style
-        let ir_children = match node {
-            IRNode::Root(children) => children,
-            _ => panic!("BlockNode (root) must be created from an IRNode::Root"),
+        parent_style: Arc<ComputedStyle>,
+        store: &'a LayoutStore,
+    ) -> Result<RenderNode<'a>, LayoutError> {
+        let (id_string, children_ir, style) = match node {
+            IRNode::Block { meta, children } => {
+                let style = engine.compute_style(
+                    &meta.style_sets,
+                    meta.style_override.as_ref(),
+                    &parent_style,
+                );
+                (&meta.id, children, style)
+            }
+            IRNode::Root(children) => {
+                let style = engine.get_default_style();
+                (&None, children, style)
+            }
+            _ => return Err(LayoutError::BuilderMismatch("Block", node.kind())),
         };
-        let children = ir_children
-            .iter()
-            .map(|child_ir| engine.build_layout_node_tree(child_ir, style.clone()))
-            .collect();
-        Self { children, style }
+
+        let child_vec = engine.build_layout_node_children(children_ir, style.clone(), store)?;
+        let children = store.bump.alloc_slice_copy(&child_vec);
+
+        let id = id_string.as_ref().map(|s| store.alloc_str(s));
+
+        let style_ref = store.cache_style(style);
+
+        let node = store.bump.alloc(Self {
+            id,
+            children,
+            style: style_ref,
+        });
+
+        Ok(RenderNode::Block(node))
+    }
+
+    pub fn new_from_children(
+        id_string: Option<TextStr>,
+        children_vec: Vec<RenderNode<'a>>,
+        style: Arc<ComputedStyle>,
+        store: &'a LayoutStore,
+    ) -> Self {
+        let style_ref = store.cache_style(style);
+        Self {
+            id: id_string.as_ref().map(|s| store.alloc_str(s)),
+            children: store.bump.alloc_slice_copy(&children_vec),
+            style: style_ref,
+        }
     }
 }
 
-impl LayoutNode for BlockNode {
-    fn style(&self) -> &Arc<ComputedStyle> {
-        &self.style
+impl<'a> LayoutNode for BlockNode<'a> {
+    fn style(&self) -> &ComputedStyle {
+        self.style.as_ref()
     }
 
-    fn measure(&mut self, engine: &LayoutEngine, available_width: f32) {
-        let border_left_width = self.style.border_left.as_ref().map_or(0.0, |b| b.width);
-        let border_right_width = self.style.border_right.as_ref().map_or(0.0, |b| b.width);
+    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<Size, LayoutError> {
+        let h_deduction = self.style.padding_x() + self.style.border_x();
+        let padding_y = self.style.padding_y();
+        let border_y = self.style.border_y();
+        let margin_y = self.style.box_model.margin.top + self.style.box_model.margin.bottom;
 
-        let child_available_width = available_width
-            - self.style.padding.left
-            - self.style.padding.right
-            - border_left_width
-            - border_right_width;
-
-        for child in &mut self.children {
-            child.measure(engine, child_available_width);
+        if let (Some(Dimension::Pt(w)), Some(Dimension::Pt(h))) = (&self.style.box_model.width, &self.style.box_model.height) {
+            return Ok(Size::new(w + h_deduction, h + margin_y));
         }
-    }
 
-    fn measure_content_height(&mut self, engine: &LayoutEngine, available_width: f32) -> f32 {
-        if let Some(Dimension::Pt(h)) = self.style.height {
-            return self.style.margin.top + h + self.style.margin.bottom;
+        let child_constraints = self.style.content_constraints(constraints);
+
+        let mut max_child_width: f32 = 0.0;
+        let mut total_content_height: f32 = 0.0;
+
+        for child in self.children {
+            let child_size = child.measure(env, child_constraints)?;
+            max_child_width = max_child_width.max(child_size.width);
+            total_content_height += child_size.height;
         }
-        let border_top_width = self.style.border_top.as_ref().map_or(0.0, |b| b.width);
-        let border_bottom_width = self.style.border_bottom.as_ref().map_or(0.0, |b| b.width);
-        let border_left_width = self.style.border_left.as_ref().map_or(0.0, |b| b.width);
-        let border_right_width = self.style.border_right.as_ref().map_or(0.0, |b| b.width);
 
-        let child_available_width = available_width
-            - self.style.padding.left
-            - self.style.padding.right
-            - border_left_width
-            - border_right_width;
+        let height = if let Some(Dimension::Pt(h)) = self.style.box_model.height {
+            margin_y + h
+        } else {
+            margin_y + border_y + padding_y + total_content_height
+        };
 
-        let content_height: f32 = self
-            .children
-            .iter_mut()
-            .map(|c| c.measure_content_height(engine, child_available_width))
-            .sum();
+        let computed_width = if constraints.has_bounded_width() {
+            constraints.max_width
+        } else if let Some(Dimension::Pt(w)) = self.style.box_model.width {
+            w + h_deduction
+        } else {
+            max_child_width + h_deduction
+        };
 
-        self.style.margin.top
-            + border_top_width
-            + self.style.padding.top
-            + content_height
-            + self.style.padding.bottom
-            + border_bottom_width
-            + self.style.margin.bottom
+        Ok(Size::new(computed_width, height))
     }
 
-    fn measure_intrinsic_width(&self, engine: &LayoutEngine) -> f32 {
-        let child_max_width = self
-            .children
-            .iter()
-            .map(|c| c.measure_intrinsic_width(engine))
-            .fold(0.0, f32::max);
-
-        let border_left_width = self.style.border_left.as_ref().map_or(0.0, |b| b.width);
-        let border_right_width = self.style.border_right.as_ref().map_or(0.0, |b| b.width);
-
-        child_max_width
-            + self.style.padding.left
-            + self.style.padding.right
-            + border_left_width
-            + border_right_width
-    }
-
-    fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
-        // --- Vertical Margin Collapsing ---
-        let margin_to_add = self.style.margin.top.max(ctx.last_v_margin);
-        if !ctx.is_empty() && margin_to_add > ctx.available_height() {
-            return Ok(LayoutResult::Partial(Box::new(self.clone())));
+    fn layout(
+        &self,
+        ctx: &mut LayoutContext,
+        constraints: BoxConstraints,
+        break_state: Option<NodeState>,
+    ) -> Result<LayoutResult, LayoutError> {
+        if let Some(id) = self.id {
+            ctx.register_anchor(id);
         }
-        ctx.advance_cursor(margin_to_add);
-        ctx.last_v_margin = 0.0;
 
-        let border_top_width = self.style.border_top.as_ref().map_or(0.0, |b| b.width);
-        let border_bottom_width = self.style.border_bottom.as_ref().map_or(0.0, |b| b.width);
-        let border_left_width = self.style.border_left.as_ref().map_or(0.0, |b| b.width);
-        let border_right_width = self.style.border_right.as_ref().map_or(0.0, |b| b.width);
+        let (start_index, mut child_resume_state) = if let Some(state) = break_state {
+            let block_state = state.as_block()?;
+            (
+                block_state.child_index,
+                block_state.child_state.map(|b| *b),
+            )
+        } else {
+            (0, None)
+        };
 
-        let block_start_y_in_ctx = ctx.cursor.1;
-        ctx.advance_cursor(border_top_width + self.style.padding.top);
-        let content_start_y_in_ctx = ctx.cursor.1;
+        let is_continuation = start_index > 0 || child_resume_state.is_some();
 
-        let child_bounds = geom::Rect {
-            x: ctx.bounds.x + border_left_width + self.style.padding.left,
-            y: ctx.bounds.y + content_start_y_in_ctx,
-            width: ctx.bounds.width
-                - self.style.padding.left
-                - self.style.padding.right
-                - border_left_width
-                - border_right_width,
+        // Use LayoutContext helpers for margin collapsing
+        if !is_continuation {
+            if ctx.prepare_for_block(self.style.box_model.margin.top) {
+                return Ok(LayoutResult::Break(NodeState::Block(BlockState {
+                    child_index: 0,
+                    child_state: None,
+                })));
+            }
+        } else {
+            // If continuing, ensure previous margins are cleared so we don't double add them
+            ctx.last_v_margin = 0.0;
+        }
+
+        let border_top = self.style.border_top_width();
+        let border_left = self.style.border_left_width();
+
+        let top_spacing = if !is_continuation {
+            border_top + self.style.box_model.padding.top
+        } else {
+            0.0
+        };
+
+        let block_start_y_in_ctx = ctx.cursor_y();
+        ctx.advance_cursor(top_spacing);
+        let content_start_y_in_ctx = ctx.cursor_y();
+
+        let child_constraints = self.style.content_constraints(constraints);
+        let ctx_bounds = ctx.bounds();
+
+        let child_bounds = geometry::Rect {
+            x: ctx_bounds.x + border_left + self.style.box_model.padding.left,
+            y: ctx_bounds.y + content_start_y_in_ctx,
+            width: ctx_bounds.width - self.style.padding_x() - self.style.border_x(),
             height: ctx.available_height(),
         };
-        let mut child_ctx = LayoutContext {
-            engine: ctx.engine,
-            bounds: child_bounds,
-            cursor: (0.0, 0.0),
-            elements: ctx.elements,
-            last_v_margin: 0.0,
-        };
 
-        for (i, child) in self.children.iter_mut().enumerate() {
-            match child.layout(&mut child_ctx) {
-                Ok(LayoutResult::Full) => continue,
-                Ok(LayoutResult::Partial(remainder)) => {
-                    let content_height = child_ctx.cursor.1;
-                    draw_background_and_borders(ctx, &self.style, block_start_y_in_ctx, content_height);
+        let mut child_ctx = ctx.child(child_bounds);
+        let mut split_res = LayoutResult::Finished;
+        for (i, child) in self.children.iter().enumerate().skip(start_index) {
+            let resume = if i == start_index {
+                child_resume_state.take()
+            } else {
+                None
+            };
 
-                    ctx.cursor.1 = content_start_y_in_ctx + content_height + self.style.padding.bottom + border_bottom_width;
-                    ctx.last_v_margin = child_ctx.last_v_margin;
+            let res = child.layout(&mut child_ctx, child_constraints, resume)?;
 
-                    let mut remaining_children = vec![remainder];
-                    remaining_children.extend(self.children.drain((i + 1)..));
-
-                    let next_page_block = Box::new(BlockNode {
-                        children: remaining_children,
-                        style: self.style.clone(),
-                    });
-                    return Ok(LayoutResult::Partial(next_page_block));
-                }
-                Err(e) => {
-                    log::warn!("Skipping child element that failed to lay out: {}", e);
-                    continue;
+            match res {
+                LayoutResult::Finished => {}
+                LayoutResult::Break(next_state) => {
+                    split_res = LayoutResult::Break(NodeState::Block(BlockState {
+                        child_index: i,
+                        child_state: Some(Box::new(next_state)),
+                    }));
+                    break;
                 }
             }
         }
+        let child_cursor_y = child_ctx.cursor_y();
+        let actual_used_height = child_cursor_y;
 
-        let content_height = child_ctx.cursor.1;
-        draw_background_and_borders(ctx, &self.style, block_start_y_in_ctx, content_height);
+        let bg_elements = create_background_and_borders(
+            ctx.bounds(),
+            &self.style,
+            block_start_y_in_ctx,
+            actual_used_height,
+            !is_continuation,
+            matches!(split_res, LayoutResult::Finished),
+        );
 
-        ctx.cursor.1 = content_start_y_in_ctx + content_height + self.style.padding.bottom + border_bottom_width;
-        ctx.last_v_margin = self.style.margin.bottom.max(child_ctx.last_v_margin);
-
-        Ok(LayoutResult::Full)
-    }
-
-    fn check_for_page_break(&mut self) -> Option<Option<String>> {
-        if let Some(first_child) = self.children.first_mut() {
-            if first_child.is::<PageBreakNode>() {
-                let page_break_node = self.children.remove(0).downcast::<PageBreakNode>().unwrap();
-                return Some(page_break_node.master_name);
-            }
+        for el in bg_elements {
+            // Background elements are already positioned relative to the block bounds
+            // (block_start_y_in_ctx is relative to bounds).
+            // We use push_element_at(..., 0.0, 0.0) to avoid double-adding ctx.cursor.
+            ctx.push_element_at(el, 0.0, 0.0);
         }
-        None
-    }
 
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-}
-
-/// Helper to draw the background and borders for a block.
-pub(super) fn draw_background_and_borders(
-    ctx: &mut LayoutContext,
-    style: &Arc<ComputedStyle>,
-    start_y: f32,
-    content_height: f32,
-) {
-    let border_top_width = style.border_top.as_ref().map_or(0.0, |b| b.width);
-    let border_bottom_width = style.border_bottom.as_ref().map_or(0.0, |b| b.width);
-    let border_left_width = style.border_left.as_ref().map_or(0.0, |b| b.width);
-    let border_right_width = style.border_right.as_ref().map_or(0.0, |b| b.width);
-
-    let inner_height = style.padding.top + content_height + style.padding.bottom;
-    let total_height = border_top_width + inner_height + border_bottom_width;
-
-    if total_height <= 0.0 {
-        return;
-    }
-
-    // Draw background
-    if style.background_color.is_some() {
-        let bg_style = Arc::new(ComputedStyle {
-            background_color: style.background_color.clone(),
-            ..ComputedStyle::default()
-        });
-        let bg_rect = geom::Rect {
-            x: border_left_width,
-            y: border_top_width,
-            width: ctx.bounds.width - border_left_width - border_right_width,
-            height: inner_height,
-        };
-        let bg = PositionedElement {
-            element: LayoutElement::Rectangle(RectElement),
-            style: bg_style,
-            ..PositionedElement::from_rect(bg_rect)
-        };
-        ctx.push_element_at(bg, 0.0, start_y);
-    }
-
-    let draw_border = |ctx: &mut LayoutContext, b: &Option<Border>, rect: geom::Rect| {
-        if let Some(border) = b {
-            if border.width > 0.0 {
-                let border_style = Arc::new(ComputedStyle {
-                    background_color: Some(border.color.clone()),
-                    ..ComputedStyle::default()
-                });
-                let positioned_rect = PositionedElement {
-                    element: LayoutElement::Rectangle(RectElement),
-                    style: border_style,
-                    ..PositionedElement::from_rect(rect)
-                };
-                ctx.push_element_at(positioned_rect, 0.0, start_y);
+        let result = match split_res {
+            LayoutResult::Finished => {
+                let border_bottom = self.style.border_bottom_width();
+                let bottom_spacing = self.style.box_model.padding.bottom + border_bottom;
+                ctx.set_cursor_y(content_start_y_in_ctx + actual_used_height + bottom_spacing);
+                // Use finish_block helper
+                ctx.finish_block(self.style.box_model.margin.bottom);
+                Ok(LayoutResult::Finished)
             }
+            LayoutResult::Break(state) => {
+                ctx.set_cursor_y(content_start_y_in_ctx + actual_used_height);
+                Ok(LayoutResult::Break(state))
+            }
+        };
+
+        result
+    }
+
+    fn check_for_page_break(&self) -> Option<Option<TextStr>> {
+        if let Some(first_child) = self.children.first() {
+            first_child.check_for_page_break()
+        } else {
+            None
         }
-    };
-
-    let bounds_width = ctx.bounds.width;
-    draw_border(ctx, &style.border_top, geom::Rect { x: 0.0, y: 0.0, width: bounds_width, height: border_top_width });
-    draw_border(ctx, &style.border_bottom, geom::Rect { x: 0.0, y: total_height - border_bottom_width, width: bounds_width, height: border_bottom_width });
-    draw_border(ctx, &style.border_left, geom::Rect { x: 0.0, y: 0.0, width: border_left_width, height: total_height });
-    draw_border(ctx, &style.border_right, geom::Rect { x: bounds_width - border_right_width, y: 0.0, width: border_right_width, height: total_height });
-}
-
-
-// Add a constructor to BlockNode for internal use.
-impl BlockNode {
-    pub fn new_from_children(children: Vec<Box<dyn LayoutNode>>, style: Arc<ComputedStyle>) -> Self {
-        Self { children, style }
     }
 }

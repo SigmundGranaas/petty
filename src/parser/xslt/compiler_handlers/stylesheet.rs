@@ -11,7 +11,6 @@ use crate::parser::{Location, ParseError};
 use crate::parser::xslt::util::{get_attr_owned_optional, get_attr_owned_required, OwnedAttributes};
 use quick_xml::events::BytesStart;
 use std::str::from_utf8;
-use crate::parser::xslt::xpath;
 
 impl CompilerBuilder {
     pub(crate) fn handle_stylesheet_start(&mut self) {
@@ -55,13 +54,13 @@ impl CompilerBuilder {
     }
 
     pub(crate) fn handle_empty_literal_result_element(
-        &self,
+        &mut self,
         e: &BytesStart,
         attrs: OwnedAttributes,
         location: Location,
     ) -> Result<XsltInstruction, ParseError> {
         let styles = self.resolve_styles(&attrs, location)?;
-        let non_style_attrs = super::super::util::get_non_style_attributes(&attrs)?;
+        let non_style_attrs = super::super::util::get_non_style_attributes(self, &attrs)?;
         Ok(XsltInstruction::EmptyTag {
             tag_name: e.name().as_ref().to_vec(),
             styles,
@@ -77,14 +76,15 @@ impl CompilerBuilder {
         pos: usize,
         source: &str,
     ) -> Result<(), ParseError> {
+        let select_str = get_attr_owned_required(
+            &attrs,
+            b"select",
+            b"xsl:value-of",
+            pos,
+            source,
+        )?;
         let instr = XsltInstruction::ValueOf {
-            select: xpath::parse_expression(&get_attr_owned_required(
-                &attrs,
-                b"select",
-                b"xsl:value-of",
-                pos,
-                source,
-            )?)?,
+            select: self.parse_xpath_and_detect_features(&select_str)?,
         };
         if let Some(parent) = self.instruction_stack.last_mut() {
             parent.push(instr);
@@ -98,14 +98,15 @@ impl CompilerBuilder {
         pos: usize,
         source: &str,
     ) -> Result<(), ParseError> {
+        let select_str = get_attr_owned_required(
+            &attrs,
+            b"select",
+            b"xsl:copy-of",
+            pos,
+            source,
+        )?;
         let instr = XsltInstruction::CopyOf {
-            select: xpath::parse_expression(&get_attr_owned_required(
-                &attrs,
-                b"select",
-                b"xsl:copy-of",
-                pos,
-                source,
-            )?)?,
+            select: self.parse_xpath_and_detect_features(&select_str)?,
         };
         if let Some(parent) = self.instruction_stack.last_mut() {
             parent.push(instr);
@@ -116,7 +117,7 @@ impl CompilerBuilder {
     pub(crate) fn handle_page_break(&mut self, attrs: OwnedAttributes) -> Result<(), ParseError> {
         let instr = XsltInstruction::PageBreak {
             master_name: get_attr_owned_optional(&attrs, b"master-name")?
-                .map(|s| crate::parser::xslt::util::parse_avt(&s))
+                .map(|s| crate::parser::xslt::util::parse_avt(self, &s))
                 .transpose()?,
         };
         if let Some(parent) = self.instruction_stack.last_mut() {

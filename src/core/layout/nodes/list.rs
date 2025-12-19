@@ -1,26 +1,33 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/core/layout/nodes/list.rs
+// src/core/layout/nodes/list.rs
+
 use crate::core::idf::IRNode;
-use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult};
+use crate::core::layout::engine::{LayoutEngine, LayoutStore};
+use crate::core::base::geometry::{BoxConstraints, Size};
+use crate::core::layout::interface::{
+    LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
+};
+use super::RenderNode;
 use crate::core::layout::nodes::block::BlockNode;
 use crate::core::layout::nodes::list_item::ListItemNode;
 use crate::core::layout::style::ComputedStyle;
-use crate::core::layout::{LayoutEngine, LayoutError};
-use std::any::Any;
+use crate::core::layout::LayoutError;
 use std::sync::Arc;
 
-/// A `LayoutNode` for list containers (`<ul>`, `<ol>`).
-/// Its primary role is to create `ListItemNode` children, passing them their index.
-/// The actual vertical stacking logic is delegated to an inner `BlockNode`.
-#[derive(Debug, Clone)]
-pub struct ListNode {
-    // Internally, a list is just a block with special children.
-    block: BlockNode,
-    depth: usize,
+#[derive(Debug)]
+pub struct ListNode<'a> {
+    // List is essentially a wrapper around a BlockNode that manages numbering depth
+    block: BlockNode<'a>,
 }
 
-impl ListNode {
-    pub fn new(node: &IRNode, engine: &LayoutEngine, parent_style: Arc<ComputedStyle>) -> Self {
-        Self::new_with_depth(node, engine, parent_style, 0)
+impl<'a> ListNode<'a> {
+    pub fn build(
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+        store: &'a LayoutStore,
+    ) -> Result<RenderNode<'a>, LayoutError> {
+        let node = store.bump.alloc(Self::new_with_depth(node, engine, parent_style, 0, store)?);
+        Ok(RenderNode::List(node))
     }
 
     pub fn new_with_depth(
@@ -28,68 +35,59 @@ impl ListNode {
         engine: &LayoutEngine,
         parent_style: Arc<ComputedStyle>,
         depth: usize,
-    ) -> Self {
+        store: &'a LayoutStore,
+    ) -> Result<Self, LayoutError> {
         let style = engine.compute_style(node.style_sets(), node.style_override(), &parent_style);
-        let (ir_children, start) = match node {
-            IRNode::List { children, start, .. } => (children, *start),
-            _ => panic!("ListNode must be created from an IRNode::List"),
+
+        let IRNode::List {
+            meta,
+            children: ir_children,
+            start,
+            ..
+        } = node
+        else {
+            return Err(LayoutError::BuilderMismatch("List", node.kind()));
         };
 
         let start_index = start.unwrap_or(1);
 
-        let children: Vec<Box<dyn LayoutNode>> = ir_children
-            .iter()
-            .enumerate()
-            .map(|(i, child_ir)| {
-                // If a child is another list, increase the depth.
-                if let IRNode::List { .. } = child_ir {
-                    return Box::new(ListNode::new_with_depth(
-                        child_ir,
-                        engine,
-                        style.clone(),
-                        depth + 1,
-                    )) as Box<dyn LayoutNode>;
-                }
+        let mut children_vec = Vec::new();
+        for (i, child_ir) in ir_children.iter().enumerate() {
+            if let IRNode::List { .. } = child_ir {
+                // Recursive list
+                let child_node = Self::new_with_depth(child_ir, engine, style.clone(), depth + 1, store)?;
+                children_vec.push(RenderNode::List(store.bump.alloc(child_node)));
+            } else if let IRNode::ListItem { .. } = child_ir {
+                // List item with context
+                let child_node = ListItemNode::new(child_ir, engine, style.clone(), i + start_index, depth, store)?;
+                children_vec.push(RenderNode::ListItem(store.bump.alloc(child_node)));
+            } else {
+                // Other nodes in list container
+                children_vec.push(engine.build_layout_node_tree(child_ir, style.clone(), store)?);
+            }
+        }
 
-                if let IRNode::ListItem { .. } = child_ir {
-                    Box::new(ListItemNode::new(
-                        child_ir,
-                        engine,
-                        style.clone(),
-                        i + start_index, // Use correct start index
-                        depth,
-                    )) as Box<dyn LayoutNode>
-                } else {
-                    // Non-ListItem in a List, lay out as a simple block.
-                    log::warn!("Found non-ListItem node inside a List. This is not recommended.");
-                    engine.build_layout_node_tree(child_ir, style.clone())
-                }
-            })
-            .collect();
-
-        let block = BlockNode::new_from_children(children, style);
-        Self { block, depth }
+        // Delegate layout logic to BlockNode
+        let block = BlockNode::new_from_children(meta.id.clone(), children_vec, style, store);
+        Ok(Self { block })
     }
 }
 
-
-impl LayoutNode for ListNode {
-    fn style(&self) -> &Arc<ComputedStyle> {
+impl<'a> LayoutNode for ListNode<'a> {
+    fn style(&self) -> &ComputedStyle {
         self.block.style()
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
+    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<Size, LayoutError> {
+        self.block.measure(env, constraints)
     }
 
-    fn measure(&mut self, engine: &LayoutEngine, available_width: f32) {
-        self.block.measure(engine, available_width);
-    }
-    fn measure_content_height(&mut self, engine: &LayoutEngine, available_width: f32) -> f32 {
-        self.block.measure_content_height(engine, available_width)
-    }
-    fn layout(&mut self, ctx: &mut LayoutContext) -> Result<LayoutResult, LayoutError> {
-        // Delegate directly to the inner BlockNode.
-        self.block.layout(ctx)
+    fn layout(
+        &self,
+        ctx: &mut LayoutContext,
+        constraints: BoxConstraints,
+        break_state: Option<NodeState>,
+    ) -> Result<LayoutResult, LayoutError> {
+        self.block.layout(ctx, constraints, break_state)
     }
 }

@@ -85,13 +85,11 @@
 
     <xsl:template match="experience">
         <fo:block use-attribute-sets="h2">Experience</fo:block>
-        <!-- FIX: JSON arrays are converted to parent elements containing <item> children. -->
         <xsl:apply-templates select="item"/>
     </xsl:template>
 
     <xsl:template match="skills">
         <fo:block use-attribute-sets="h2">Skills</fo:block>
-        <!-- FIX: Select <item> children. -->
         <xsl:apply-templates select="item"/>
     </xsl:template>
 

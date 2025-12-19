@@ -2,7 +2,6 @@
 //! for all CSS-like style values, built using the `nom` parser-combinator library.
 
 use crate::core::style::border::{Border, BorderStyle};
-use crate::core::style::color::Color;
 use crate::core::style::dimension::{Dimension, Margins};
 use crate::parser::ParseError;
 use nom::branch::alt;
@@ -12,7 +11,7 @@ use nom::combinator::{map, map_res, opt, recognize};
 use nom::multi::separated_list1;
 use nom::sequence::{delimited, pair, preceded, tuple};
 use nom::IResult;
-
+use crate::core::base::color::Color;
 // --- Helper Parsers ---
 
 fn ws<'a, F, O>(inner: F) -> impl FnMut(&'a str) -> IResult<&'a str, O>

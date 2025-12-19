@@ -1,11 +1,13 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/json/executor.rs
+// src/parser/json/executor.rs
 //! Implements the "Execution" phase for the JSON parser.
 //! It walks the compiled instruction set and generates the `IRNode` tree.
 
 use super::compiler::{
     CompiledStyles, CompiledString, CompiledTable, ExpressionPart, JsonInstruction,
 };
-use crate::core::idf::{IRNode, InlineNode, TableBody, TableCell, TableHeader, TableRow};
+use crate::core::idf::{
+    IRNode, InlineMetadata, InlineNode, NodeMetadata, TableBody, TableCell, TableHeader, TableRow,
+};
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
 use crate::parser::json::jpath::{self, engine, functions::FunctionRegistry};
 use crate::parser::ParseError;
@@ -115,14 +117,13 @@ impl<'s, 'd> TemplateExecutor<'s, 'd> {
             }
             JsonInstruction::PageBreak { master_name } => self
                 .push_block_to_parent(IRNode::PageBreak { master_name: master_name.clone() }),
-            JsonInstruction::Block { styles, children } => self.execute_container(IRNode::Block { style_sets: self.gather_styles(styles, context, loop_pos)?, style_override: styles.style_override.clone(), children: vec![] }, children, context, loop_pos)?,
-            JsonInstruction::FlexContainer { styles, children } => self.execute_container(IRNode::FlexContainer { style_sets: self.gather_styles(styles, context, loop_pos)?, style_override: styles.style_override.clone(), children: vec![] }, children, context, loop_pos)?,
-            JsonInstruction::List { styles, children } => self.execute_container(IRNode::List { style_sets: self.gather_styles(styles, context, loop_pos)?, style_override: styles.style_override.clone(), start: None, children: vec![] }, children, context, loop_pos)?,
-            JsonInstruction::ListItem { styles, children } => self.execute_container(IRNode::ListItem { style_sets: self.gather_styles(styles, context, loop_pos)?, style_override: styles.style_override.clone(), children: vec![] }, children, context, loop_pos)?,
+            JsonInstruction::Block { styles, children } => self.execute_container(IRNode::Block { meta: self.build_node_meta(styles, context, loop_pos)?, children: vec![] }, children, context, loop_pos)?,
+            JsonInstruction::FlexContainer { styles, children } => self.execute_container(IRNode::FlexContainer { meta: self.build_node_meta(styles, context, loop_pos)?, children: vec![] }, children, context, loop_pos)?,
+            JsonInstruction::List { styles, children } => self.execute_container(IRNode::List { meta: self.build_node_meta(styles, context, loop_pos)?, start: None, children: vec![] }, children, context, loop_pos)?,
+            JsonInstruction::ListItem { styles, children } => self.execute_container(IRNode::ListItem { meta: self.build_node_meta(styles, context, loop_pos)?, children: vec![] }, children, context, loop_pos)?,
             JsonInstruction::Paragraph { styles, children } => {
                 let para_node = IRNode::Paragraph {
-                    style_sets: self.gather_styles(styles, context, loop_pos)?,
-                    style_override: styles.style_override.clone(),
+                    meta: self.build_node_meta(styles, context, loop_pos)?,
                     children: vec![],
                 };
                 self.node_stack.push(para_node);
@@ -131,27 +132,72 @@ impl<'s, 'd> TemplateExecutor<'s, 'd> {
                     self.push_block_to_parent(completed_para);
                 }
             }
-            JsonInstruction::Image { styles, src } => self.push_block_to_parent(IRNode::Image { src: self.render_string(src, context, loop_pos)?, style_sets: self.gather_styles(styles, context, loop_pos)?, style_override: styles.style_override.clone() }),
+            JsonInstruction::Heading { level, styles, children } => {
+                let heading_node = IRNode::Heading {
+                    level: *level,
+                    meta: self.build_node_meta(styles, context, loop_pos)?,
+                    children: vec![],
+                };
+                self.node_stack.push(heading_node);
+                self.execute_instructions(children, context, loop_pos)?;
+                if let Some(completed_heading) = self.node_stack.pop() {
+                    self.push_block_to_parent(completed_heading);
+                }
+            }
+            JsonInstruction::TableOfContents { styles: _ } => {
+                // This node is a placeholder for feature detection and is deprecated for direct output.
+                // The actual ToC is rendered by the ComposingRenderer in a two-pass pipeline.
+                // In this pass, it should produce nothing in the IR tree.
+            }
+            JsonInstruction::IndexMarker { term } => {
+                self.push_block_to_parent(IRNode::IndexMarker {
+                    meta: NodeMetadata::default(),
+                    term: self.render_string(term, context, loop_pos)?,
+                });
+            }
+            JsonInstruction::Image { styles, src } => self.push_block_to_parent(IRNode::Image { src: self.render_string(src, context, loop_pos)?, meta: self.build_node_meta(styles, context, loop_pos)? }),
             JsonInstruction::Table(table) => self.execute_table(table, context, loop_pos)?,
             JsonInstruction::Text { content } => self.push_inline_to_parent(InlineNode::Text(self.render_string(content, context, loop_pos)?)),
             JsonInstruction::LineBreak => self.push_inline_to_parent(InlineNode::LineBreak),
-            JsonInstruction::InlineImage { styles, src } => self.push_inline_to_parent(InlineNode::Image { src: self.render_string(src, context, loop_pos)?, style_sets: self.gather_styles(styles, context, loop_pos)?, style_override: styles.style_override.clone() }),
+            JsonInstruction::InlineImage { styles, src } => self.push_inline_to_parent(InlineNode::Image { src: self.render_string(src, context, loop_pos)?, meta: self.build_inline_meta(styles, context, loop_pos)? }),
             JsonInstruction::StyledSpan { styles, children } => {
-                self.inline_stack.push(InlineNode::StyledSpan { style_sets: self.gather_styles(styles, context, loop_pos)?, style_override: styles.style_override.clone(), children: vec![] });
+                self.inline_stack.push(InlineNode::StyledSpan { meta: self.build_inline_meta(styles, context, loop_pos)?, children: vec![] });
                 self.execute_instructions(children, context, loop_pos)?;
                 if let Some(s) = self.inline_stack.pop() {
                     self.push_inline_to_parent(s);
                 }
             }
             JsonInstruction::Hyperlink { styles, href, children } => {
-                self.inline_stack.push(InlineNode::Hyperlink { href: self.render_string(href, context, loop_pos)?, style_sets: self.gather_styles(styles, context, loop_pos)?, style_override: styles.style_override.clone(), children: vec![] });
+                self.inline_stack.push(InlineNode::Hyperlink { href: self.render_string(href, context, loop_pos)?, meta: self.build_inline_meta(styles, context, loop_pos)?, children: vec![] });
                 self.execute_instructions(children, context, loop_pos)?;
                 if let Some(h) = self.inline_stack.pop() {
                     self.push_inline_to_parent(h);
                 }
             }
+            JsonInstruction::PageReference { target_id } => {
+                self.push_inline_to_parent(InlineNode::PageReference {
+                    target_id: target_id.clone(),
+                    meta: InlineMetadata::default(), // PageReference from JSON doesn't have styles.
+                    children: vec![],
+                });
+            }
         }
         Ok(())
+    }
+
+    fn build_node_meta(&self, styles: &CompiledStyles, context: &Value, loop_pos: Option<usize>) -> Result<NodeMetadata, ParseError> {
+        Ok(NodeMetadata {
+            id: styles.id.clone(),
+            style_sets: self.gather_styles(styles, context, loop_pos)?,
+            style_override: styles.style_override.clone()
+        })
+    }
+
+    fn build_inline_meta(&self, styles: &CompiledStyles, context: &Value, loop_pos: Option<usize>) -> Result<InlineMetadata, ParseError> {
+        Ok(InlineMetadata {
+            style_sets: self.gather_styles(styles, context, loop_pos)?,
+            style_override: styles.style_override.clone()
+        })
     }
 
     fn gather_styles(
@@ -237,8 +283,7 @@ impl<'s, 'd> TemplateExecutor<'s, 'd> {
                 .collect::<Result<_, _>>()?,
         });
         self.push_block_to_parent(IRNode::Table {
-            style_sets: self.gather_styles(&table.styles, context, loop_pos)?,
-            style_override: table.styles.style_override.clone(),
+            meta: self.build_node_meta(&table.styles, context, loop_pos)?,
             columns: table.columns.clone(),
             header,
             body,
@@ -286,22 +331,31 @@ impl<'s, 'd> TemplateExecutor<'s, 'd> {
 
     fn push_inline_to_parent(&mut self, node: InlineNode) {
         if let Some(parent_inline) = self.inline_stack.last_mut() {
-            if let InlineNode::StyledSpan { children: c, .. }
-            | InlineNode::Hyperlink { children: c, .. } = parent_inline
-            {
-                c.push(node);
-                return;
+            match parent_inline {
+                InlineNode::StyledSpan { children: c, .. }
+                | InlineNode::Hyperlink { children: c, .. }
+                | InlineNode::PageReference { children: c, .. } => {
+                    c.push(node);
+                    return;
+                }
+                _ => {}
             }
         }
-        if let Some(IRNode::Paragraph { children: c, .. }) = self.node_stack.last_mut() {
-            c.push(node);
-        } else {
-            self.push_block_to_parent(IRNode::Paragraph {
-                style_sets: vec![],
-                style_override: None,
-                children: vec![node],
-            });
+        if let Some(parent_block) = self.node_stack.last_mut() {
+            match parent_block {
+                IRNode::Paragraph { children: c, .. }
+                | IRNode::Heading { children: c, .. } => {
+                    c.push(node);
+                    return;
+                }
+                _ => {}
+            }
         }
+
+        self.push_block_to_parent(IRNode::Paragraph {
+            meta: Default::default(),
+            children: vec![node],
+        });
     }
 }
 
@@ -324,8 +378,14 @@ impl TryFrom<IRNode> for TableRow {
 impl TryFrom<IRNode> for TableCell {
     type Error = ParseError;
     fn try_from(node: IRNode) -> Result<Self, Self::Error> {
-        if let IRNode::Block { style_sets, style_override, children } = node {
-            Ok(TableCell { style_sets, style_override, children, colspan: 1, rowspan: 1 })
+        if let IRNode::Block { meta, children } = node {
+            Ok(TableCell {
+                style_sets: meta.style_sets,
+                style_override: meta.style_override,
+                children,
+                col_span: 1,
+                row_span: 1,
+            })
         } else {
             Err(ParseError::TemplateParse(format!(
                 "Expected Block to convert to TableCell, got {:?}",

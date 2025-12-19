@@ -1,10 +1,12 @@
+#![allow(dead_code)]
+
 use super::super::pdf::{PageRenderState, PageRenderer, RenderContext};
 use printpdf::graphics::{LinePoint, PaintMode, Point, Polygon, PolygonRing, WindingOrder};
 use printpdf::ops::Op;
 use printpdf::{Pt, Rgb};
 use std::io;
+use crate::core::base::color::Color;
 use crate::core::layout::PositionedElement;
-use crate::core::style::color::Color;
 use crate::render::RenderError;
 
 /// A helper to convert our internal `Color` to the `printpdf` library's `Color`.
@@ -35,7 +37,7 @@ pub(super) fn draw_background_and_borders<W: io::Write + Send>(
     let height = positioned.height;
 
     // Render background color if present.
-    if let Some(bg_color) = &style.background_color {
+    if let Some(bg_color) = &style.misc.background_color {
         let polygon = Polygon {
             rings: vec![PolygonRing {
                 points: vec![
@@ -53,7 +55,7 @@ pub(super) fn draw_background_and_borders<W: io::Write + Send>(
     }
 
     // Render border-bottom if present.
-    if let Some(border) = &style.border_bottom {
+    if let Some(border) = &style.border.bottom {
         page.ops.push(Op::SetOutlineThickness { pt: Pt(border.width) });
         page.ops.push(Op::SetOutlineColor { col: to_pdf_color(&border.color) });
         let line_y = page.page_height_pt - (positioned.y + positioned.height);
@@ -91,7 +93,7 @@ pub(super) fn draw_background_and_borders_stateless(
     let width = positioned.width;
     let height = positioned.height;
 
-    if let Some(bg_color) = &style.background_color {
+    if let Some(bg_color) = &style.misc.background_color {
         let polygon = Polygon {
             rings: vec![PolygonRing {
                 points: vec![
@@ -108,7 +110,7 @@ pub(super) fn draw_background_and_borders_stateless(
         ops.push(Op::DrawPolygon { polygon });
     }
 
-    if let Some(border) = &style.border_bottom {
+    if let Some(border) = &style.border.bottom {
         ops.push(Op::SetOutlineThickness { pt: Pt(border.width) });
         ops.push(Op::SetOutlineColor { col: to_pdf_color(&border.color) });
         let line_y = ctx.page_height_pt - (positioned.y + positioned.height);

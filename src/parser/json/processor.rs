@@ -1,218 +1,206 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/json/processor.rs
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/json/processor.rs
-//! Implements the public interface for the JSON parser, conforming to the
-//! `TemplateParser` and `CompiledTemplate` traits.
-
-use super::ast::JsonTemplateFile;
-use super::compiler::{Compiler, JsonInstruction};
-use super::executor::TemplateExecutor;
+// src/parser/json/processor.rs
+// src/parser/json/processor.rs
+// src/parser/json/processor.rs
+use super::{ast, compiler};
+use super::executor;
 use crate::core::idf::IRNode;
 use crate::core::style::stylesheet::Stylesheet;
 use crate::error::PipelineError;
-use crate::parser::processor::{CompiledTemplate, ExecutionConfig, TemplateParser};
-use crate::parser::ParseError;
-use serde_json::Value;
+use crate::parser::processor::{CompiledTemplate, ExecutionConfig, TemplateParser, TemplateFeatures, TemplateFlags};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-// --- The Compiled Artifact ---
-
 #[derive(Debug)]
-pub struct CompiledJsonTemplate {
-    instructions: Vec<JsonInstruction>,
-    definitions: HashMap<String, Vec<JsonInstruction>>,
-    stylesheet: Stylesheet,
+pub struct JsonTemplate {
+    instructions: Vec<compiler::JsonInstruction>,
+    definitions: HashMap<String, Vec<compiler::JsonInstruction>>,
+    stylesheet: Arc<Stylesheet>,
     resource_base_path: PathBuf,
+    features: TemplateFlags,
 }
 
-impl CompiledTemplate for CompiledJsonTemplate {
-    fn execute(&self, data_source: &str, _config: ExecutionConfig) -> Result<Vec<IRNode>, PipelineError> {
-        // NOTE: The JSON processor currently ignores the `config` parameter as it
-        // only supports one data format and does not have a "strict" mode.
-        let data: Value = serde_json::from_str(data_source)?;
-        let mut executor = TemplateExecutor::new(&self.stylesheet, &self.definitions);
-        let ir_nodes = executor.build_tree(&self.instructions, &data)?;
-        Ok(ir_nodes)
+/// Scans the JSON template AST for features requiring special handling.
+fn detect_features_from_json_ast(node: &ast::TemplateNode, definitions: &HashMap<String, ast::TemplateNode>) -> TemplateFlags {
+    let mut features = TemplateFlags::default();
+    scan_json_node_for_features(node, &mut features, definitions);
+    features
+}
+
+fn scan_json_node_for_features(
+    node: &ast::TemplateNode,
+    features: &mut TemplateFlags,
+    definitions: &HashMap<String, ast::TemplateNode>,
+) {
+    match node {
+        ast::TemplateNode::Static(static_node) => {
+            match static_node {
+                ast::JsonNode::TableOfContents(_) => features.has_table_of_contents = true,
+                ast::JsonNode::PageReference { .. } => features.has_page_number_placeholders = true,
+                ast::JsonNode::IndexMarker { .. } => features.uses_index_function = true,
+                ast::JsonNode::RenderTemplate { name } => {
+                    if let Some(def_node) = definitions.get(name) {
+                        scan_json_node_for_features(def_node, features, definitions);
+                    }
+                }
+                _ => {}
+            }
+
+            // Recurse into children. Each variant with children has a different struct type,
+            // so we must handle them in separate match arms.
+            let children: Option<&Vec<ast::TemplateNode>> = match static_node {
+                ast::JsonNode::Block(c) => Some(&c.children),
+                ast::JsonNode::FlexContainer(c) => Some(&c.children),
+                ast::JsonNode::List(c) => Some(&c.children),
+                ast::JsonNode::ListItem(c) => Some(&c.children),
+                ast::JsonNode::TableOfContents(c) => Some(&c.children),
+                ast::JsonNode::StyledSpan(c) => Some(&c.children),
+                ast::JsonNode::Paragraph(p) => Some(&p.children),
+                ast::JsonNode::Heading(h) => Some(&h.children),
+                ast::JsonNode::Hyperlink(h) => Some(&h.children),
+                ast::JsonNode::Table(t) => {
+                    if let Some(header) = &t.header {
+                        for row in &header.rows {
+                            scan_json_node_for_features(row, features, definitions);
+                        }
+                    }
+                    for row in &t.body.rows {
+                        scan_json_node_for_features(row, features, definitions);
+                    }
+                    None // Table has no single `children` vector, recursion is handled above.
+                }
+                _ => None,
+            };
+
+            if let Some(children_vec) = children {
+                for child in children_vec {
+                    scan_json_node_for_features(child, features, definitions);
+                }
+            }
+        }
+        ast::TemplateNode::Control(control_node) => {
+            match control_node {
+                ast::ControlNode::Each { template, .. } => {
+                    scan_json_node_for_features(template, features, definitions);
+                }
+                ast::ControlNode::If { then, else_branch, .. } => {
+                    scan_json_node_for_features(then, features, definitions);
+                    if let Some(else_node) = else_branch {
+                        scan_json_node_for_features(else_node, features, definitions);
+                    }
+                }
+            }
+        }
+    }
+}
+
+
+impl CompiledTemplate for JsonTemplate {
+    fn execute(
+        &self,
+        data_source: &str,
+        _config: ExecutionConfig,
+    ) -> Result<Vec<IRNode>, PipelineError> {
+        let context: serde_json::Value =
+            serde_json::from_str(data_source).map_err(|e| PipelineError::Parse(e.into()))?;
+        let mut executor = executor::TemplateExecutor::new(&self.stylesheet, &self.definitions);
+        let ir_tree = executor
+            .build_tree(&self.instructions, &context)
+            .map_err(PipelineError::Parse)?;
+        Ok(ir_tree)
     }
 
-    fn stylesheet(&self) -> &Stylesheet {
-        &self.stylesheet
+    fn stylesheet(&self) -> Arc<Stylesheet> {
+        Arc::clone(&self.stylesheet)
     }
 
     fn resource_base_path(&self) -> &Path {
         &self.resource_base_path
     }
-}
 
-// --- The Parser ---
+    fn features(&self) -> TemplateFlags {
+        self.features
+    }
+}
 
 pub struct JsonParser;
 
 impl TemplateParser for JsonParser {
     fn parse(
         &self,
-        template_source: &str,
+        source: &str,
         resource_base_path: PathBuf,
-    ) -> Result<Arc<dyn CompiledTemplate>, ParseError> {
-        // Phase 1: Deserialize the raw JSON string into our AST.
-        let template_file: JsonTemplateFile = serde_json::from_str(template_source)?;
-        let mut stylesheet = Stylesheet::from(template_file._stylesheet.clone());
+    ) -> Result<TemplateFeatures, PipelineError> {
+        let file_ast: ast::JsonTemplateFile = serde_json::from_str(source)?;
 
-        // If a default master isn't set, pick the first one found.
+        let mut stylesheet = Stylesheet {
+            page_masters: file_ast._stylesheet.page_masters,
+            styles: file_ast
+                ._stylesheet
+                .styles
+                .into_iter()
+                .map(|(k, v)| (k, Arc::new(v)))
+                .collect(),
+            default_page_master_name: file_ast._stylesheet.default_page_master,
+            ..Default::default()
+        };
+
+        // If no default is specified, first look for one named "default",
+        // then fall back to the first one available. This mirrors the XSLT compiler's behavior
+        // where a master without a name is implicitly named "default", and ensures a default
+        // is always present if any masters are defined.
         if stylesheet.default_page_master_name.is_none() {
-            stylesheet.default_page_master_name = stylesheet.page_masters.keys().next().cloned();
+            if stylesheet.page_masters.contains_key("default") {
+                stylesheet.default_page_master_name = Some("default".to_string());
+            } else {
+                stylesheet.default_page_master_name = stylesheet.page_masters.keys().next().cloned();
+            }
         }
 
-        // Phase 2: Pre-compile all template definitions (partials).
-        let empty_defs = HashMap::new(); // Cannot refer to other defs
-        let def_compiler = Compiler::new(&stylesheet, &empty_defs);
+        let definitions_ast = file_ast._stylesheet.definitions;
 
-        let compiled_definitions: HashMap<String, Vec<JsonInstruction>> = template_file
-            ._stylesheet
-            .definitions
-            .iter()
-            .map(|(name, node)| def_compiler.compile(node).map(|instr| (name.clone(), instr)))
+        // The compiler for definitions needs an empty set of definitions to avoid recursion issues.
+        let empty_defs = HashMap::new();
+        let def_compiler = compiler::Compiler::new(&stylesheet, &empty_defs);
+        let compiled_definitions: HashMap<String, Vec<compiler::JsonInstruction>> = definitions_ast
+            .clone()
+            .into_iter()
+            .map(|(name, node)| def_compiler.compile(&node).map(|instr| (name, instr)))
             .collect::<Result<_, _>>()?;
 
-        // Phase 3: Compile the main template body, providing the compiled definitions for validation.
-        let main_compiler = Compiler::new(&stylesheet, &compiled_definitions);
-        let main_instructions = main_compiler.compile(&template_file._template)?;
+        let main_compiler = compiler::Compiler::new(&stylesheet, &compiled_definitions);
+        let main_instructions = main_compiler.compile(&file_ast._template)?;
+        let main_features = detect_features_from_json_ast(&file_ast._template, &definitions_ast);
 
-        // Phase 4: Construct the final compiled artifact.
-        let compiled_template = CompiledJsonTemplate {
+        let main_template = Arc::new(JsonTemplate {
             instructions: main_instructions,
-            definitions: compiled_definitions,
-            stylesheet,
-            resource_base_path,
-        };
-
-        Ok(Arc::new(compiled_template))
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::core::idf::InlineNode;
-    use crate::parser::processor::DataSourceFormat;
-    use serde_json::json;
-
-    fn get_test_template() -> &'static str {
-        r#"
-        {
-          "_stylesheet": {
-            "pageMasters": {
-              "main": { "size": "A4" }
-            },
-            "styles": {
-              "title": { "fontSize": 18.0, "fontWeight": "bold" },
-              "item_para": { "margin": "4pt" }
-            },
-            "definitions": {}
-          },
-          "_template": {
-            "type": "Block",
-            "children": [
-              { "type": "Paragraph", "styleNames": ["title"], "children": [{ "type": "Text", "content": "Report for {{ customer.name }}" }] },
-              { "if": "customer.is_premium", "then": { "type": "Paragraph", "children": [{ "type": "Text", "content": "Premium Member" }] } },
-              { "each": "products", "template": { "type": "Paragraph", "styleNames": ["item_para"], "children": [{ "type": "Text", "content": "- {{ name }}: ${{ price }}" }] } }
-            ]
-          }
-        }
-        "#
-    }
-
-    #[test]
-    fn test_full_pipeline_premium_customer() {
-        let parser = JsonParser;
-        let compiled_template = parser.parse(get_test_template(), PathBuf::new()).unwrap();
-        let data = json!({
-            "customer": { "name": "Acme Inc.", "is_premium": true },
-            "products": [ { "name": "Anvil", "price": 100 }, { "name": "Rocket", "price": 5000 } ]
+            definitions: compiled_definitions.clone(),
+            stylesheet: Arc::new(stylesheet.clone()),
+            resource_base_path: resource_base_path.clone(),
+            features: main_features,
         });
 
-        // The config is ignored by the JSON processor, but must be provided.
-        let config = ExecutionConfig { format: DataSourceFormat::Json, ..Default::default() };
-        let tree = compiled_template.execute(&data.to_string(), config).unwrap();
-        // The root is not part of the children count from build_tree
-        assert_eq!(tree.len(), 1);
-        let root_children = match &tree[0] {
-            IRNode::Block { children, .. } => children,
-            _ => panic!(),
-        };
-        // Title para, premium para, 2x product para = 4 children
-        assert_eq!(root_children.len(), 4);
-    }
-
-    #[test]
-    fn test_full_pipeline_non_premium_customer() {
-        let parser = JsonParser;
-        let compiled_template = parser.parse(get_test_template(), PathBuf::new()).unwrap();
-        let data = json!({ "customer": { "name": "Contoso", "is_premium": false }, "products": [] });
-        let config = ExecutionConfig { format: DataSourceFormat::Json, ..Default::default() };
-        let tree = compiled_template.execute(&data.to_string(), config).unwrap();
-        let root_children = match &tree[0] {
-            IRNode::Block { children, .. } => children,
-            _ => panic!(),
-        };
-        // Just the title para
-        assert_eq!(root_children.len(), 1);
-    }
-
-    #[test]
-    fn test_template_rendering_with_this_prefix() {
-        let template_src = r#"
-        {
-          "_stylesheet": {},
-          "_template": {
-            "type": "Block",
-            "children": [
-              { "type": "Paragraph", "children": [{ "type": "Text", "content": "User: {{ user.name }}" }] },
-              { "each": "items", "template": {
-                  "type": "Paragraph", "children": [
-                    { "type": "Text", "content": "Item: {{ this.name }}" }
-                  ]
-                }
-              }
-            ]
-          }
+        // --- Compile Role Templates ---
+        let mut role_templates = HashMap::new();
+        if !file_ast._roles.is_empty() {
+            let role_compiler = compiler::Compiler::new(&stylesheet, &compiled_definitions);
+            for (role_name, role_node) in file_ast._roles {
+                let role_instructions = role_compiler.compile(&role_node)?;
+                let role_features = detect_features_from_json_ast(&role_node, &definitions_ast);
+                let role_template: Arc<dyn CompiledTemplate> = Arc::new(JsonTemplate {
+                    instructions: role_instructions,
+                    definitions: compiled_definitions.clone(),
+                    stylesheet: Arc::new(stylesheet.clone()),
+                    resource_base_path: resource_base_path.clone(),
+                    features: role_features,
+                });
+                role_templates.insert(role_name, role_template);
+            }
         }
-        "#;
-        let data = json!({
-            "user": { "name": "Alice" },
-            "items": [ { "name": "Anvil" }, { "name": "Rocket" } ]
-        });
 
-        let parser = JsonParser;
-        let compiled = parser.parse(template_src, PathBuf::new()).unwrap();
-        let config = ExecutionConfig { format: DataSourceFormat::Json, ..Default::default() };
-        let tree = compiled.execute(&data.to_string(), config).unwrap();
-
-        let root_children = match &tree[0] {
-            IRNode::Block { children, .. } => children,
-            _ => panic!("Expected root block"),
-        };
-        assert_eq!(root_children.len(), 3); // 1 para for user, 2 paras for items
-
-        // Check user name
-        let user_para_text = match &root_children[0] {
-            IRNode::Paragraph { children, .. } => match &children[0] {
-                InlineNode::Text(t) => t,
-                _ => panic!("Expected text node"),
-            },
-            _ => panic!("Expected paragraph"),
-        };
-        assert_eq!(user_para_text, "User: Alice");
-
-        // Check first item name
-        let item1_para_text = match &root_children[1] {
-            IRNode::Paragraph { children, .. } => match &children[0] {
-                InlineNode::Text(t) => t,
-                _ => panic!("Expected text node"),
-            },
-            _ => panic!("Expected paragraph"),
-        };
-        assert_eq!(item1_para_text, "Item: Anvil");
+        Ok(TemplateFeatures {
+            main_template,
+            role_templates,
+        })
     }
 }

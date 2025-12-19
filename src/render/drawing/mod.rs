@@ -1,10 +1,10 @@
-//! Low-level functions for converting `LayoutElement`s into PDF `Op`s.
+#![allow(dead_code)]
 
 use super::pdf::{PageRenderState, PageRenderer, RenderContext};
-use printpdf::Op;
-use std::io;
 use crate::core::layout::{LayoutElement, PositionedElement};
 use crate::render::RenderError;
+use printpdf::Op;
+use std::io;
 
 pub(super) mod image;
 pub(super) mod rect;
@@ -23,6 +23,7 @@ pub(super) fn draw_element<W: io::Write + Send>(
         LayoutElement::Text(text_el) => text::draw_text(page, text_el, element)?,
         LayoutElement::Image(image_el) => image::draw_image(page, image_el, element)?,
         LayoutElement::Rectangle(_) => { /* Content is the background, already handled */ }
+        LayoutElement::PageNumberPlaceholder { .. } => { /* Rendered in finalize step */ }
     }
     Ok(())
 }
@@ -47,6 +48,7 @@ pub(super) fn draw_element_stateless(
             image::draw_image_stateless(ops, state, ctx, image_el, element)?
         }
         LayoutElement::Rectangle(_) => { /* Content is the background, already handled */ }
+        LayoutElement::PageNumberPlaceholder { .. } => { /* Rendered in finalize step */ }
     }
     Ok(())
 }

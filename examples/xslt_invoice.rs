@@ -36,7 +36,7 @@ fn main() -> Result<(), PipelineError> {
     // Generate the PDF. The pipeline will create one IRNode tree per customer,
     // demonstrating the "sequence" processing model.
     let output_path = "xslt_invoices.pdf";
-    pipeline.generate_to_file(customers.into_iter(), output_path)?;
+    pipeline.generate_to_file(customers, output_path)?;
 
     println!("\nSuccess! Generated {}", output_path);
     Ok(())

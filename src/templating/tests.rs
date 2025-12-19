@@ -2,9 +2,9 @@
 
 #![cfg(test)]
 
+use crate::core::base::color::Color;
 use super::builders::*;
 use super::{p, Template, TemplateBuilder};
-use crate::core::style::color::Color;
 use crate::core::style::dimension::{Dimension, Margins, PageSize};
 use crate::core::style::font::FontWeight;
 use crate::core::style::stylesheet::{ElementStyle, PageLayout};
@@ -109,7 +109,12 @@ fn test_full_template_with_control_flow() {
         .add_style(
             "premium-text",
             ElementStyle {
-                color: Some(Color { r: 212, g: 175, b: 55, a: 1.0 }),
+                color: Some(Color {
+                    r: 212,
+                    g: 175,
+                    b: 55,
+                    a: 1.0,
+                }),
                 ..Default::default()
             },
         );
@@ -174,7 +179,7 @@ fn test_full_template_with_control_flow() {
 }
 
 #[test]
-fn test_template_with_definitions() {
+fn test_template_with_definitions_and_roles() {
     let template = Template::new(
         Block::new()
             .child(Paragraph::new("Rendering user badge:"))
@@ -190,7 +195,12 @@ fn test_template_with_definitions() {
         .add_style(
             "premium-text",
             ElementStyle {
-                color: Some(Color { r: 212, g: 175, b: 55, a: 1.0 }),
+                color: Some(Color {
+                    r: 212,
+                    g: 175,
+                    b: 55,
+                    a: 1.0,
+                }),
                 ..Default::default()
             },
         )
@@ -199,7 +209,8 @@ fn test_template_with_definitions() {
             "user_badge_def",
             // The definition can be any builder, including our custom component
             UserBadge::new("{{user.name}}", "user.is_admin"),
-        );
+        )
+        .add_role("page-header", Paragraph::new("This is a header"));
 
     let json_string = template.to_json().unwrap();
     let produced_value: serde_json::Value = serde_json::from_str(&json_string).unwrap();
@@ -234,6 +245,12 @@ fn test_template_with_definitions() {
             { "type": "Paragraph", "children": [{ "type": "Text", "content": "Rendering user badge:" }] },
             { "type": "RenderTemplate", "name": "user_badge_def" }
         ]
+      },
+      "_roles": {
+        "page-header": {
+          "type": "Paragraph",
+          "children": [{ "type": "Text", "content": "This is a header" }]
+        }
       }
     });
 

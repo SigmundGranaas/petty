@@ -89,9 +89,13 @@ fn relational_expr(input: &str) -> IResult<&str, Expression> {
         additive_expr,
         alt((
             map(tag("<="), |_| BinaryOperator::LessThanOrEqual),
+            map(tag("&lt;="), |_| BinaryOperator::LessThanOrEqual),
             map(tag(">="), |_| BinaryOperator::GreaterThanOrEqual),
+            map(tag("&gt;="), |_| BinaryOperator::GreaterThanOrEqual),
             map(tag("<"), |_| BinaryOperator::LessThan),
+            map(tag("&lt;"), |_| BinaryOperator::LessThan),
             map(tag(">"), |_| BinaryOperator::GreaterThan),
+            map(tag("&gt;"), |_| BinaryOperator::GreaterThan),
         )),
     )(input)
 }
@@ -583,5 +587,25 @@ mod tests {
                 ]
             })
         );
+    }
+
+    #[test]
+    fn test_parse_xml_entities_in_relational_expr() {
+        let result = parse_expression("a &lt; b").unwrap();
+        assert_eq!(
+            result,
+            Expression::BinaryOp {
+                left: Box::new(Expression::LocationPath(LocationPath { start_point: None, is_absolute: false, steps: vec![Step { axis: Axis::Child, node_test: NodeTest::Name("a".into()), predicates: vec![] }] })),
+                op: BinaryOperator::LessThan,
+                right: Box::new(Expression::LocationPath(LocationPath { start_point: None, is_absolute: false, steps: vec![Step { axis: Axis::Child, node_test: NodeTest::Name("b".into()), predicates: vec![] }] })),
+            }
+        );
+
+        let result2 = parse_expression("a &gt;= b").unwrap();
+        if let Expression::BinaryOp { op, .. } = result2 {
+            assert_eq!(op, BinaryOperator::GreaterThanOrEqual);
+        } else {
+            panic!("Expected BinaryOp");
+        }
     }
 }

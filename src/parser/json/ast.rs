@@ -1,3 +1,5 @@
+// src/parser/json/ast.rs
+// src/parser/json/ast.rs
 //! Defines the Abstract Syntax Tree (AST) for the JSON template format as it is
 //! parsed from the source file by Serde. This is the **input** representation.
 
@@ -52,12 +54,21 @@ pub enum JsonNode {
     List(JsonContainer),
     ListItem(JsonContainer),
     Table(JsonTable),
+    Heading(JsonHeading),
+    TableOfContents(JsonContainer),
+    IndexMarker {
+        term: String,
+    },
     // Inline-level variants
     Text {
         content: String,
     },
     StyledSpan(JsonInlineContainer),
     Hyperlink(JsonHyperlink),
+    PageReference {
+        #[serde(rename = "targetId")]
+        target_id: String,
+    },
     InlineImage(JsonImage),
     LineBreak,
     // New control-flow nodes
@@ -75,6 +86,8 @@ pub enum JsonNode {
 #[derive(Deserialize, Serialize, Debug, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonContainer {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub style_names: Vec<String>,
@@ -89,6 +102,8 @@ pub struct JsonContainer {
 #[derive(Deserialize, Serialize, Debug, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonParagraph {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub style_names: Vec<String>,
@@ -103,6 +118,8 @@ pub struct JsonParagraph {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonImage {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub src: String,
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -115,6 +132,8 @@ pub struct JsonImage {
 #[derive(Deserialize, Serialize, Debug, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonInlineContainer {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub style_names: Vec<String>,
@@ -129,6 +148,8 @@ pub struct JsonInlineContainer {
 #[derive(Deserialize, Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonHyperlink {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     pub href: String,
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -144,6 +165,8 @@ pub struct JsonHyperlink {
 #[derive(Deserialize, Serialize, Debug, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct JsonTable {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
     #[serde(default)]
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub style_names: Vec<String>,
@@ -181,17 +204,42 @@ pub struct JsonTableBody {
     pub rows: Vec<TemplateNode>,
 }
 
+#[derive(Deserialize, Serialize, Debug, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct JsonHeading {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub style_names: Vec<String>,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "is_default")]
+    pub style_override: ElementStyle,
+    #[serde(default = "default_heading_level")]
+    pub level: u8,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub children: Vec<TemplateNode>,
+}
+
+fn default_heading_level() -> u8 {
+    1
+}
 // --- Top-level Template and Stylesheet ---
 
 #[derive(Deserialize, Serialize, Debug)]
 pub struct JsonTemplateFile {
     pub _stylesheet: StylesheetDef,
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub _roles: HashMap<String, TemplateNode>,
     pub _template: TemplateNode,
 }
 
 #[derive(Deserialize, Serialize, Debug, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct StylesheetDef {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default_page_master: Option<String>,
     #[serde(default)]
     #[serde(skip_serializing_if = "HashMap::is_empty")]
     pub page_masters: HashMap<String, PageLayout>,
