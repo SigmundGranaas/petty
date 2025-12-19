@@ -1,30 +1,15 @@
 // src/core/layout/nodes/page_break.rs
 
 use crate::core::idf::{IRNode, TextStr};
-use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::engine::{LayoutEngine, LayoutStore};
-use crate::core::layout::geom::{BoxConstraints, Size};
-use crate::core::layout::node::{
+use crate::core::base::geometry::{BoxConstraints, Size};
+use crate::core::layout::interface::{
     LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
 };
 use super::RenderNode;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::LayoutError;
 use std::sync::Arc;
-
-pub struct PageBreakBuilder;
-
-impl NodeBuilder for PageBreakBuilder {
-    fn build<'a>(
-        &self,
-        node: &IRNode,
-        engine: &LayoutEngine,
-        parent_style: Arc<ComputedStyle>,
-        store: &'a LayoutStore,
-    ) -> Result<RenderNode<'a>, LayoutError> {
-        PageBreakNode::build(node, engine, parent_style, store)
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct PageBreakNode<'a> {
@@ -73,19 +58,22 @@ impl<'a> LayoutNode for PageBreakNode<'a> {
         break_state: Option<NodeState>,
     ) -> Result<LayoutResult, LayoutError> {
         if break_state.is_some() {
+            // We've already broken, so we are finished
             return Ok(LayoutResult::Finished);
         }
 
+        // Force a break unless we are at the very top of an empty page (unlikely for a manual break)
+        // If we just return Break, the engine will create a new page.
         if !ctx.is_empty() || ctx.cursor_y() > 0.0 {
             Ok(LayoutResult::Break(NodeState::Atomic))
         } else {
+            // Already at top of page, consume the break
             Ok(LayoutResult::Finished)
         }
     }
 
     fn check_for_page_break(&self) -> Option<Option<TextStr>> {
         // Convert &'a str to String for interface compatibility.
-        // This is safe because check_for_page_break returns a new String (TextStr) in the Option.
         Some(self.master_name.map(|s| s.to_string()))
     }
 }

@@ -1,39 +1,22 @@
-// src/core/layout/nodes/image.rs
-
-use crate::core::idf::{IRNode, InlineMetadata, TextStr};
-use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::engine::{LayoutEngine, LayoutStore};
-use crate::core::layout::geom::{BoxConstraints, Size};
-use crate::core::layout::node::{
+use crate::core::base::geometry::{self, BoxConstraints, Size};
+use crate::core::layout::interface::{
     LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
 };
 use super::RenderNode;
 use crate::core::layout::style::ComputedStyle;
-use crate::core::layout::{
-    ImageElement, LayoutElement, LayoutError, PositionedElement,
-};
+use crate::core::layout::{LayoutElement, LayoutError, PositionedElement, ImageElement};
 use crate::core::style::dimension::Dimension;
+use crate::core::layout::painting::box_painter::create_background_and_borders;
 use std::sync::Arc;
-
-pub struct ImageBuilder;
-
-impl NodeBuilder for ImageBuilder {
-    fn build<'a>(
-        &self,
-        node: &IRNode,
-        engine: &LayoutEngine,
-        parent_style: Arc<ComputedStyle>,
-        store: &'a LayoutStore,
-    ) -> Result<RenderNode<'a>, LayoutError> {
-        ImageNode::build(node, engine, parent_style, store)
-    }
-}
+use crate::core::idf::IRNode;
 
 #[derive(Debug, Clone)]
 pub struct ImageNode<'a> {
     id: Option<&'a str>,
     src: &'a str,
     style: Arc<ComputedStyle>,
+    _marker: std::marker::PhantomData<&'a ()>,
 }
 
 impl<'a> ImageNode<'a> {
@@ -43,76 +26,61 @@ impl<'a> ImageNode<'a> {
         parent_style: Arc<ComputedStyle>,
         store: &'a LayoutStore,
     ) -> Result<RenderNode<'a>, LayoutError> {
-        let IRNode::Image { meta, src } = node else {
-            return Err(LayoutError::BuilderMismatch("Image", node.kind()));
+        let node = store.bump.alloc(Self::new(node, engine, parent_style, store)?);
+        Ok(RenderNode::Image(node))
+    }
+
+    pub fn new(
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+        store: &'a LayoutStore,
+    ) -> Result<Self, LayoutError> {
+        let (id_str, src_str, meta) = match node {
+            IRNode::Image { meta, src } => (&meta.id, src, meta),
+            _ => return Err(LayoutError::BuilderMismatch("Image", node.kind())),
         };
+
         let style = engine.compute_style(
             &meta.style_sets,
             meta.style_override.as_ref(),
             &parent_style,
         );
 
-        let id = meta.id.as_ref().map(|s| store.alloc_str(s));
-        let src = store.alloc_str(src);
         let style_ref = store.cache_style(style);
+        // Alloc string content into the bump arena for lifetime 'a
+        let src_ref = store.alloc_str(src_str);
+        let id_ref = id_str.as_ref().map(|s| store.alloc_str(s));
 
-        let item = store.bump.alloc(Self {
-            id,
-            src,
+        Ok(Self {
+            id: id_ref,
+            src: src_ref,
             style: style_ref,
-        });
-        Ok(RenderNode::Image(item))
+            _marker: std::marker::PhantomData,
+        })
     }
 
-    // Used for inline images in paragraphs
     pub fn new_inline(
-        meta: &InlineMetadata,
-        src: TextStr,
+        meta: &crate::core::idf::InlineMetadata,
+        src: String,
         engine: &LayoutEngine,
         parent_style: &Arc<ComputedStyle>,
         store: &'a LayoutStore,
     ) -> Result<Self, LayoutError> {
-        let style = engine.compute_style(&meta.style_sets, meta.style_override.as_ref(), parent_style);
-        let src_ref = store.alloc_str(&src);
+        let style = engine.compute_style(
+            &meta.style_sets,
+            meta.style_override.as_ref(),
+            parent_style,
+        );
         let style_ref = store.cache_style(style);
+        let src_ref = store.alloc_str(&src);
 
         Ok(Self {
             id: None,
             src: src_ref,
             style: style_ref,
+            _marker: std::marker::PhantomData,
         })
-    }
-
-    fn resolve_sizes(&self, constraints: BoxConstraints) -> Size {
-        let available_width = if constraints.has_bounded_width() {
-            constraints.max_width
-        } else {
-            f32::INFINITY
-        };
-
-        let width = match &self.style.box_model.width {
-            Some(Dimension::Pt(w)) => *w,
-            Some(Dimension::Percent(p)) => {
-                if available_width.is_finite() {
-                    available_width * (p / 100.0)
-                } else {
-                    0.0
-                }
-            }
-            _ => {
-                if available_width.is_finite() {
-                    available_width
-                } else {
-                    100.0
-                }
-            }
-        };
-        let height = match &self.style.box_model.height {
-            Some(Dimension::Pt(h)) => *h,
-            Some(Dimension::Percent(_)) | _ => width,
-        };
-
-        Size::new(width, height)
     }
 }
 
@@ -122,56 +90,81 @@ impl<'a> LayoutNode for ImageNode<'a> {
     }
 
     fn measure(&self, _env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<Size, LayoutError> {
-        let content_size = self.resolve_sizes(constraints);
-        let total_height = self.style.box_model.margin.top
-            + content_size.height
-            + self.style.box_model.margin.bottom;
-        Ok(Size::new(content_size.width, total_height))
+        let w = match self.style.box_model.width {
+            Some(Dimension::Pt(v)) => v,
+            _ => 100.0,
+        };
+
+        let h = match self.style.box_model.height {
+            Some(Dimension::Pt(v)) => v,
+            _ => 100.0,
+        };
+
+        let width = constraints.constrain_width(w + self.style.padding_x() + self.style.border_x());
+        let height = constraints.constrain_height(h + self.style.padding_y() + self.style.border_y());
+
+        Ok(Size::new(width, height))
     }
 
     fn layout(
         &self,
         ctx: &mut LayoutContext,
         constraints: BoxConstraints,
-        break_state: Option<NodeState>,
+        _break_state: Option<NodeState>,
     ) -> Result<LayoutResult, LayoutError> {
-        if break_state.is_some() {
-            // resume logic...
-        }
-
         if let Some(id) = self.id {
             ctx.register_anchor(id);
         }
 
-        let size = self.resolve_sizes(constraints);
-        let total_height = self.style.box_model.margin.top
-            + size.height
-            + self.style.box_model.margin.bottom;
+        // If we have a break state (Atomic), it means we pushed to the next page.
+        // We should just continue layout as normal (from scratch) on this new page.
+        // We don't return Finished immediately.
 
-        if total_height > ctx.bounds().height {
+        let size = self.measure(&ctx.env, constraints)?;
+
+        // Safety check: if image is taller than the page, skip it to avoid infinite loops
+        if size.height > ctx.bounds().height {
             return Ok(LayoutResult::Finished);
         }
 
-        if total_height > ctx.available_height() && !ctx.is_empty() {
+        if ctx.prepare_for_block(self.style.box_model.margin.top) {
             return Ok(LayoutResult::Break(NodeState::Atomic));
         }
 
-        ctx.advance_cursor(self.style.box_model.margin.top);
+        if size.height > ctx.available_height() && !ctx.is_empty() {
+            return Ok(LayoutResult::Break(NodeState::Atomic));
+        }
 
-        let element = PositionedElement {
-            x: self.style.box_model.margin.left,
-            y: 0.0,
-            width: size.width,
-            height: size.height,
-            element: LayoutElement::Image(ImageElement {
-                src: self.src.to_string(), // Copy to output String
-            }),
-            style: self.style.clone(),
+        let start_y = ctx.cursor_y();
+
+        let bg_elements = create_background_and_borders(
+            ctx.bounds(),
+            &self.style,
+            start_y,
+            size.height,
+            true, true
+        );
+        for el in bg_elements {
+            ctx.push_element_at(el, 0.0, 0.0);
+        }
+
+        let content_rect = geometry::Rect {
+            x: self.style.border_left_width() + self.style.box_model.padding.left,
+            y: start_y + self.style.border_top_width() + self.style.box_model.padding.top,
+            width: size.width - self.style.padding_x() - self.style.border_x(),
+            height: size.height - self.style.padding_y() - self.style.border_y(),
         };
-        ctx.push_element(element);
 
-        ctx.advance_cursor(size.height);
-        ctx.advance_cursor(self.style.box_model.margin.bottom);
+        let image_el = PositionedElement {
+            element: LayoutElement::Image(ImageElement { src: self.src.to_string() }),
+            style: self.style.clone(),
+            ..PositionedElement::from_rect(content_rect)
+        };
+
+        ctx.push_element_at(image_el, 0.0, 0.0);
+
+        ctx.set_cursor_y(start_y + size.height);
+        ctx.finish_block(self.style.box_model.margin.bottom);
 
         Ok(LayoutResult::Finished)
     }

@@ -1,30 +1,15 @@
 // src/core/layout/nodes/index_marker.rs
 
 use crate::core::idf::IRNode;
-use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::engine::{LayoutEngine, LayoutStore};
-use crate::core::layout::geom::{BoxConstraints, Size};
-use crate::core::layout::node::{
+use crate::core::base::geometry::{BoxConstraints, Size};
+use crate::core::layout::interface::{
     LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
 };
 use super::RenderNode;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::LayoutError;
 use std::sync::Arc;
-
-pub struct IndexMarkerBuilder;
-
-impl NodeBuilder for IndexMarkerBuilder {
-    fn build<'a>(
-        &self,
-        node: &IRNode,
-        engine: &LayoutEngine,
-        parent_style: Arc<ComputedStyle>,
-        store: &'a LayoutStore,
-    ) -> Result<RenderNode<'a>, LayoutError> {
-        IndexMarkerNode::build(node, engine, parent_style, store)
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct IndexMarkerNode<'a> {
@@ -44,7 +29,7 @@ impl<'a> IndexMarkerNode<'a> {
         };
 
         let term_ref = store.alloc_str(term);
-        // Default style needed for layout node, even if invisible
+        // Default style needed for layout node trait, even if invisible
         let style = Arc::new(ComputedStyle::default());
         let style_ref = store.cache_style(style);
 

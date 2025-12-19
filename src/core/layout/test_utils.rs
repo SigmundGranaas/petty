@@ -1,11 +1,12 @@
-use crate::core::idf::{IRNode, InlineNode, NodeMetadata};
 use crate::core::layout::engine::{LayoutEngine, LayoutStore};
 use crate::core::layout::fonts::SharedFontLibrary;
-use crate::core::layout::node::{AnchorLocation, IndexEntry};
+use crate::core::layout::interface::{AnchorLocation, IndexEntry};
 use crate::core::layout::{LayoutElement, PositionedElement, TextElement};
 use crate::core::style::stylesheet::Stylesheet;
 use crate::error::PipelineError;
 use std::collections::HashMap;
+
+use crate::core::idf::{IRNode, InlineNode, NodeMetadata};
 
 /// Creates a default layout engine for testing purposes.
 pub fn create_test_engine() -> LayoutEngine {

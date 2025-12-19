@@ -3,8 +3,8 @@ use printpdf::graphics::{LinePoint, PaintMode, Point, Polygon, PolygonRing, Wind
 use printpdf::ops::Op;
 use printpdf::{Pt, Rgb};
 use std::io;
+use crate::core::base::color::Color;
 use crate::core::layout::PositionedElement;
-use crate::core::style::color::Color;
 use crate::render::RenderError;
 
 /// A helper to convert our internal `Color` to the `printpdf` library's `Color`.

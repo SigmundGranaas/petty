@@ -1,10 +1,9 @@
 // src/core/layout/nodes/heading.rs
 
 use crate::core::idf::{IRNode, TextStr};
-use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::engine::{LayoutEngine, LayoutStore};
-use crate::core::layout::geom::{BoxConstraints, Size};
-use crate::core::layout::node::{
+use crate::core::base::geometry::{BoxConstraints, Size};
+use crate::core::layout::interface::{
     LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
 };
 use super::RenderNode;
@@ -12,20 +11,6 @@ use crate::core::layout::nodes::paragraph::ParagraphNode;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::LayoutError;
 use std::sync::Arc;
-
-pub struct HeadingBuilder;
-
-impl NodeBuilder for HeadingBuilder {
-    fn build<'a>(
-        &self,
-        node: &IRNode,
-        engine: &LayoutEngine,
-        parent_style: Arc<ComputedStyle>,
-        store: &'a LayoutStore,
-    ) -> Result<RenderNode<'a>, LayoutError> {
-        HeadingNode::build(node, engine, parent_style, store)
-    }
-}
 
 #[derive(Debug)]
 pub struct HeadingNode<'a> {
@@ -49,11 +34,13 @@ impl<'a> HeadingNode<'a> {
             return Err(LayoutError::BuilderMismatch("Heading", node.kind()));
         };
 
+        // Construct a temporary Paragraph IR node to delegate logic
         let p_ir = IRNode::Paragraph {
             meta: meta.clone(),
             children: children.clone(),
         };
 
+        // Use the Paragraph builder logic (via static build)
         let p_render_node = ParagraphNode::build(&p_ir, engine, parent_style, store)?;
 
         let p_node_ref = match p_render_node {
@@ -85,6 +72,10 @@ impl<'a> LayoutNode for HeadingNode<'a> {
         constraints: BoxConstraints,
         break_state: Option<NodeState>,
     ) -> Result<LayoutResult, LayoutError> {
+        // Register ID if present
+        if let Some(id) = &self.id {
+            ctx.register_anchor(id);
+        }
         self.p_node.layout(ctx, constraints, break_state)
     }
 }

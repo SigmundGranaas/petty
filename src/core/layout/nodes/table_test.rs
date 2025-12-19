@@ -1,4 +1,3 @@
-// src/core/layout/nodes/table_test.rs
 #![cfg(test)]
 
 use crate::core::idf::{IRNode, TableBody, TableCell, TableColumnDefinition, TableHeader, TableRow};

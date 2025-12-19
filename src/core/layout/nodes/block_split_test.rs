@@ -1,9 +1,11 @@
-use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
+#![cfg(test)]
+
 use crate::core::style::dimension::{Dimension, Margins, PageSize};
 use crate::core::style::flex::{AlignItems, AlignSelf, FlexDirection, FlexWrap};
 use crate::core::style::stylesheet::{ElementStyle, PageLayout, Stylesheet};
 use std::collections::HashMap;
 use crate::core::idf::{IRNode, NodeMetadata};
+use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
 
 fn create_flex_item_with_style(text: &str, style: ElementStyle) -> IRNode {
     IRNode::Block {

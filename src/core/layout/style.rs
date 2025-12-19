@@ -1,14 +1,14 @@
 // src/core/layout/style.rs
 
 use crate::core::style::border::Border;
-use crate::core::style::color::Color;
+use crate::core::base::color::Color;
 use crate::core::style::dimension::{Dimension, Margins};
 use crate::core::style::flex::{AlignItems, AlignSelf, FlexDirection, FlexWrap, JustifyContent};
 use crate::core::style::font::{FontStyle, FontWeight};
 use crate::core::style::list::{ListStylePosition, ListStyleType};
 use crate::core::style::stylesheet::ElementStyle;
 use crate::core::style::text::{TextAlign, TextDecoration};
-use crate::core::layout::geom::BoxConstraints;
+use crate::core::base::geometry::BoxConstraints;
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;

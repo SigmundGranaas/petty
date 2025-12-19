@@ -1,4 +1,4 @@
-use super::color::Color;
+use crate::core::base::color::Color;
 use crate::parser::ParseError;
 use serde::{Deserialize, Serialize};
 use std::hash::{Hash, Hasher};

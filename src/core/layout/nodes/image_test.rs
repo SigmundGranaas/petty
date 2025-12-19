@@ -1,4 +1,3 @@
-// src/core/layout/nodes/image_test.rs
 #![cfg(test)]
 use crate::core::idf::{IRNode, NodeMetadata};
 use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};

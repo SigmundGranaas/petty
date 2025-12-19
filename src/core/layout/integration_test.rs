@@ -1,4 +1,3 @@
-// src/core/layout/integration_test.rs
 use crate::core::idf::{IRNode, InlineNode, NodeMetadata};
 use crate::core::layout::test_utils::{
     create_paragraph, find_first_text_box_with_content, paginate_test_nodes,

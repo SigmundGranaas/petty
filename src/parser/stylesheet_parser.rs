@@ -1,4 +1,3 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/parser/stylesheet_parser.rs
 //! This module is deprecated as of the XSLT compiler refactoring.
 //! Its functionality for parsing stylesheet definitions has been merged into the new
 //! single-pass parser/builder mechanism in `parser::xslt::compiler` and `parser::xslt::parser`.

@@ -4,7 +4,7 @@ use crate::core::idf::{IRNode, NodeMetadata};
 use crate::core::layout::test_utils::{create_paragraph, find_first_text_box_with_content, paginate_test_nodes};
 use crate::core::layout::LayoutElement;
 use crate::core::style::border::{Border, BorderStyle};
-use crate::core::style::color::Color;
+use crate::core::base::color::Color;
 use crate::core::style::dimension::{Margins, PageSize};
 use crate::core::style::stylesheet::{ElementStyle, PageLayout, Stylesheet};
 use std::collections::HashMap;

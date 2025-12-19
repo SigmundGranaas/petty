@@ -1,4 +1,3 @@
-use petty::core::style::color::Color;
 use petty::core::style::dimension::{Dimension, Margins};
 use petty::core::style::flex::JustifyContent;
 use petty::core::style::font::FontWeight;
@@ -13,6 +12,7 @@ use rand::SeedableRng;
 use serde_json::{json, Value};
 use std::env;
 use std::time::Instant;
+use petty::core::base::color::Color;
 
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]

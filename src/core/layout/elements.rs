@@ -1,7 +1,7 @@
 // src/core/layout/elements.rs
 
-use crate::core::layout::geom;
-use crate::core::layout::ComputedStyle;
+use crate::core::base::geometry;
+use crate::core::layout::style::ComputedStyle;
 use crate::core::style::text::TextDecoration;
 use std::sync::Arc;
 
@@ -22,7 +22,7 @@ pub struct PositionedElement {
 impl PositionedElement {
     /// Creates a partial `PositionedElement` from a `Rect`.
     /// The `element` and `style` fields must be filled in by the caller.
-    pub fn from_rect(rect: geom::Rect) -> Self {
+    pub fn from_rect(rect: geometry::Rect) -> Self {
         Self {
             x: rect.x,
             y: rect.y,

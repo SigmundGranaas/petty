@@ -2,9 +2,9 @@
 
 #![cfg(test)]
 
+use crate::core::base::color::Color;
 use super::builders::*;
 use super::{p, Template, TemplateBuilder};
-use crate::core::style::color::Color;
 use crate::core::style::dimension::{Dimension, Margins, PageSize};
 use crate::core::style::font::FontWeight;
 use crate::core::style::stylesheet::{ElementStyle, PageLayout};

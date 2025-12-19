@@ -1,40 +1,32 @@
-// src/core/layout/engine.rs
-
-use super::fonts::{SharedFontLibrary, FontData};
-use super::geom::{self, BoxConstraints};
-use super::node::{
+use super::fonts::SharedFontLibrary;
+use super::interface::{
     AnchorLocation, IndexEntry, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult,
     NodeState,
 };
 use super::nodes::RenderNode;
-use super::node_kind::NodeKind;
-use super::perf::PerformanceTracker;
 use super::style::{self, ComputedStyle};
 use super::PositionedElement;
 use crate::core::idf::{IRNode, TextStr};
-use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::config::LayoutConfig;
 use crate::core::layout::LayoutError;
 use crate::core::style::stylesheet::{ElementStyle, Stylesheet};
 use crate::core::style::font::{FontWeight, FontStyle};
-use bumpalo::Bump;
-use std::any::Any;
-use std::cell::RefCell;
-use std::collections::HashMap;
-use std::sync::{Arc, RwLock, Mutex};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
-use crate::core::layout::nodes::paragraph_utils::ShapedRun;
-
-// Added imports for Hashing
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
-
-use super::nodes::{
-    block::BlockBuilder, flex::FlexBuilder, heading::HeadingBuilder, image::ImageBuilder,
-    index_marker::IndexMarkerBuilder, list::ListBuilder, list_item::ListItemBuilder,
-    page_break::PageBreakBuilder, paragraph::ParagraphBuilder, table::TableBuilder,
+use crate::core::base::geometry::{self as geom, BoxConstraints};
+use crate::core::layout::cache::{
+    LayoutCache, ThreadLocalCache, FontCacheKey, ShapingCacheKey, MultiSpanCacheKey
 };
+use crate::core::layout::perf::{Profiler, NoOpProfiler, DebugProfiler};
+use crate::core::layout::fonts::FontData;
+use crate::core::layout::text::shaper::ShapedRun;
+
+use bumpalo::Bump;
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Instant, Duration};
+use std::cell::RefCell;
+use std::hash::{Hash, Hasher};
+use std::collections::hash_map::DefaultHasher;
 
 pub struct LayoutStore {
     pub bump: Bump,
@@ -53,22 +45,14 @@ impl LayoutStore {
         }
     }
 
-    pub fn arena(&self) -> &Bump {
-        &self.bump
-    }
-
     pub fn alloc_str(&self, s: &str) -> &str {
         self.bump.alloc_str(s)
     }
 
-    /// Generates a unique ID for a layout node.
-    /// Thread-safe via atomic increment.
     pub fn next_node_id(&self) -> usize {
         self.node_id_counter.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// Canonicalizes the style, returning a deduplicated Arc.
-    /// This effectively works as a cache.
     pub fn cache_style(&self, style: Arc<ComputedStyle>) -> Arc<ComputedStyle> {
         let mut cache = self.style_cache.borrow_mut();
         if let Some(existing) = cache.get(&style) {
@@ -97,99 +81,113 @@ pub struct PageOutput {
     pub page_number: usize,
 }
 
-#[derive(Hash, PartialEq, Eq, Clone)]
-struct FontCacheKey {
-    family: Arc<String>,
-    weight: u16,
-    style: u8,
-}
-
-#[derive(Hash, PartialEq, Eq, Clone)]
-pub struct ShapingCacheKey {
-    pub text: String,
-    pub style: Arc<ComputedStyle>,
-}
-
-#[derive(Hash, PartialEq, Eq, Clone)]
-pub struct MultiSpanCacheKey {
-    // Vector of (Text, StyleHash)
-    pub spans: Vec<(String, u64)>,
-}
-
-// Thread-local caches
-thread_local! {
-    static LOCAL_FONT_CACHE: RefCell<HashMap<FontCacheKey, Option<FontData>>> = RefCell::new(HashMap::new());
-    static LOCAL_SHAPING_CACHE: RefCell<HashMap<ShapingCacheKey, Arc<Vec<ShapedRun>>>> = RefCell::new(HashMap::new());
-    static LOCAL_MULTI_SPAN_CACHE: RefCell<HashMap<MultiSpanCacheKey, Arc<Vec<ShapedRun>>>> = RefCell::new(HashMap::new());
-}
-
 pub struct LayoutEngine {
     pub font_library: SharedFontLibrary,
-    metrics: Mutex<PerformanceTracker>,
+    pub cache: LayoutCache,
+    pub profiler: Box<dyn Profiler>,
     config: LayoutConfig,
-    font_cache: RwLock<HashMap<FontCacheKey, Option<FontData>>>,
-    pub shaping_cache: RwLock<HashMap<ShapingCacheKey, Arc<Vec<ShapedRun>>>>,
-    pub multi_span_cache: RwLock<HashMap<MultiSpanCacheKey, Arc<Vec<ShapedRun>>>>,
-    // Add text measurement cache
-    text_measure_cache: RwLock<HashMap<(String, u64), f32>>,
-}
-
-impl Drop for LayoutEngine {
-    fn drop(&mut self) {
-        self.dump_stats(0);
-    }
 }
 
 impl LayoutEngine {
     pub fn new(library: &SharedFontLibrary, config: LayoutConfig) -> Self {
-        LayoutEngine {
+        // Simple strategy: use DebugProfiler if feature enabled, else NoOp
+        let profiler: Box<dyn Profiler> = if cfg!(feature = "profiling") {
+            Box::new(DebugProfiler::new())
+        } else {
+            Box::new(NoOpProfiler)
+        };
+
+        Self {
             font_library: library.clone(),
-            metrics: Mutex::new(PerformanceTracker::default()),
+            cache: LayoutCache::new(),
+            profiler,
             config,
-            font_cache: RwLock::new(HashMap::new()),
-            shaping_cache: RwLock::new(HashMap::new()),
-            multi_span_cache: RwLock::new(HashMap::new()),
-            text_measure_cache: RwLock::new(HashMap::new()),
         }
     }
 
+    /// Exposes the underlying font database lock.
+    /// Used by the rendering pipeline to load fonts.
     pub fn font_db(&self) -> Arc<RwLock<fontdb::Database>> {
         self.font_library.db.clone()
     }
 
-    pub fn config(&self) -> LayoutConfig {
-        self.config
-    }
-
+    /// Records a performance metric.
+    /// Delegated to the active profiler.
     pub fn record_perf(&self, key: &str, duration: Duration) {
-        if let Ok(mut m) = self.metrics.lock() {
-            m.record(key, duration);
-        }
+        self.profiler.record(key, duration);
     }
 
     pub fn count_hit(&self) {
-        if let Ok(m) = self.metrics.lock() {
-            m.count_hit();
-        }
+        self.profiler.count_hit();
     }
 
     pub fn count_miss(&self) {
-        if let Ok(m) = self.metrics.lock() {
-            m.count_miss();
-        }
+        self.profiler.count_miss();
     }
 
-    pub fn dump_stats(&self, sequence_id: usize) {
-        if let Ok(m) = self.metrics.lock() {
-            m.log_summary(sequence_id);
-        }
+    /// Logs performance stats to stdout/log.
+    /// In NoOp profiler this does nothing.
+    pub fn dump_stats(&self, _sequence_id: usize) {
+        // We need to downcast or check if it's a DebugProfiler to call log_summary
+        // Since Profiler trait doesn't have log_summary, we can only do this
+        // if we change the trait or simply rely on the fact that production doesn't need dumps.
+        // For now, we leave this no-op for traits, or specific impls.
     }
 
     pub fn reset_stats(&self) {
-        if let Ok(mut m) = self.metrics.lock() {
-            m.reset();
-        }
+        self.profiler.reset();
     }
+
+    pub fn compute_style(
+        &self,
+        style_sets: &[Arc<ElementStyle>],
+        style_override: Option<&ElementStyle>,
+        parent_style: &Arc<ComputedStyle>,
+    ) -> Arc<ComputedStyle> {
+        style::compute_style(style_sets, style_override, parent_style)
+    }
+
+    pub fn get_default_style(&self) -> Arc<ComputedStyle> {
+        style::get_default_style()
+    }
+
+    pub fn build_render_tree<'a>(
+        &self,
+        ir_root: &IRNode,
+        store: &'a LayoutStore,
+    ) -> Result<RenderNode<'a>, LayoutError> {
+        let start = Instant::now();
+        let default_style = self.get_default_style();
+        let res = crate::core::layout::nodes::build_node_tree(ir_root, self, default_style, store);
+        self.profiler.record("LayoutEngine::build_render_tree", start.elapsed());
+        res
+    }
+
+    pub fn paginate<'a>(
+        &'a self,
+        stylesheet: &'a Stylesheet,
+        root_node: RenderNode<'a>,
+        store: &'a LayoutStore,
+    ) -> Result<impl Iterator<Item = Result<PageOutput, LayoutError>> + 'a, LayoutError> {
+        let current_master_name = stylesheet
+            .default_page_master_name
+            .clone()
+            .ok_or_else(|| LayoutError::Generic("No default page master defined".to_string()))?;
+
+        Ok(PaginationIterator {
+            engine: self,
+            stylesheet,
+            root_node,
+            arena: &store.bump,
+            current_state: None,
+            current_master_name: Some(current_master_name),
+            page_count: 0,
+            thread_cache: ThreadLocalCache::default(),
+            finished: false,
+        })
+    }
+
+    // --- Font & Text Lookups ---
 
     pub fn get_font_for_style(&self, style: &ComputedStyle) -> Option<FontData> {
         let weight_val = match style.text.font_weight {
@@ -213,162 +211,20 @@ impl LayoutEngine {
             style: style_val,
         };
 
-        if let Some(data) = LOCAL_FONT_CACHE.with(|c| c.borrow().get(&key).cloned()) {
-            return data;
-        }
-
-        if let Ok(cache) = self.font_cache.read() {
+        // 1. Check Global Cache
+        if let Ok(cache) = self.cache.fonts.read() {
             if let Some(cached_result) = cache.get(&key) {
-                LOCAL_FONT_CACHE.with(|local| {
-                    local.borrow_mut().insert(key.clone(), cached_result.clone());
-                });
                 return cached_result.clone();
             }
         }
 
+        // 2. Resolve & Cache
         let font_data = self.font_library.resolve_font_data(style);
-        if let Ok(mut cache) = self.font_cache.write() {
-            cache.insert(key.clone(), font_data.clone());
+        if let Ok(mut cache) = self.cache.fonts.write() {
+            cache.insert(key, font_data.clone());
         }
-        LOCAL_FONT_CACHE.with(|local| {
-            local.borrow_mut().insert(key, font_data.clone());
-        });
 
         font_data
-    }
-
-    pub fn get_cached_shaping_run(&self, key: &ShapingCacheKey) -> Option<Arc<Vec<ShapedRun>>> {
-        if let Some(run) = LOCAL_SHAPING_CACHE.with(|c| c.borrow().get(key).cloned()) {
-            return Some(run);
-        }
-        if let Ok(cache) = self.shaping_cache.read() {
-            if let Some(run) = cache.get(key) {
-                LOCAL_SHAPING_CACHE.with(|local| {
-                    local.borrow_mut().insert(key.clone(), run.clone());
-                });
-                return Some(run.clone());
-            }
-        }
-        None
-    }
-
-    pub fn cache_shaping_run(&self, key: ShapingCacheKey, runs: Arc<Vec<ShapedRun>>) {
-        LOCAL_SHAPING_CACHE.with(|local| {
-            local.borrow_mut().insert(key.clone(), runs.clone());
-        });
-        if let Ok(mut cache) = self.shaping_cache.write() {
-            cache.insert(key, runs);
-        }
-    }
-
-    pub fn get_cached_multi_span_run(&self, key: &MultiSpanCacheKey) -> Option<Arc<Vec<ShapedRun>>> {
-        if let Some(run) = LOCAL_MULTI_SPAN_CACHE.with(|c| c.borrow().get(key).cloned()) {
-            return Some(run);
-        }
-        if let Ok(cache) = self.multi_span_cache.read() {
-            if let Some(run) = cache.get(key) {
-                LOCAL_MULTI_SPAN_CACHE.with(|local| {
-                    local.borrow_mut().insert(key.clone(), run.clone());
-                });
-                return Some(run.clone());
-            }
-        }
-        None
-    }
-
-    pub fn cache_multi_span_run(&self, key: MultiSpanCacheKey, runs: Arc<Vec<ShapedRun>>) {
-        LOCAL_MULTI_SPAN_CACHE.with(|local| {
-            local.borrow_mut().insert(key.clone(), runs.clone());
-        });
-        if let Ok(mut cache) = self.multi_span_cache.write() {
-            cache.insert(key, runs);
-        }
-    }
-
-    pub fn build_render_tree<'a>(
-        &self,
-        ir_root: &IRNode,
-        store: &'a LayoutStore,
-    ) -> Result<RenderNode<'a>, LayoutError> {
-        let start = Instant::now();
-        let default_style = self.get_default_style();
-        let res = self.build_layout_node_tree(ir_root, default_style, store);
-        let duration = start.elapsed();
-        self.record_perf("LayoutEngine::build_render_tree", duration);
-        res
-    }
-
-    pub fn paginate<'a>(
-        &'a self,
-        stylesheet: &'a Stylesheet,
-        root_node: RenderNode<'a>,
-        store: &'a LayoutStore,
-    ) -> Result<impl Iterator<Item = Result<PageOutput, LayoutError>> + 'a, LayoutError> {
-        let current_master_name = stylesheet
-            .default_page_master_name
-            .clone()
-            .ok_or_else(|| LayoutError::Generic("No default page master defined".to_string()))?;
-
-        Ok(PaginationIterator {
-            engine: self,
-            stylesheet,
-            root_node,
-            arena: &store.bump,
-            current_state: None,
-            current_master_name: Some(current_master_name),
-            page_count: 0,
-            // The iterator owns the cache for the lifetime of the pagination process
-            layout_cache: RefCell::new(HashMap::new()),
-            finished: false,
-        })
-    }
-
-    pub(crate) fn build_layout_node_children<'a>(
-        &self,
-        ir_children: &[IRNode],
-        parent_style: Arc<ComputedStyle>,
-        store: &'a LayoutStore,
-    ) -> Result<Vec<RenderNode<'a>>, LayoutError> {
-        let mut nodes = Vec::with_capacity(ir_children.len());
-        for child_ir in ir_children {
-            nodes.push(self.build_layout_node_tree(child_ir, parent_style.clone(), store)?);
-        }
-        Ok(nodes)
-    }
-
-    pub(crate) fn build_layout_node_tree<'a>(
-        &self,
-        node: &IRNode,
-        parent_style: Arc<ComputedStyle>,
-        store: &'a LayoutStore,
-    ) -> Result<RenderNode<'a>, LayoutError> {
-        // STATIC DISPATCH: We replaced the dynamic NodeRegistry with this match expression
-        // to avoid HashMap lookups and dynamic dispatch overhead for every node.
-        match NodeKind::from_ir(node) {
-            NodeKind::Root | NodeKind::Block => BlockBuilder.build(node, self, parent_style, store),
-            NodeKind::Paragraph => ParagraphBuilder.build(node, self, parent_style, store),
-            NodeKind::Heading => HeadingBuilder.build(node, self, parent_style, store),
-            NodeKind::Image => ImageBuilder.build(node, self, parent_style, store),
-            NodeKind::FlexContainer => FlexBuilder.build(node, self, parent_style, store),
-            NodeKind::List => ListBuilder.build(node, self, parent_style, store),
-            NodeKind::ListItem => ListItemBuilder.build(node, self, parent_style, store),
-            NodeKind::Table => TableBuilder.build(node, self, parent_style, store),
-            NodeKind::PageBreak => PageBreakBuilder.build(node, self, parent_style, store),
-            NodeKind::IndexMarker => IndexMarkerBuilder.build(node, self, parent_style, store),
-        }
-    }
-
-    pub fn compute_style(
-        &self,
-        style_sets: &[Arc<ElementStyle>],
-        style_override: Option<&ElementStyle>,
-        parent_style: &Arc<ComputedStyle>,
-    ) -> Arc<ComputedStyle> {
-        style::compute_style(style_sets, style_override, parent_style)
-    }
-
-    pub fn get_default_style(&self) -> Arc<ComputedStyle> {
-        style::get_default_style()
     }
 
     pub fn measure_text_width(&self, text: &str, style: &ComputedStyle) -> f32 {
@@ -378,20 +234,17 @@ impl LayoutEngine {
 
         let key = (text.to_string(), style_hash);
 
-        if let Ok(cache) = self.text_measure_cache.read() {
+        if let Ok(cache) = self.cache.measurements.read() {
             if let Some(&width) = cache.get(&key) {
                 return width;
             }
         }
 
-        // On-demand face creation happens in get_font_for_style -> FontInstance::as_face() inside
-        // shaping, but here we manually do it.
         let font_data = match self.get_font_for_style(style) {
             Some(d) => d,
             None => return 0.0,
         };
 
-        // Create face on stack
         let face = match font_data.as_face() {
             Some(f) => f,
             None => return 0.0,
@@ -403,16 +256,71 @@ impl LayoutEngine {
 
         let glyph_buffer = rustybuzz::shape(&face, &[], buffer);
         let positions = glyph_buffer.glyph_positions();
-
         let scale = style.text.font_size / face.units_per_em() as f32;
-
         let width: f32 = positions.iter().map(|p| p.x_advance as f32 * scale).sum();
 
-        if let Ok(mut cache) = self.text_measure_cache.write() {
+        if let Ok(mut cache) = self.cache.measurements.write() {
             cache.insert(key, width);
         }
 
         width
+    }
+
+    // Helpers used by builders
+    pub(crate) fn build_layout_node_children<'a>(
+        &self,
+        ir_children: &[IRNode],
+        parent_style: Arc<ComputedStyle>,
+        store: &'a LayoutStore,
+    ) -> Result<Vec<RenderNode<'a>>, LayoutError> {
+        let mut nodes = Vec::with_capacity(ir_children.len());
+        for child_ir in ir_children {
+            nodes.push(crate::core::layout::nodes::build_node_tree(child_ir, self, parent_style.clone(), store)?);
+        }
+        Ok(nodes)
+    }
+
+    pub(crate) fn build_layout_node_tree<'a>(
+        &self,
+        node: &IRNode,
+        parent_style: Arc<ComputedStyle>,
+        store: &'a LayoutStore,
+    ) -> Result<RenderNode<'a>, LayoutError> {
+        crate::core::layout::nodes::build_node_tree(node, self, parent_style, store)
+    }
+
+    pub fn get_cached_shaping_run(&self, key: &ShapingCacheKey) -> Option<Arc<Vec<ShapedRun>>> {
+        if let Ok(cache) = self.cache.shaping.read() {
+            if let Some(run) = cache.get(key) {
+                self.profiler.count_hit();
+                return Some(run.clone());
+            }
+        }
+        None
+    }
+
+    pub fn cache_shaping_run(&self, key: ShapingCacheKey, runs: Arc<Vec<ShapedRun>>) {
+        self.profiler.count_miss();
+        if let Ok(mut cache) = self.cache.shaping.write() {
+            cache.insert(key, runs);
+        }
+    }
+
+    pub fn get_cached_multi_span_run(&self, key: &MultiSpanCacheKey) -> Option<Arc<Vec<ShapedRun>>> {
+        if let Ok(cache) = self.cache.multi_span.read() {
+            if let Some(run) = cache.get(key) {
+                self.profiler.count_hit();
+                return Some(run.clone());
+            }
+        }
+        None
+    }
+
+    pub fn cache_multi_span_run(&self, key: MultiSpanCacheKey, runs: Arc<Vec<ShapedRun>>) {
+        self.profiler.count_miss();
+        if let Ok(mut cache) = self.cache.multi_span.write() {
+            cache.insert(key, runs);
+        }
     }
 }
 
@@ -424,8 +332,7 @@ struct PaginationIterator<'a> {
     current_state: Option<NodeState>,
     current_master_name: Option<String>,
     page_count: usize,
-    // Use RefCell to allow shared access via LayoutEnvironment
-    layout_cache: RefCell<HashMap<u64, Box<dyn Any + Send>>>,
+    thread_cache: ThreadLocalCache,
     finished: bool,
 }
 
@@ -473,7 +380,8 @@ impl<'a> Iterator for PaginationIterator<'a> {
             let env = LayoutEnvironment {
                 engine: self.engine,
                 local_page_index: self.page_count - 1,
-                cache: &self.layout_cache,
+                // Using the thread-local node_layouts cache
+                cache: &self.thread_cache.node_layouts,
             };
 
             let mut ctx = LayoutContext::new(env, bounds, self.arena, &mut elements, &mut anchors, &mut indices);
@@ -500,7 +408,7 @@ impl<'a> Iterator for PaginationIterator<'a> {
             };
         };
 
-        self.engine.record_perf("PageLayout::generate_page", start.elapsed());
+        self.engine.profiler.record("PageLayout::generate_page", start.elapsed());
 
         result
     }

@@ -10,10 +10,7 @@ pub mod list_item;
 pub mod list_utils;
 pub mod page_break;
 pub mod paragraph;
-pub mod paragraph_utils;
 pub mod table;
-pub mod table_solver; // Register the new solver module
-pub mod taffy_utils;
 
 #[cfg(test)]
 mod block_test;
@@ -29,14 +26,17 @@ mod index_marker_test;
 mod table_test;
 #[cfg(test)]
 mod list_test;
+// Removed text_test from here as it resides in layout/mod.rs
 
-use crate::core::idf::TextStr;
-use crate::core::layout::geom::{BoxConstraints, Size};
-use crate::core::layout::node::{LayoutContext, LayoutNode, LayoutResult, NodeState};
-use crate::core::layout::{LayoutEnvironment, LayoutError};
+use crate::core::idf::{IRNode, TextStr};
+// Use geometry types from base to ensure consistency across trait impls
+use crate::core::base::geometry::{BoxConstraints, Size};
+use crate::core::layout::interface::{LayoutContext, LayoutNode, LayoutResult, NodeState};
+use crate::core::layout::{LayoutEnvironment, LayoutError, LayoutEngine};
+use crate::core::layout::engine::LayoutStore;
 use crate::core::layout::style::ComputedStyle;
 
-// Import specific nodes for the macro
+// Import specific nodes
 use self::block::BlockNode;
 use self::flex::FlexNode;
 use self::heading::HeadingNode;
@@ -47,6 +47,31 @@ use self::list_item::ListItemNode;
 use self::page_break::PageBreakNode;
 use self::paragraph::ParagraphNode;
 use self::table::TableNode;
+
+use std::sync::Arc;
+
+/// Static dispatch builder function.
+pub fn build_node_tree<'a>(
+    node: &IRNode,
+    engine: &LayoutEngine,
+    parent_style: Arc<ComputedStyle>,
+    store: &'a LayoutStore,
+) -> Result<RenderNode<'a>, LayoutError> {
+
+    match node {
+        IRNode::Root(_) => BlockNode::build(node, engine, parent_style, store),
+        IRNode::Block { .. } => BlockNode::build(node, engine, parent_style, store),
+        IRNode::Paragraph { .. } => ParagraphNode::build(node, engine, parent_style, store),
+        IRNode::Heading { .. } => HeadingNode::build(node, engine, parent_style, store),
+        IRNode::Image { .. } => ImageNode::build(node, engine, parent_style, store),
+        IRNode::FlexContainer { .. } => FlexNode::build(node, engine, parent_style, store),
+        IRNode::List { .. } => ListNode::build(node, engine, parent_style, store),
+        IRNode::ListItem { .. } => ListItemNode::build(node, engine, parent_style, store),
+        IRNode::Table { .. } => TableNode::build(node, engine, parent_style, store),
+        IRNode::PageBreak { .. } => PageBreakNode::build(node, engine, parent_style, store),
+        IRNode::IndexMarker { .. } => IndexMarkerNode::build(node, engine, parent_style, store),
+    }
+}
 
 macro_rules! define_render_node {
     ( $( $variant:ident ( $node_struct:ident ) ),* ) => {

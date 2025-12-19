@@ -1,14 +1,11 @@
-// src/core/layout/nodes/list_item.rs
-
 use crate::core::idf::{IRNode, InlineNode, TextStr};
-use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::engine::{LayoutEngine, LayoutStore};
-use crate::core::layout::geom::{self, BoxConstraints, Size};
-use crate::core::layout::node::{
+use crate::core::base::geometry::{self, BoxConstraints, Size};
+use crate::core::layout::interface::{
     LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, ListItemState, NodeState,
 };
 use super::RenderNode;
-use crate::core::layout::nodes::block::create_background_and_borders;
+use crate::core::layout::painting::box_painter::create_background_and_borders;
 use crate::core::layout::nodes::list_utils::get_marker_text;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{
@@ -19,21 +16,6 @@ use crate::core::style::list::ListStylePosition;
 use crate::core::style::text::TextDecoration;
 use std::sync::Arc;
 
-pub struct ListItemBuilder;
-
-impl NodeBuilder for ListItemBuilder {
-    fn build<'a>(
-        &self,
-        node: &IRNode,
-        engine: &LayoutEngine,
-        parent_style: Arc<ComputedStyle>,
-        store: &'a LayoutStore,
-    ) -> Result<RenderNode<'a>, LayoutError> {
-        let item = ListItemNode::new(node, engine, parent_style, 1, 0, store)?;
-        Ok(RenderNode::ListItem(store.bump.alloc(item)))
-    }
-}
-
 #[derive(Debug)]
 pub struct ListItemNode<'a> {
     id: Option<TextStr>,
@@ -43,6 +25,17 @@ pub struct ListItemNode<'a> {
 }
 
 impl<'a> ListItemNode<'a> {
+    pub fn build(
+        node: &IRNode,
+        engine: &LayoutEngine,
+        parent_style: Arc<ComputedStyle>,
+        store: &'a LayoutStore,
+    ) -> Result<RenderNode<'a>, LayoutError> {
+        // Default start 1, depth 0 if built directly (unlikely)
+        let item = ListItemNode::new(node, engine, parent_style, 1, 0, store)?;
+        Ok(RenderNode::ListItem(store.bump.alloc(item)))
+    }
+
     pub fn new(
         node: &IRNode,
         engine: &LayoutEngine,
@@ -63,6 +56,7 @@ impl<'a> ListItemNode<'a> {
         let marker_string = get_marker_text(&style, index, depth);
         let marker_text = store.alloc_str(&marker_string);
 
+        // For "Inside" positioning, modify the first paragraph to include the marker
         let mut children_to_process = ir_children.clone();
         if style.list.style_position == ListStylePosition::Inside && !marker_text.is_empty() {
             if let Some(first_child) = children_to_process.first_mut() {
@@ -151,7 +145,7 @@ impl<'a> LayoutNode for ListItemNode<'a> {
         let width = if constraints.has_bounded_width() {
             constraints.max_width
         } else {
-            0.0
+            0.0 // Todo: calc min width
         };
 
         Ok(Size::new(width, height))
@@ -185,10 +179,9 @@ impl<'a> LayoutNode for ListItemNode<'a> {
 
         let marker_width = ctx.env.engine.measure_text_width(self.marker_text, &self.style);
 
+        // Draw outside marker on the first page only
         if !self.marker_text.is_empty() && !is_continuation {
-            let should_draw = is_outside_marker;
-
-            if should_draw {
+            if is_outside_marker {
                 let marker_available_height = self.style.text.line_height;
                 if marker_available_height > ctx.available_height() && !ctx.is_empty() {
                     return Ok(LayoutResult::Break(NodeState::ListItem(ListItemState {
@@ -203,12 +196,14 @@ impl<'a> LayoutNode for ListItemNode<'a> {
                     width: marker_width,
                     height: self.style.text.line_height,
                     element: LayoutElement::Text(TextElement {
-                        content: self.marker_text.to_string(), // Copy to string for output
+                        content: self.marker_text.to_string(),
                         href: None,
                         text_decoration: TextDecoration::None,
                     }),
                     style: self.style.clone(),
                 };
+                // Marker is pushed absolute relative to current block start.
+                // push_element_at computes absolute position based on args + bounds.
                 ctx.push_element_at(marker_box, 0.0, block_start_y_in_ctx);
             }
         }
@@ -229,7 +224,7 @@ impl<'a> LayoutNode for ListItemNode<'a> {
         let content_start_y_in_ctx = ctx.cursor_y();
 
         let ctx_bounds = ctx.bounds();
-        let child_bounds = geom::Rect {
+        let child_bounds = geometry::Rect {
             x: ctx_bounds.x + border_left + self.style.box_model.padding.left + indent,
             y: ctx_bounds.y + content_start_y_in_ctx,
             width: ctx_bounds.width - self.style.padding_x() - self.style.border_x() - indent,
@@ -238,6 +233,7 @@ impl<'a> LayoutNode for ListItemNode<'a> {
 
         let mut child_ctx = ctx.child(child_bounds);
         let mut split_res = LayoutResult::Finished;
+
         for (i, child) in self.children.iter().enumerate().skip(start_index) {
             let child_constraints = BoxConstraints::tight_width(child_bounds.width);
 
@@ -263,9 +259,10 @@ impl<'a> LayoutNode for ListItemNode<'a> {
         let used_height = if matches!(split_res, LayoutResult::Finished) {
             child_cursor_y
         } else {
-            ctx.available_height()
+            ctx.available_height() // Consumed remaining space
         };
 
+        // Delegate background painting to shared logic
         let bg_elements = create_background_and_borders(
             ctx.bounds(),
             &self.style,
@@ -275,7 +272,9 @@ impl<'a> LayoutNode for ListItemNode<'a> {
             matches!(split_res, LayoutResult::Finished),
         );
         for el in bg_elements {
-            ctx.push_element(el);
+            // Background elements are already absolute-positioned relative to bounds.
+            // Use push_element_at(..., 0.0, 0.0) to avoid double-adding ctx.cursor.
+            ctx.push_element_at(el, 0.0, 0.0);
         }
 
         match split_res {
@@ -286,6 +285,7 @@ impl<'a> LayoutNode for ListItemNode<'a> {
                         + self.style.box_model.padding.bottom
                         + border_bottom,
                 );
+                ctx.finish_block(self.style.box_model.margin.bottom);
                 Ok(LayoutResult::Finished)
             }
             LayoutResult::Break(state) => {

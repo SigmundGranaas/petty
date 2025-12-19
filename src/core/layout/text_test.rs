@@ -1,4 +1,3 @@
-// src/core/layout/text_test.rs
 #![cfg(test)]
 
 use crate::core::idf::{IRNode, InlineNode, NodeMetadata};

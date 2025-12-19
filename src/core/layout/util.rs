@@ -1,6 +1,4 @@
-// src/core/layout/util.rs
-
-use crate::core::layout::node::{BlockState, NodeState};
+use crate::core::layout::interface::{BlockState, NodeState};
 
 /// Wraps a generic child state into a BlockState for block-like containers.
 pub fn wrap_in_block_state(

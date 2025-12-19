@@ -1,4 +1,3 @@
-// src/core/layout/nodes/list_test.rs
 #![cfg(test)]
 
 // Correct import path for test_utils which is in crate::core::layout

@@ -1,7 +1,5 @@
-// src/core/layout/node.rs
-
 use crate::core::idf::TextStr;
-use crate::core::layout::geom::{self, BoxConstraints, Size};
+use crate::core::base::geometry::{self, BoxConstraints, Size};
 use crate::core::layout::{ComputedStyle, LayoutEngine, LayoutError, PositionedElement};
 use bumpalo::Bump;
 use std::any::Any;
@@ -112,22 +110,17 @@ pub struct IndexEntry {
 }
 
 /// Read-only environment data shared across the layout pass.
-///
-/// SAFETY: We use `RefCell` for the cache to allow `measure` to take an immutable
-/// reference to the environment. This enables the environment to be captured
-/// by closures (like in Taffy layout) without violating borrow rules.
 pub struct LayoutEnvironment<'a> {
     pub engine: &'a LayoutEngine,
     pub local_page_index: usize,
     /// A cache for transient layout data (e.g. shaped text Buffers, Taffy trees).
-    /// Uses interior mutability.
     pub cache: &'a RefCell<HashMap<u64, Box<dyn Any + Send>>>,
 }
 
 pub struct LayoutContext<'a> {
     pub env: LayoutEnvironment<'a>,
     pub arena: &'a Bump,
-    bounds: geom::Rect,
+    bounds: geometry::Rect,
     cursor: (f32, f32),
     elements: &'a mut Vec<PositionedElement>,
     defined_anchors: &'a mut HashMap<TextStr, AnchorLocation>,
@@ -139,7 +132,7 @@ impl<'a> LayoutContext<'a> {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         env: LayoutEnvironment<'a>,
-        bounds: geom::Rect,
+        bounds: geometry::Rect,
         arena: &'a Bump,
         elements: &'a mut Vec<PositionedElement>,
         defined_anchors: &'a mut HashMap<TextStr, AnchorLocation>,
@@ -165,7 +158,7 @@ impl<'a> LayoutContext<'a> {
         self.cursor.1 = y;
     }
 
-    pub fn bounds(&self) -> geom::Rect {
+    pub fn bounds(&self) -> geometry::Rect {
         self.bounds
     }
 
@@ -177,28 +170,16 @@ impl<'a> LayoutContext<'a> {
         (self.bounds.height - self.cursor.1).max(0.0)
     }
 
-    /// Handles vertical margin collapsing and cursor advancement before placing a block.
-    ///
-    /// This method calculates the collapsed margin (max of the previous element's bottom margin
-    /// and the current element's top margin), checks if adding this margin pushes the cursor
-    /// out of bounds (requiring a page break), and if not, advances the cursor.
-    ///
-    /// Returns `true` if the margin pushes content past the available height (break required).
     pub fn prepare_for_block(&mut self, top_margin: f32) -> bool {
         let margin_to_add = top_margin.max(self.last_v_margin);
-
-        // If we are not at the very top of the page, check if the margin pushes us over.
-        // We use a small epsilon to detect "not at top".
         if self.cursor_y() > 0.001 && margin_to_add > self.available_height() {
-            return true; // Caller should return LayoutResult::Break
+            return true;
         }
-
         self.advance_cursor(margin_to_add);
         self.last_v_margin = 0.0;
         false
     }
 
-    /// Finalizes a block by setting the trailing vertical margin to be collapsed with the next element.
     pub fn finish_block(&mut self, bottom_margin: f32) {
         self.last_v_margin = bottom_margin;
     }
@@ -238,7 +219,7 @@ impl<'a> LayoutContext<'a> {
         self.elements.is_empty()
     }
 
-    pub fn child<'child>(&'child mut self, bounds: geom::Rect) -> LayoutContext<'child> {
+    pub fn child<'child>(&'child mut self, bounds: geometry::Rect) -> LayoutContext<'child> {
         let sub_env = LayoutEnvironment {
             engine: self.env.engine,
             local_page_index: self.env.local_page_index,
@@ -258,13 +239,14 @@ impl<'a> LayoutContext<'a> {
     }
 }
 
+// Ensure LayoutResult is public and available
+#[derive(Debug, Clone)]
 pub enum LayoutResult {
     Finished,
     Break(NodeState),
 }
 
 pub trait LayoutNode: Debug + Sync {
-    // Note: env is now an immutable reference using interior mutability
     fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<Size, LayoutError>;
 
     fn layout(

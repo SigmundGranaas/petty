@@ -1,4 +1,3 @@
-// src/core/layout/node_kind.rs
 use crate::core::idf::IRNode;
 
 /// Represents the specific type of a layout node.

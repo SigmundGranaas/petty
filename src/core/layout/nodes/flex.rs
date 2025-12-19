@@ -1,15 +1,12 @@
-// src/core/layout/nodes/flex.rs
-
 use crate::core::idf::{IRNode, TextStr};
-use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::engine::{LayoutEngine, LayoutStore};
-use crate::core::layout::geom::{self, BoxConstraints};
-use crate::core::layout::node::{
+use crate::core::base::geometry::{self, BoxConstraints};
+use crate::core::layout::interface::{
     FlexState, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
 };
 use super::RenderNode;
-use crate::core::layout::nodes::block::create_background_and_borders;
-use crate::core::layout::nodes::taffy_utils::computed_style_to_taffy;
+use crate::core::layout::painting::box_painter::create_background_and_borders;
+use crate::core::layout::algorithms::flex_solver::computed_style_to_taffy;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::LayoutError;
 use std::collections::hash_map::DefaultHasher;
@@ -18,23 +15,9 @@ use std::sync::Arc;
 use std::time::Instant;
 use taffy::prelude::*;
 
-pub struct FlexBuilder;
-
-impl NodeBuilder for FlexBuilder {
-    fn build<'a>(
-        &self,
-        node: &IRNode,
-        engine: &LayoutEngine,
-        parent_style: Arc<ComputedStyle>,
-        store: &'a LayoutStore,
-    ) -> Result<RenderNode<'a>, LayoutError> {
-        FlexNode::build(node, engine, parent_style, store)
-    }
-}
-
 #[derive(Debug, Clone)]
 struct FlexLayoutOutput {
-    size: geom::Size,
+    size: geometry::Size,
     child_layouts: Vec<taffy::Layout>,
 }
 
@@ -174,7 +157,7 @@ impl<'a> FlexNode<'a> {
         }
 
         let root_layout = taffy.layout(root_node).map_err(|_| LayoutError::Generic("Taffy layout missing".into()))?;
-        let size = geom::Size::new(root_layout.size.width, root_layout.size.height);
+        let size = geometry::Size::new(root_layout.size.width, root_layout.size.height);
 
         let mut child_layouts = Vec::with_capacity(child_nodes.len());
         for &id in &child_nodes {
@@ -197,7 +180,7 @@ impl<'a> LayoutNode for FlexNode<'a> {
         self.style.as_ref()
     }
 
-    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<geom::Size, LayoutError> {
+    fn measure(&self, env: &LayoutEnvironment, constraints: BoxConstraints) -> Result<geometry::Size, LayoutError> {
         Ok(self.compute_flex_layout_data(env, constraints)?.size)
     }
 
@@ -265,7 +248,8 @@ impl<'a> LayoutNode for FlexNode<'a> {
             true,
         );
         for el in bg_elements {
-            ctx.push_element(el);
+            // Backgrounds are absolute relative to bounds, so use push_element_at(0,0) to avoid double cursor offset
+            ctx.push_element_at(el, 0.0, 0.0);
         }
 
         let mut break_occurred = false;
@@ -305,7 +289,7 @@ impl<'a> LayoutNode for FlexNode<'a> {
                 child_h + LAYOUT_SLACK
             };
 
-            let child_rect = geom::Rect {
+            let child_rect = geometry::Rect {
                 x: ctx_bounds.x + layout.location.x,
                 y: ctx_bounds.y + abs_y,
                 width: layout.size.width,

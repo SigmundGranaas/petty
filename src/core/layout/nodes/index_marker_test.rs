@@ -1,5 +1,4 @@
 #![cfg(test)]
-
 use crate::core::idf::{IRNode, NodeMetadata};
 use crate::core::layout::test_utils::{create_paragraph, paginate_test_nodes};
 use crate::core::style::dimension::{Margins, PageSize};

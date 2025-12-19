@@ -1,7 +1,5 @@
-#![cfg(test)]
-
-use crate::core::layout::style::{compute_style, get_default_style};
-use crate::core::style::color::Color;
+use crate::core::layout::style::{compute_style, get_default_style, ComputedStyle};
+use crate::core::base::color::Color;
 use crate::core::style::dimension::{Dimension, Margins};
 use crate::core::style::font::FontWeight;
 use crate::core::style::stylesheet::ElementStyle;
@@ -10,13 +8,13 @@ use std::sync::Arc;
 
 #[test]
 fn test_style_inheritance() {
-    let mut parent_style = (*get_default_style()).clone();
-    parent_style.text.font_family = Arc::new("Times New Roman".to_string());
-    parent_style.text.font_size = 20.0;
-    parent_style.text.line_height = 24.0;
-    parent_style.text.color = Color { r: 10, g: 20, b: 30, a: 1.0 };
-    parent_style.text.text_align = TextAlign::Center;
-    let parent_arc = Arc::new(parent_style);
+    let mut parent_data = get_default_style().inner.clone();
+    parent_data.text.font_family = Arc::new("Times New Roman".to_string());
+    parent_data.text.font_size = 20.0;
+    parent_data.text.line_height = 24.0;
+    parent_data.text.color = Color { r: 10, g: 20, b: 30, a: 1.0 };
+    parent_data.text.text_align = TextAlign::Center;
+    let parent_arc = Arc::new(ComputedStyle::new(parent_data));
 
     let computed = compute_style(&[], None, &parent_arc);
 
@@ -29,12 +27,12 @@ fn test_style_inheritance() {
 
 #[test]
 fn test_style_non_inheritance() {
-    let mut parent_style = (*get_default_style()).clone();
-    parent_style.box_model.margin = Margins::all(50.0);
-    parent_style.box_model.padding = Margins::all(30.0);
-    parent_style.box_model.width = Some(Dimension::Pt(100.0));
-    parent_style.misc.background_color = Some(Color { r: 255, g: 0, b: 0, a: 1.0 });
-    let parent_arc = Arc::new(parent_style);
+    let mut parent_data = get_default_style().inner.clone();
+    parent_data.box_model.margin = Margins::all(50.0);
+    parent_data.box_model.padding = Margins::all(30.0);
+    parent_data.box_model.width = Some(Dimension::Pt(100.0));
+    parent_data.misc.background_color = Some(Color { r: 255, g: 0, b: 0, a: 1.0 });
+    let parent_arc = Arc::new(ComputedStyle::new(parent_data));
 
     let computed = compute_style(&[], None, &parent_arc);
 
@@ -73,10 +71,10 @@ fn test_line_height_auto_calculation() {
 #[test]
 fn test_style_cascade_precedence() {
     // 1. Parent Style
-    let mut parent_style = (*get_default_style()).clone();
-    parent_style.text.font_size = 10.0; // P: 10
-    parent_style.text.color = Color { r: 255, g: 0, b: 0, a: 1.0 }; // P: Red
-    let parent_arc = Arc::new(parent_style);
+    let mut parent_data = get_default_style().inner.clone();
+    parent_data.text.font_size = 10.0; // P: 10
+    parent_data.text.color = Color { r: 255, g: 0, b: 0, a: 1.0 }; // P: Red
+    let parent_arc = Arc::new(ComputedStyle::new(parent_data));
 
     // 2. Named Style Set 1
     let named_style_1 = Arc::new(ElementStyle {

@@ -1,33 +1,15 @@
-// src/core/layout/nodes/block.rs
-
 use crate::core::idf::{IRNode, TextStr};
-use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::engine::{LayoutEngine, LayoutStore};
-use crate::core::layout::elements::RectElement;
-use crate::core::layout::geom::{self, BoxConstraints, Size};
-use crate::core::layout::node::{
+use crate::core::base::geometry::{self, BoxConstraints, Size};
+use crate::core::layout::interface::{
     BlockState, LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
 };
 use super::RenderNode;
-use crate::core::layout::style::{ComputedStyle, ComputedStyleData};
-use crate::core::layout::{LayoutElement, LayoutError, PositionedElement};
-use crate::core::style::border::Border;
+use crate::core::layout::style::ComputedStyle;
+use crate::core::layout::LayoutError;
+use crate::core::layout::painting::box_painter::create_background_and_borders;
 use crate::core::style::dimension::Dimension;
 use std::sync::Arc;
-
-pub struct BlockBuilder;
-
-impl NodeBuilder for BlockBuilder {
-    fn build<'a>(
-        &self,
-        node: &IRNode,
-        engine: &LayoutEngine,
-        parent_style: Arc<ComputedStyle>,
-        store: &'a LayoutStore,
-    ) -> Result<RenderNode<'a>, LayoutError> {
-        BlockNode::build(node, engine, parent_style, store)
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct BlockNode<'a> {
@@ -155,7 +137,7 @@ impl<'a> LayoutNode for BlockNode<'a> {
 
         let is_continuation = start_index > 0 || child_resume_state.is_some();
 
-        // REFACTORED: Use LayoutContext helpers for margin collapsing
+        // Use LayoutContext helpers for margin collapsing
         if !is_continuation {
             if ctx.prepare_for_block(self.style.box_model.margin.top) {
                 return Ok(LayoutResult::Break(NodeState::Block(BlockState {
@@ -184,7 +166,7 @@ impl<'a> LayoutNode for BlockNode<'a> {
         let child_constraints = self.style.content_constraints(constraints);
         let ctx_bounds = ctx.bounds();
 
-        let child_bounds = geom::Rect {
+        let child_bounds = geometry::Rect {
             x: ctx_bounds.x + border_left + self.style.box_model.padding.left,
             y: ctx_bounds.y + content_start_y_in_ctx,
             width: ctx_bounds.width - self.style.padding_x() - self.style.border_x(),
@@ -226,7 +208,10 @@ impl<'a> LayoutNode for BlockNode<'a> {
         );
 
         for el in bg_elements {
-            ctx.push_element(el);
+            // Background elements are already positioned relative to the block bounds
+            // (block_start_y_in_ctx is relative to bounds).
+            // We use push_element_at(..., 0.0, 0.0) to avoid double-adding ctx.cursor.
+            ctx.push_element_at(el, 0.0, 0.0);
         }
 
         let result = match split_res {
@@ -234,7 +219,7 @@ impl<'a> LayoutNode for BlockNode<'a> {
                 let border_bottom = self.style.border_bottom_width();
                 let bottom_spacing = self.style.box_model.padding.bottom + border_bottom;
                 ctx.set_cursor_y(content_start_y_in_ctx + actual_used_height + bottom_spacing);
-                // REFACTORED: Use finish_block helper
+                // Use finish_block helper
                 ctx.finish_block(self.style.box_model.margin.bottom);
                 Ok(LayoutResult::Finished)
             }
@@ -254,117 +239,4 @@ impl<'a> LayoutNode for BlockNode<'a> {
             None
         }
     }
-}
-
-pub fn create_background_and_borders(
-    bounds: geom::Rect,
-    style: &ComputedStyle,
-    start_y: f32,
-    content_height: f32,
-    draw_top: bool,
-    draw_bottom: bool,
-) -> Vec<PositionedElement> {
-    let mut elements = Vec::new();
-
-    let border_top = if draw_top { style.border_top_width() } else { 0.0 };
-    let border_bottom = if draw_bottom { style.border_bottom_width() } else { 0.0 };
-    let border_left = style.border_left_width();
-    let border_right = style.border_right_width();
-
-    let padding_top = if draw_top { style.box_model.padding.top } else { 0.0 };
-    let padding_bottom = if draw_bottom { style.box_model.padding.bottom } else { 0.0 };
-
-    let total_height = border_top + padding_top + content_height + padding_bottom + border_bottom;
-
-    if total_height <= 0.0 {
-        return elements;
-    }
-
-    let mut push = |mut element: PositionedElement, x: f32, y: f32| {
-        element.x += x;
-        element.y += y;
-        elements.push(element);
-    };
-
-    if style.misc.background_color.is_some() {
-        let mut bg_data = ComputedStyleData::default();
-        bg_data.misc.background_color = style.misc.background_color.clone();
-        let bg_style = ComputedStyle::new(bg_data);
-
-        let bg_rect = geom::Rect {
-            x: border_left,
-            y: border_top,
-            width: bounds.width - border_left - border_right,
-            height: total_height - border_top - border_bottom,
-        };
-        let bg = PositionedElement {
-            element: LayoutElement::Rectangle(RectElement),
-            style: Arc::new(bg_style),
-            ..PositionedElement::from_rect(bg_rect)
-        };
-        push(bg, 0.0, start_y);
-    }
-
-    let bounds_width = bounds.width;
-
-    let mut draw_border = |b: &Option<Border>, rect: geom::Rect| {
-        if let Some(border) = b {
-            if border.width > 0.0 {
-                let mut border_data = ComputedStyleData::default();
-                border_data.misc.background_color = Some(border.color.clone());
-                let border_style = ComputedStyle::new(border_data);
-
-                let positioned_rect = PositionedElement {
-                    element: LayoutElement::Rectangle(RectElement),
-                    style: Arc::new(border_style),
-                    ..PositionedElement::from_rect(rect)
-                };
-                push(positioned_rect, 0.0, start_y);
-            }
-        }
-    };
-
-    if draw_top {
-        draw_border(
-            &style.border.top,
-            geom::Rect {
-                x: 0.0,
-                y: 0.0,
-                width: bounds_width,
-                height: border_top,
-            },
-        );
-    }
-    if draw_bottom {
-        draw_border(
-            &style.border.bottom,
-            geom::Rect {
-                x: 0.0,
-                y: total_height - border_bottom,
-                width: bounds_width,
-                height: border_bottom,
-            },
-        );
-    }
-
-    draw_border(
-        &style.border.left,
-        geom::Rect {
-            x: 0.0,
-            y: 0.0,
-            width: border_left,
-            height: total_height,
-        },
-    );
-    draw_border(
-        &style.border.right,
-        geom::Rect {
-            x: bounds_width - border_right,
-            y: 0.0,
-            width: border_right,
-            height: total_height,
-        },
-    );
-
-    elements
 }

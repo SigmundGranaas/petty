@@ -1,6 +1,4 @@
-// FILE: /home/sigmund/RustroverProjects/petty/src/templating/style.rs
 use crate::core::style::border::Border;
-use crate::core::style::color::Color;
 use crate::core::style::dimension::{Dimension, Margins};
 use crate::core::style::flex::{AlignItems, FlexDirection, FlexWrap, JustifyContent};
 use crate::core::style::font::FontWeight;
@@ -124,3 +122,4 @@ macro_rules! impl_styled_widget {
 
 // Make the macro available to other modules
 pub(crate) use impl_styled_widget;
+use crate::core::base::color::Color;

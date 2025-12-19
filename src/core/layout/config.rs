@@ -1,4 +1,3 @@
-/// Configuration settings for the LayoutEngine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LayoutConfig {
     /// The maximum number of layout items (sequences) to process before the layout engine's

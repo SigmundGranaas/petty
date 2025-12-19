@@ -1,10 +1,9 @@
 // src/core/layout/nodes/list.rs
 
 use crate::core::idf::IRNode;
-use crate::core::layout::builder::NodeBuilder;
 use crate::core::layout::engine::{LayoutEngine, LayoutStore};
-use crate::core::layout::geom::{BoxConstraints, Size};
-use crate::core::layout::node::{
+use crate::core::base::geometry::{BoxConstraints, Size};
+use crate::core::layout::interface::{
     LayoutContext, LayoutEnvironment, LayoutNode, LayoutResult, NodeState,
 };
 use super::RenderNode;
@@ -14,22 +13,9 @@ use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::LayoutError;
 use std::sync::Arc;
 
-pub struct ListBuilder;
-
-impl NodeBuilder for ListBuilder {
-    fn build<'a>(
-        &self,
-        node: &IRNode,
-        engine: &LayoutEngine,
-        parent_style: Arc<ComputedStyle>,
-        store: &'a LayoutStore,
-    ) -> Result<RenderNode<'a>, LayoutError> {
-        ListNode::build(node, engine, parent_style, store)
-    }
-}
-
 #[derive(Debug)]
 pub struct ListNode<'a> {
+    // List is essentially a wrapper around a BlockNode that manages numbering depth
     block: BlockNode<'a>,
 }
 
@@ -68,16 +54,20 @@ impl<'a> ListNode<'a> {
         let mut children_vec = Vec::new();
         for (i, child_ir) in ir_children.iter().enumerate() {
             if let IRNode::List { .. } = child_ir {
+                // Recursive list
                 let child_node = Self::new_with_depth(child_ir, engine, style.clone(), depth + 1, store)?;
                 children_vec.push(RenderNode::List(store.bump.alloc(child_node)));
             } else if let IRNode::ListItem { .. } = child_ir {
+                // List item with context
                 let child_node = ListItemNode::new(child_ir, engine, style.clone(), i + start_index, depth, store)?;
                 children_vec.push(RenderNode::ListItem(store.bump.alloc(child_node)));
             } else {
+                // Other nodes in list container
                 children_vec.push(engine.build_layout_node_tree(child_ir, style.clone(), store)?);
             }
         }
 
+        // Delegate layout logic to BlockNode
         let block = BlockNode::new_from_children(meta.id.clone(), children_vec, style, store);
         Ok(Self { block })
     }

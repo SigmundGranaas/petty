@@ -204,9 +204,9 @@ pub fn render_elements_to_content(
 // --- Internal Page Drawing Context ---
 
 use crate::core::layout::{ImageElement, TextElement};
-use crate::core::style::color::Color;
 use crate::core::style::font::FontWeight;
 use once_cell::sync::Lazy;
+use crate::core::base::color::Color;
 
 static DEFAULT_LOPDF_FONT_NAME: Lazy<String> = Lazy::new(|| "F1".to_string());
 
