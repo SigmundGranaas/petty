@@ -87,18 +87,18 @@ impl<'a, 'b> TextBuilder<'a, 'b> {
                     let style = parent_style.clone();
 
                     let mut merged = false;
-                    #[allow(clippy::collapsible_if)]
-                    if let Some(last) = self.span_ranges.last_mut() {
-                        if Arc::ptr_eq(&last.1, &style) && last.2 == current_link_idx {
-                            let is_image_span = if let Some(last_img) = self.inline_images.last() {
-                                last_img.index == last.0.start
-                            } else {
-                                false
-                            };
-                            if !is_image_span {
-                                last.0.end = end;
-                                merged = true;
-                            }
+                    if let Some(last) = self.span_ranges.last_mut()
+                        && Arc::ptr_eq(&last.1, &style)
+                        && last.2 == current_link_idx
+                    {
+                        let is_image_span = if let Some(last_img) = self.inline_images.last() {
+                            last_img.index == last.0.start
+                        } else {
+                            false
+                        };
+                        if !is_image_span {
+                            last.0.end = end;
+                            merged = true;
                         }
                     }
                     if !merged {

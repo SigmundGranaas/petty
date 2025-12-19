@@ -56,14 +56,13 @@ impl<'a> ListItemNode<'a> {
 
         // For "Inside" positioning, modify the first paragraph to include the marker
         let mut children_to_process = ir_children.clone();
-        #[allow(clippy::collapsible_if, clippy::collapsible_match)]
-        if style.list.style_position == ListStylePosition::Inside && !marker_text.is_empty() {
-            if let Some(first_child) = children_to_process.first_mut() {
-                if let IRNode::Paragraph { children, .. } = first_child {
-                    let prefix = format!("{} ", marker_text);
-                    children.insert(0, InlineNode::Text(prefix));
-                }
-            }
+        if style.list.style_position == ListStylePosition::Inside
+            && !marker_text.is_empty()
+            && let Some(first_child) = children_to_process.first_mut()
+            && let IRNode::Paragraph { children, .. } = first_child
+        {
+            let prefix = format!("{} ", marker_text);
+            children.insert(0, InlineNode::Text(prefix));
         }
 
         let mut children_vec = Vec::new();
