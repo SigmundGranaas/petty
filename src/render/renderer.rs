@@ -81,9 +81,11 @@ pub trait DocumentRenderer<W: Write + Seek + Send> {
         page_height: f32,
     ) -> Result<ObjectId, RenderError>;
 
+    #[allow(dead_code)]
     fn set_outline_root(&mut self, outline_root_id: ObjectId);
 
     fn finish(self: Box<Self>, page_ids: Vec<ObjectId>) -> Result<W, RenderError>;
 
+    #[allow(dead_code)]
     fn as_any_mut(&mut self) -> &mut dyn Any;
 }

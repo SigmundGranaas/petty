@@ -1,4 +1,4 @@
-use crate::core::idf::{IRNode, TableBody, TableHeader};
+use crate::core::idf::IRNode;
 use crate::core::layout::engine::{LayoutEngine, LayoutStore};
 use crate::core::layout::nodes::RenderNode;
 use crate::core::layout::nodes::block::BlockNode;

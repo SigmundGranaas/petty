@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::pdf::{PageRenderState, PageRenderer, RenderContext};
 use crate::core::layout::{LayoutElement, PositionedElement};
 use crate::render::RenderError;

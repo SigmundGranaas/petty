@@ -94,6 +94,7 @@ impl<W: Write + Seek> StreamingPdfWriter<W> {
         self.buffered_objects.insert(id, object);
     }
 
+    #[allow(dead_code)]
     pub fn buffer_object(&mut self, object: Object) -> ObjectId {
         let id = self.new_object_id();
         self.buffer_object_at_id(id, object);

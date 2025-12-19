@@ -85,7 +85,7 @@ pub struct LayoutEngine {
     pub font_library: SharedFontLibrary,
     pub cache: LayoutCache,
     pub profiler: Box<dyn Profiler>,
-    config: LayoutConfig,
+    _config: LayoutConfig,
 }
 
 impl LayoutEngine {
@@ -101,7 +101,7 @@ impl LayoutEngine {
             font_library: library.clone(),
             cache: LayoutCache::new(),
             profiler,
-            config,
+            _config: config,
         }
     }
 

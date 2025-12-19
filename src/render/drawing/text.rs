@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::super::pdf::{PageRenderState, PageRenderer, RenderContext};
 // Add this use statement to bring the helper into scope
 use crate::render::pdf::get_styled_font_name;

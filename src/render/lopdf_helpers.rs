@@ -23,6 +23,7 @@ use std::borrow::Cow;
 /// # Returns
 /// A map where the key is the global page index and the value is a vector of
 /// `ObjectId`s for the `Link` annotation dictionaries created for that page.
+#[allow(dead_code)]
 pub fn create_link_annotations<W: Write + Seek>(
     writer: &mut StreamingPdfWriter<W>,
     pass1_result: &Pass1Result,
@@ -81,6 +82,7 @@ pub fn create_link_annotations<W: Write + Seek>(
 ///
 /// # Returns
 /// The `ObjectId` of the root `Outlines` dictionary if any entries were created, otherwise `None`.
+#[allow(dead_code)]
 pub fn build_outlines<W: Write + Seek>(
     writer: &mut StreamingPdfWriter<W>,
     pass1_result: &Pass1Result,

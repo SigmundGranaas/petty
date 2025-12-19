@@ -45,10 +45,12 @@ impl<W: Write + Seek + Send> LopdfRenderer<W> {
         })
     }
 
+    #[allow(dead_code)]
     pub fn writer_mut(&mut self) -> Option<&mut StreamingPdfWriter<W>> {
         self.writer.as_mut()
     }
 
+    #[allow(dead_code)]
     pub fn write_page_object_at_id(
         &mut self,
         page_id: ObjectId,

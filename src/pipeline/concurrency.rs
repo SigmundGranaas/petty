@@ -1,6 +1,5 @@
 // src/pipeline/concurrency.rs
 
-use crate::core::layout::fonts::SharedFontLibrary;
 use crate::core::layout::LayoutEngine;
 use crate::error::PipelineError;
 use crate::parser::processor::{DataSourceFormat, ExecutionConfig};

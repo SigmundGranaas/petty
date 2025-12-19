@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::super::pdf::{PageRenderState, PageRenderer, RenderContext};
 use printpdf::graphics::{LinePoint, PaintMode, Point, Polygon, PolygonRing, WindingOrder};
 use printpdf::ops::Op;

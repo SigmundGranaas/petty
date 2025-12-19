@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use super::{drawing, renderer};
 use crate::core::idf::SharedData;
 use crate::core::layout::{ComputedStyle, LayoutEngine, PositionedElement};

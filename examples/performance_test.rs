@@ -4,7 +4,6 @@ use rand::rngs::StdRng;
 use rand::SeedableRng;
 use serde_json::{json, Value};
 use std::env;
-use std::fs;
 use std::time::Instant;
 
 const MOCK_USERS: &[&str] = &["Alice", "Bob", "Charlie", "Diana", "Eve", "Frank"];

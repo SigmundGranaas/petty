@@ -4,6 +4,8 @@
 //! This file is retained to prevent build failures in modules that may still reference it,
 //! but it should be removed once all dependencies are updated.
 
+#![allow(deprecated)]
+
 use crate::core::style::stylesheet::Stylesheet;
 use crate::parser::ParseError;
 

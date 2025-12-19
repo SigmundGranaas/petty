@@ -45,6 +45,7 @@ tempfile = "3.10.1"
 
 [features]
 dhat-heap = []
+profiling = []
 
 [[example]]
 name = "performance_test"

@@ -3,7 +3,7 @@ use crate::core::layout::nodes::block::BlockNode;
 use crate::core::layout::style::ComputedStyle;
 use crate::core::layout::{
     BoxConstraints, LayoutContext, LayoutEnvironment, LayoutError, LayoutNode, LayoutResult,
-    NodeState, Size, TableState
+    NodeState, Size
 };
 // Use explicit geometry types from base to match Trait definition
 use crate::core::base::geometry::{BoxConstraints as BaseBoxConstraints, Size as BaseSize};
