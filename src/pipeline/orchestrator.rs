@@ -1,5 +1,5 @@
 // src/pipeline/orchestrator.rs
-use crate::error::PipelineError;
+use petty_core::error::PipelineError;
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::provider::{DataSourceProvider, Provider};
 use crate::pipeline::renderer::{Renderer, RenderingStrategy};

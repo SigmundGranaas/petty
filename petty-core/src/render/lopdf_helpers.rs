@@ -4,7 +4,7 @@
 // from the main renderer to be reusable by different generation strategies.
 
 use crate::core::layout::{LayoutElement, PositionedElement, ComputedStyle};
-use crate::pipeline::worker::LaidOutSequence;
+use crate::types::LaidOutSequence;
 use crate::render::renderer::{Pass1Result, RenderError};
 use crate::render::streaming_writer::StreamingPdfWriter;
 use lopdf::content::{Content, Operation};
@@ -312,5 +312,27 @@ impl<'a> PageContext<'a> {
     }
 }
 fn to_win_ansi(s: &str) -> Vec<u8> {
-    s.chars().map(|c| if c as u32 <= 255 { c as u8 } else { b'?' }).collect()
+    s.chars().map(|c| {
+        let code = c as u32;
+        if code <= 255 {
+            c as u8
+        } else {
+            // Map common Unicode characters to WinAnsi equivalents
+            match c {
+                '\u{2022}' => 0x95, // BULLET (•) -> WinAnsi bullet
+                '\u{2013}' => 0x96, // EN DASH (–)
+                '\u{2014}' => 0x97, // EM DASH (—)
+                '\u{2018}' => 0x91, // LEFT SINGLE QUOTATION MARK (')
+                '\u{2019}' => 0x92, // RIGHT SINGLE QUOTATION MARK (')
+                '\u{201C}' => 0x93, // LEFT DOUBLE QUOTATION MARK (")
+                '\u{201D}' => 0x94, // RIGHT DOUBLE QUOTATION MARK (")
+                '\u{2026}' => 0x85, // HORIZONTAL ELLIPSIS (…)
+                '\u{20AC}' => 0x80, // EURO SIGN (€)
+                '\u{25E6}' => b'o', // WHITE BULLET (◦) -> lowercase o
+                '\u{25AA}' => 0xA0, // BLACK SMALL SQUARE (▪) -> non-breaking space (fallback)
+                '\u{25CF}' => 0x95, // BLACK CIRCLE (●) -> bullet
+                _ => b'?'           // Unmapped character
+            }
+        }
+    }).collect()
 }

@@ -1,18 +1,18 @@
-use crate::core::layout::LayoutEngine;
-use crate::error::PipelineError;
+use petty_core::core::layout::LayoutEngine;
+use petty_core::error::PipelineError;
 use crate::pipeline::api::{Anchor, Document, Heading, Hyperlink, PreparedDataSources};
 use crate::pipeline::concurrency::{
     producer_task, run_in_order_streaming_consumer, spawn_workers,
 };
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::provider::DataSourceProvider;
-use crate::render::lopdf_renderer::LopdfRenderer;
-use crate::render::renderer::Pass1Result;
-use crate::render::DocumentRenderer;
+use petty_core::render::lopdf_renderer::LopdfRenderer;
+use petty_core::render::renderer::Pass1Result;
+use petty_core::render::DocumentRenderer;
 use chrono::Utc;
 use log::info;
 use serde_json::Value;
-use std::io::{BufWriter, Seek, SeekFrom};
+use std::io::{BufWriter, Cursor, Seek, SeekFrom};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::task;
@@ -47,11 +47,29 @@ impl DataSourceProvider for MetadataGeneratingProvider {
         let producer = task::spawn(producer_task(data_iterator, tx1, semaphore.clone()));
         let workers = spawn_workers(num_layout_threads, context, rx1, tx2);
 
-        // --- Analysis Pass (Render to Tempfile via In-Order Streaming Consumer) ---
-        info!("[METADATA] Starting analysis pass, streaming render to temporary file.");
+        // --- Analysis Pass (Render to Temporary Storage via In-Order Streaming Consumer) ---
+        #[cfg(feature = "tempfile")]
+        {
+            info!("[METADATA] Starting analysis pass, streaming render to tempfile (native).");
+        }
+        #[cfg(not(feature = "tempfile"))]
+        {
+            info!("[METADATA] Starting analysis pass, streaming render to in-memory buffer (WASM).");
+        }
 
-        let temp_file = tempfile::tempfile()?;
-        let buf_writer = BufWriter::new(temp_file);
+        // Use tempfile on native platforms for memory efficiency, in-memory buffer for WASM
+        #[cfg(feature = "tempfile")]
+        let buf_writer = {
+            let temp_file = tempfile::tempfile()?;
+            BufWriter::new(temp_file)
+        };
+
+        #[cfg(not(feature = "tempfile"))]
+        let buf_writer = {
+            let memory_buffer = Cursor::new(Vec::new());
+            BufWriter::new(memory_buffer)
+        };
+
         let pass1_result: Pass1Result;
 
         let final_buf_writer = {
@@ -79,10 +97,11 @@ impl DataSourceProvider for MetadataGeneratingProvider {
         };
 
         info!(
-            "[METADATA] Analysis pass complete. Pass1 Result: total_pages={}, toc_entries={}, resolved_anchors={}",
+            "[METADATA] Analysis pass complete. Pass1 Result: total_pages={}, toc_entries={}, resolved_anchors={}, hyperlinks={}",
             pass1_result.total_pages,
             pass1_result.toc_entries.len(),
             pass1_result.resolved_anchors.len(),
+            pass1_result.hyperlink_locations.len(),
         );
 
         producer.abort();
@@ -111,11 +130,13 @@ fn build_document_from_pass1_result(pass1_result: Pass1Result) -> Document {
         .toc_entries
         .iter()
         .filter_map(|entry| {
-            pass1_result.resolved_anchors.get(&entry.target_id).map(|anchor| Heading {
-                id: entry.target_id.clone(),
-                level: entry.level,
-                text: entry.text.clone(),
-                page_number: anchor.global_page_index,
+            pass1_result.resolved_anchors.get(&entry.target_id).map(|anchor| {
+                Heading {
+                    id: entry.target_id.clone(),
+                    level: entry.level,
+                    text: entry.text.clone(),
+                    page_number: anchor.global_page_index,
+                }
             })
         })
         .collect();
@@ -154,12 +175,12 @@ fn build_document_from_pass1_result(pass1_result: Pass1Result) -> Document {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::layout::fonts::SharedFontLibrary;
-    use crate::parser::json::processor::JsonParser;
-    use crate::parser::processor::TemplateParser;
+    use petty_core::core::layout::fonts::SharedFontLibrary;
+    use petty_core::parser::json::processor::JsonParser;
+    use petty_core::parser::processor::TemplateParser;
     use crate::pipeline::api::IndexEntry;
     use crate::pipeline::context::PipelineContext;
-    use crate::render::renderer::{HyperlinkLocation, ResolvedAnchor};
+    use petty_core::render::renderer::{HyperlinkLocation, ResolvedAnchor};
     use crate::pipeline::worker::TocEntry;
     use serde_json::json;
     use std::collections::HashMap;
@@ -239,6 +260,8 @@ mod tests {
             compiled_template: features.main_template,
             role_templates: Arc::new(features.role_templates),
             font_library: Arc::new(library),
+            resource_provider: Arc::new(crate::resource::InMemoryResourceProvider::new()),
+            executor: crate::executor::ExecutorImpl::Sync(crate::executor::SyncExecutor::new()),
             cache_config: Default::default(),
         };
 

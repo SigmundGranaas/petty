@@ -1,4 +1,4 @@
-use crate::error::PipelineError;
+use petty_core::error::PipelineError;
 use crate::pipeline::api::PreparedDataSources;
 use crate::pipeline::config::PdfBackend;
 use crate::pipeline::concurrency::{
@@ -6,8 +6,8 @@ use crate::pipeline::concurrency::{
 };
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::renderer::RenderingStrategy;
-use crate::render::lopdf_renderer::LopdfRenderer;
-use crate::render::DocumentRenderer;
+use petty_core::render::lopdf_renderer::LopdfRenderer;
+use petty_core::render::DocumentRenderer;
 use log::{info, warn};
 use std::io::{Seek, Write};
 use std::sync::Arc;
@@ -15,7 +15,7 @@ use tokio::sync::Semaphore;
 use tokio::task;
 
 // Need to import LayoutEngine for the consumer stage.
-use crate::core::layout::LayoutEngine;
+use petty_core::core::layout::LayoutEngine;
 
 /// A rendering strategy that streams the document directly to the output.
 #[derive(Clone)]
@@ -105,9 +105,9 @@ impl RenderingStrategy for SinglePassStreamingRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::layout::fonts::SharedFontLibrary;
-    use crate::parser::json::processor::JsonParser;
-    use crate::parser::processor::TemplateParser;
+    use petty_core::core::layout::fonts::SharedFontLibrary;
+    use petty_core::parser::json::processor::JsonParser;
+    use petty_core::parser::processor::TemplateParser;
     use crate::pipeline::provider::passthrough::PassThroughProvider;
     use crate::pipeline::provider::DataSourceProvider;
     use serde_json::json;
@@ -137,6 +137,8 @@ mod tests {
             compiled_template: features.main_template,
             role_templates: Arc::new(features.role_templates),
             font_library: Arc::new(library),
+            resource_provider: Arc::new(crate::resource::InMemoryResourceProvider::new()),
+            executor: crate::executor::ExecutorImpl::Sync(crate::executor::SyncExecutor::new()),
             cache_config: Default::default(),
         };
 

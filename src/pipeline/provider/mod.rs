@@ -1,4 +1,4 @@
-use crate::error::PipelineError;
+use petty_core::error::PipelineError;
 use crate::pipeline::api::PreparedDataSources;
 use crate::pipeline::context::PipelineContext;
 use serde_json::Value;

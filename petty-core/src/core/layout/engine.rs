@@ -21,7 +21,9 @@ use crate::core::layout::text::shaper::ShapedRun;
 
 use bumpalo::Bump;
 use std::collections::HashMap;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+#[cfg(feature = "system-fonts")]
+use std::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Instant, Duration};
 use std::cell::RefCell;
@@ -106,9 +108,31 @@ impl LayoutEngine {
     }
 
     /// Exposes the underlying font database lock.
-    /// Used by the rendering pipeline to load fonts.
+    ///
+    /// # Deprecated
+    ///
+    /// Prefer using `registered_fonts()` for iterating over fonts for PDF embedding,
+    /// as it includes fonts from both fontdb and external FontProvider.
+    ///
+    /// Only available with the `system-fonts` feature enabled.
+    #[cfg(feature = "system-fonts")]
     pub fn font_db(&self) -> Arc<RwLock<fontdb::Database>> {
-        self.font_library.db.clone()
+        self.font_library.font_db()
+    }
+
+    /// Returns all fonts that have been used during layout.
+    ///
+    /// This includes fonts from both the fontdb database and any external FontProvider.
+    /// Use this method for PDF font embedding to ensure all used fonts are included.
+    pub fn registered_fonts(&self) -> Vec<super::fonts::FontFaceInfo> {
+        self.font_library.registered_fonts()
+    }
+
+    /// Gets font face info by PostScript name.
+    ///
+    /// Returns `None` if no font with the given PostScript name has been registered.
+    pub fn get_font_by_postscript_name(&self, name: &str) -> Option<super::fonts::FontFaceInfo> {
+        self.font_library.get_font_by_postscript_name(name)
     }
 
     /// Records a performance metric.
@@ -219,7 +243,7 @@ impl LayoutEngine {
         }
 
         // 2. Resolve & Cache
-        let font_data = self.font_library.resolve_font_data(style);
+        let font_data = self.font_library.resolve_font_data(style).ok();
         if let Ok(mut cache) = self.cache.fonts.write() {
             cache.insert(key, font_data.clone());
         }

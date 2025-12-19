@@ -48,34 +48,24 @@ impl<W: io::Write + Send> PdfDocumentRenderer<W> {
         let mut fonts = HashMap::new();
         let mut default_font_id: Option<FontId> = None;
 
-        // Use new font_db accessor
-        {
-            let db_lock = layout_engine.font_db();
-            let db = db_lock.read().unwrap();
-
-            for face in db.faces() {
-                let face_post_script_name = face.post_script_name.clone();
-                let face_index = face.index;
-                let id = face.id;
-
-                db.with_face_data(id, |font_data, _| {
-                    let mut warnings = Vec::new();
-                    match ParsedFont::from_bytes(font_data, face_index as usize, &mut warnings) {
-                        Some(parsed_font) => {
-                            let font_id = doc.add_font(&parsed_font);
-                            fonts.insert(face_post_script_name.clone(), font_id.clone());
-                            if face_post_script_name.eq_ignore_ascii_case("helvetica") {
-                                default_font_id = Some(font_id);
-                            }
-                        }
-                        None => {
-                            log::warn!(
-                                "Failed to parse font for embedding: {}",
-                                face_post_script_name
-                            );
-                        }
+        // Use registered_fonts() to get all fonts from both fontdb and FontProvider
+        for font_info in layout_engine.registered_fonts() {
+            let font_data = &*font_info.data.data;
+            let mut warnings = Vec::new();
+            match ParsedFont::from_bytes(font_data, 0, &mut warnings) {
+                Some(parsed_font) => {
+                    let font_id = doc.add_font(&parsed_font);
+                    fonts.insert(font_info.postscript_name.clone(), font_id.clone());
+                    if font_info.postscript_name.eq_ignore_ascii_case("helvetica") {
+                        default_font_id = Some(font_id);
                     }
-                });
+                }
+                None => {
+                    log::warn!(
+                        "Failed to parse font for embedding: {}",
+                        font_info.postscript_name
+                    );
+                }
             }
         }
 

@@ -4,6 +4,9 @@ use serde_json::Value;
 use std::io::{Read, Seek};
 use std::sync::Arc;
 
+// Re-export IndexEntry from petty-core for backwards compatibility
+pub use petty_core::ApiIndexEntry as IndexEntry;
+
 /// A helper trait for creating a `Box<dyn ...>` that requires multiple non-auto traits.
 pub trait ReadSeekSend: Read + Seek + Send {}
 impl<T: Read + Seek + Send> ReadSeekSend for T {}
@@ -60,15 +63,7 @@ pub struct Figure {
     pub page_number: usize,
 }
 
-/// Represents an entry for a document index.
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct IndexEntry {
-    /// The text of the index entry.
-    pub text: String,
-    /// The page number on which this entry is referenced.
-    pub page_number: usize,
-}
+// IndexEntry is re-exported from petty_core at the top of this file
 
 /// Represents a named anchor location in the document.
 #[derive(Debug, Clone, Serialize)]

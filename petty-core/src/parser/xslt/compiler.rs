@@ -118,6 +118,11 @@ impl CompilerBuilder {
             rules.sort_by(|a, b| b.priority.partial_cmp(&a.priority).unwrap_or(std::cmp::Ordering::Equal));
         }
 
+        // Scan all templates for internal links and anchors
+        if !self.features.has_internal_links {
+            self.detect_internal_links();
+        }
+
         Ok(CompiledStylesheet {
             stylesheet: Arc::new(self.stylesheet),
             template_rules: self.template_rules,
@@ -127,6 +132,112 @@ impl CompilerBuilder {
             role_template_modes: self.role_template_modes,
             features: self.features,
         })
+    }
+
+    /// Scans all templates for internal links (`<fo:link>`) or anchors (elements with `id` attributes).
+    fn detect_internal_links(&mut self) {
+        // Check template rules
+        for rules in self.template_rules.values() {
+            for rule in rules {
+                if self.template_contains_links(&rule.body.0) {
+                    self.features.has_internal_links = true;
+                    return;
+                }
+            }
+        }
+
+        // Check named templates
+        for template in self.named_templates.values() {
+            if self.template_contains_links(&template.body.0) {
+                self.features.has_internal_links = true;
+                return;
+            }
+        }
+    }
+
+    /// Recursively checks if a template body contains links or anchors.
+    fn template_contains_links(&self, instructions: &[XsltInstruction]) -> bool {
+        for instr in instructions {
+            match instr {
+                XsltInstruction::ContentTag { tag_name, styles, body, .. } => {
+                    // Check if this is a link element
+                    if self.is_link_tag(tag_name) {
+                        return true;
+                    }
+                    // Check if this element has an id attribute (anchor)
+                    if styles.id.is_some() {
+                        return true;
+                    }
+                    // Recursively check children
+                    if self.template_contains_links(&body.0) {
+                        return true;
+                    }
+                }
+                XsltInstruction::EmptyTag { tag_name, styles, .. } => {
+                    // Check if this is a link element
+                    if self.is_link_tag(tag_name) {
+                        return true;
+                    }
+                    // Check if this element has an id attribute (anchor)
+                    if styles.id.is_some() {
+                        return true;
+                    }
+                }
+                XsltInstruction::If { body, .. } => {
+                    if self.template_contains_links(&body.0) {
+                        return true;
+                    }
+                }
+                XsltInstruction::Choose { whens, otherwise } => {
+                    for when in whens {
+                        if self.template_contains_links(&when.body.0) {
+                            return true;
+                        }
+                    }
+                    if let Some(otherwise_body) = otherwise {
+                        if self.template_contains_links(&otherwise_body.0) {
+                            return true;
+                        }
+                    }
+                }
+                XsltInstruction::ForEach { body, .. } => {
+                    if self.template_contains_links(&body.0) {
+                        return true;
+                    }
+                }
+                XsltInstruction::Copy { body, .. } => {
+                    if self.template_contains_links(&body.0) {
+                        return true;
+                    }
+                }
+                XsltInstruction::Element { body, .. } => {
+                    if self.template_contains_links(&body.0) {
+                        return true;
+                    }
+                }
+                XsltInstruction::Table { header, body, .. } => {
+                    if let Some(h) = header {
+                        if self.template_contains_links(&h.0) {
+                            return true;
+                        }
+                    }
+                    if self.template_contains_links(&body.0) {
+                        return true;
+                    }
+                }
+                // Other instruction types don't contain nested templates
+                _ => {}
+            }
+        }
+        false
+    }
+
+    /// Checks if a tag name represents a link element.
+    fn is_link_tag(&self, tag_name: &[u8]) -> bool {
+        matches!(
+            tag_name,
+            b"fo:link" | b"fo:basic-link" | b"a" | b"link"
+        )
     }
 
     pub(crate) fn parse_xpath_and_detect_features(&mut self, expr_str: &str) -> Result<xpath::Expression, ParseError> {

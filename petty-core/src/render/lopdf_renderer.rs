@@ -27,13 +27,9 @@ impl<W: Write + Seek + Send> LopdfRenderer<W> {
     ) -> Result<Self, RenderError> {
         let mut font_map = HashMap::new();
 
-        {
-            // Use the font_db() accessor
-            let db_lock = layout_engine.font_db();
-            let db = db_lock.read().unwrap();
-            for (i, face) in db.faces().enumerate() {
-                font_map.insert(face.post_script_name.clone(), format!("F{}", i + 1));
-            }
+        // Use registered_fonts() to get all fonts from both fontdb and FontProvider
+        for (i, font_info) in layout_engine.registered_fonts().iter().enumerate() {
+            font_map.insert(font_info.postscript_name.clone(), format!("F{}", i + 1));
         }
 
         Ok(Self {
@@ -108,21 +104,19 @@ impl<W: Write + Seek + Send + 'static> DocumentRenderer<W> for LopdfRenderer<W> 
     fn begin_document(&mut self, writer: W) -> Result<(), RenderError> {
         let mut font_dict = Dictionary::new();
 
-        {
-            let db_lock = self.layout_engine.font_db();
-            let db = db_lock.read().unwrap();
-            for face in db.faces() {
-                if let Some(internal_name) = self.font_map.get(&face.post_script_name) {
-                    let single_font_dict = dictionary! {
-                        "Type" => "Font", "Subtype" => "Type1", "BaseFont" => face.post_script_name.clone(), "Encoding" => "WinAnsiEncoding",
-                    };
-                    font_dict.set(
-                        internal_name.as_bytes(),
-                        Object::Dictionary(single_font_dict),
-                    );
-                }
+        // Use registered_fonts() to get all fonts from both fontdb and FontProvider
+        for font_info in self.layout_engine.registered_fonts() {
+            if let Some(internal_name) = self.font_map.get(&font_info.postscript_name) {
+                let single_font_dict = dictionary! {
+                    "Type" => "Font", "Subtype" => "Type1", "BaseFont" => font_info.postscript_name.clone(), "Encoding" => "WinAnsiEncoding",
+                };
+                font_dict.set(
+                    internal_name.as_bytes(),
+                    Object::Dictionary(single_font_dict),
+                );
             }
         }
+
         self.writer = Some(StreamingPdfWriter::new(writer, "1.7", font_dict)?);
         Ok(())
     }

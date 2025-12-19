@@ -1,23 +1,42 @@
-// --- Module Structure ---
-// `pipeline`: The main public API and orchestrator for document generation.
-// `error`:    Defines all custom error types for the crate.
-// `core`:     Defines stable, primitive data types for styling and layout.
-// `idf`:      Defines the Intermediate Representation (IRNode tree).
-// `stylesheet`: Defines data structures for parsing stylesheet files.
-// `parser`:   Responsible for parsing templates and data into IRNode trees.
-// `layout`:   The tree-based, multi-pass engine that produces positioned elements.
-// `render`:   Renders positioned elements to a concrete format (e.g., PDF).
-// `xpath`:    A simple data selector for JSON, mimicking XPath.
+//! # Petty
+//!
+//! High-performance PDF generation engine with pluggable executors and resource providers.
+//!
+//! ## Module Structure
+//!
+//! - `core`: Re-exported from `petty-core` - primitive data types for styling and layout
+//! - `parser`: Re-exported from `petty-core` - template parsing (XSLT and JSON)
+//! - `render`: Re-exported from `petty-core` - PDF rendering
+//! - `pipeline`: Document generation orchestration (platform-specific)
+//! - `templating`: Fluent builder API for creating documents programmatically
+//!
+//! ## Usage
+//!
+//! ```ignore
+//! use petty::{PipelineBuilder, PipelineError};
+//!
+//! let pipeline = PipelineBuilder::new()
+//!     .with_template_file("template.xslt")?
+//!     .build()?;
+//!
+//! pipeline.generate_to_file(vec![data], "output.pdf")?;
+//! ```
 
-pub mod core;
-mod error;
-pub mod parser;
+// Re-export core modules from petty-core
+pub use petty_core::core;
+pub use petty_core::parser;
+pub use petty_core::render;
+pub use petty_core::error;
+pub use petty_core::types;
+pub use petty_core::PipelineError;
+pub use petty_core::{LaidOutSequence, TocEntry, ApiIndexEntry};
+
+// Platform-specific modules (remain in this crate)
+pub mod executor;
 mod pipeline;
-mod render;
+pub mod resource;
+pub mod source;
 pub mod templating;
-// --- Public API ---
-// By exposing only these top-level items, we provide a clean and focused
-// public interface for users of the library.
 
-pub use crate::error::PipelineError;
-pub use crate::pipeline::{PdfBackend, PipelineBuilder};
+// Public API
+pub use crate::pipeline::{PdfBackend, PipelineBuilder, GenerationMode};

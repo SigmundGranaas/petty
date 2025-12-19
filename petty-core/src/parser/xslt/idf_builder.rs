@@ -341,6 +341,12 @@ impl OutputBuilder for IdfBuilder {
                     *href = value.to_string();
                     return;
                 }
+                // Handle FO "destination" attribute for internal links
+                if name == "destination" {
+                    // destination is a local anchor reference, add '#' prefix
+                    *href = format!("#{}", value);
+                    return;
+                }
             }
         }
         if let Some(block_parent) = self.node_stack.last_mut() {

@@ -1,59 +1,25 @@
 // src/pipeline/worker.rs
 
-use crate::core::idf::{IRNode, InlineNode, SharedData};
-use crate::core::layout::engine::LayoutStore;
-use crate::core::layout::{AnchorLocation, IndexEntry, LayoutEngine, PositionedElement};
-use crate::core::style::stylesheet::Stylesheet;
-use crate::error::PipelineError;
+use petty_core::core::idf::{IRNode, InlineNode, SharedData};
+use petty_core::core::layout::{IndexEntry, LayoutEngine, LayoutStore};
+use petty_core::core::style::stylesheet::Stylesheet;
+use petty_core::error::PipelineError;
 use log::{debug, info, trace};
+use petty_core::traits::ResourceProvider;
 use rand::Rng;
 use serde_json::Value;
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::Instant;
 
-pub struct LaidOutSequence {
-    pub pages: Vec<Vec<PositionedElement>>,
-    pub resources: HashMap<String, SharedData>,
-    pub defined_anchors: HashMap<String, AnchorLocation>,
-    pub toc_entries: Vec<TocEntry>,
-    pub index_entries: HashMap<String, Vec<IndexEntry>>,
-}
-
-impl LaidOutSequence {
-    pub fn rough_heap_size(&self) -> usize {
-        let mut size = 0;
-        size += self.pages.capacity() * std::mem::size_of::<Vec<PositionedElement>>();
-        for page in &self.pages {
-            size += page.capacity() * std::mem::size_of::<PositionedElement>();
-            for el in page {
-                if let crate::core::layout::LayoutElement::Text(t) = &el.element {
-                    size += t.content.capacity();
-                }
-            }
-        }
-        for (k, v) in &self.resources {
-            size += k.capacity();
-            size += v.len();
-        }
-        size
-    }
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct TocEntry {
-    pub level: u8,
-    pub text: String,
-    pub target_id: String,
-}
+// Re-export from petty-core
+pub use petty_core::{LaidOutSequence, TocEntry};
 
 pub(super) fn finish_layout_and_resource_loading(
     worker_id: usize,
     ir_nodes: Vec<IRNode>,
     _context_arc: Arc<Value>,
-    resource_base_path: &Path,
+    resource_provider: &dyn ResourceProvider,
     layout_engine: &mut LayoutEngine,
     stylesheet: &Stylesheet,
     debug_mode: bool,
@@ -73,7 +39,7 @@ pub(super) fn finish_layout_and_resource_loading(
     }
 
     let resource_start = Instant::now();
-    let resources = collect_and_load_resources(&tree, resource_base_path)?;
+    let resources = collect_and_load_resources(&tree, resource_provider)?;
     if resource_start.elapsed().as_millis() > 5 {
         debug!("[WORKER-{}] Resource load took {:?}", worker_id, resource_start.elapsed());
     }
@@ -296,7 +262,7 @@ fn collect_inline_image_uris(inline: &InlineNode, uris: &mut HashSet<String>) {
 
 fn collect_and_load_resources(
     node: &IRNode,
-    base_path: &Path,
+    provider: &dyn ResourceProvider,
 ) -> Result<HashMap<String, SharedData>, PipelineError> {
     let mut uris = HashSet::new();
     collect_image_uris(node, &mut uris);
@@ -304,13 +270,12 @@ fn collect_and_load_resources(
     let mut resources = HashMap::new();
     for uri in uris {
         if !uri.is_empty() {
-            let image_path = base_path.join(&uri);
-            match fs::read(&image_path) {
-                Ok(image_bytes) => {
-                    resources.insert(uri, Arc::new(image_bytes));
+            match provider.load(&uri) {
+                Ok(data) => {
+                    resources.insert(uri, data);
                 }
                 Err(e) => {
-                    log::warn!("Failed to load image resource '{}': {}", image_path.display(), e);
+                    log::warn!("Failed to load image resource '{}': {}", uri, e);
                 }
             }
         }

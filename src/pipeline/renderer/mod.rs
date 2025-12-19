@@ -1,5 +1,5 @@
 // src/pipeline/renderer/mod.rs
-use crate::error::PipelineError;
+use petty_core::error::PipelineError;
 use crate::pipeline::api::PreparedDataSources;
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::renderer::composing::ComposingRenderer;

@@ -456,7 +456,7 @@ impl<'s, 'a, N: DataSourceNode<'a> + 'a> TemplateExecutor<'s, 'a, N> {
             "fo:list-block" | "list" => builder.start_list(styles),
             "fo:list-item" | "list-item" => builder.start_list_item(styles),
             "fo:inline" | "span" | "strong" | "b" | "em" | "i" => builder.start_styled_span(styles),
-            "fo:basic-link" | "a" | "link" => builder.start_hyperlink(styles),
+            "fo:basic-link" | "fo:link" | "a" | "link" => builder.start_hyperlink(styles),
             "fo:external-graphic" | "img" => builder.start_image(styles),
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => builder.start_heading(styles, tag_name.last().map_or(1, |&c| c - b'0')),
             // Table elements
@@ -477,7 +477,7 @@ impl<'s, 'a, N: DataSourceNode<'a> + 'a> TemplateExecutor<'s, 'a, N> {
             "fo:list-block" | "list" => builder.end_list(),
             "fo:list-item" | "list-item" => builder.end_list_item(),
             "fo:inline" | "span" | "strong" | "b" | "em" | "i" => builder.end_styled_span(),
-            "fo:basic-link" | "a" | "link" => builder.end_hyperlink(),
+            "fo:basic-link" | "fo:link" | "a" | "link" => builder.end_hyperlink(),
             "fo:external-graphic" | "img" => builder.end_image(),
             "h1" | "h2" | "h3" | "h4" | "h5" | "h6" => builder.end_heading(),
             // Table elements

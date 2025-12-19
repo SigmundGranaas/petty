@@ -1,18 +1,17 @@
-use crate::error::PipelineError;
-use crate::parser::processor::{DataSourceFormat, ExecutionConfig};
+use petty_core::error::PipelineError;
+use petty_core::parser::processor::{DataSourceFormat, ExecutionConfig};
 use crate::pipeline::api::{Anchor, Document, PreparedDataSources};
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::renderer::RenderingStrategy;
-use crate::render::composer::{merge_documents, overlay_content};
-use crate::render::lopdf_renderer::LopdfRenderer;
-use crate::render::DocumentRenderer;
+use petty_core::render::composer::{merge_documents, overlay_content};
+use petty_core::render::lopdf_renderer::LopdfRenderer;
+use petty_core::render::DocumentRenderer;
 use log::{info, warn};
 use lopdf::{dictionary, Document as LopdfDocument, Object, ObjectId, StringFormat};
 use serde_json::json;
 use std::collections::{HashMap};
 use std::io::{Cursor, Seek, Write};
-use crate::core::layout::{LayoutElement, LayoutEngine, PositionedElement};
-use crate::core::layout::engine::LayoutStore;
+use petty_core::core::layout::{LayoutElement, LayoutEngine, LayoutStore, PositionedElement};
 
 #[derive(Clone)]
 pub struct ComposingRenderer;
@@ -74,7 +73,7 @@ impl RenderingStrategy for ComposingRenderer {
                 temp_renderer.begin_document(Cursor::new(Vec::new()))?;
 
                 let store = LayoutStore::new();
-                let ir_root = crate::core::idf::IRNode::Root(ir_nodes);
+                let ir_root = petty_core::core::idf::IRNode::Root(ir_nodes);
                 let root_node = temp_renderer.layout_engine.build_render_tree(&ir_root, &store)
                     .map_err(|e| PipelineError::Layout(e.to_string()))?;
 
@@ -90,12 +89,14 @@ impl RenderingStrategy for ComposingRenderer {
                     let pending_links = collect_links_from_layout(&laid_out_pages);
 
                     let mut new_page_ids = vec![];
-                    let font_map: HashMap<String, String>;
-                    {
-                        let db_lock = temp_renderer.layout_engine.font_db();
-                        let db = db_lock.read().unwrap();
-                        font_map = db.faces().enumerate().map(|(i, f)| (f.post_script_name.clone(), format!("F{}", i + 1))).collect();
-                    }
+                    // Use registered_fonts() to get all fonts from both fontdb and FontProvider
+                    let font_map: HashMap<String, String> = temp_renderer
+                        .layout_engine
+                        .registered_fonts()
+                        .iter()
+                        .enumerate()
+                        .map(|(i, f)| (f.postscript_name.clone(), format!("F{}", i + 1)))
+                        .collect();
 
                     for page_elements in laid_out_pages {
                         let content_id = temp_renderer.render_page_content(page_elements, &font_map, page_width, page_height)?;
@@ -148,7 +149,7 @@ impl RenderingStrategy for ComposingRenderer {
                 temp_renderer.begin_document(Cursor::new(Vec::new()))?;
 
                 let store = LayoutStore::new();
-                let ir_root = crate::core::idf::IRNode::Root(ir_nodes);
+                let ir_root = petty_core::core::idf::IRNode::Root(ir_nodes);
                 let root_node = temp_renderer.layout_engine.build_render_tree(&ir_root, &store)
                     .map_err(|e| PipelineError::Layout(e.to_string()))?;
 
@@ -162,12 +163,14 @@ impl RenderingStrategy for ComposingRenderer {
 
                 if !laid_out_pages.is_empty() {
                     let mut new_page_ids = vec![];
-                    let font_map: HashMap<String, String>;
-                    {
-                        let db_lock = temp_renderer.layout_engine.font_db();
-                        let db = db_lock.read().unwrap();
-                        font_map = db.faces().enumerate().map(|(i, f)| (f.post_script_name.clone(), format!("F{}", i + 1))).collect();
-                    }
+                    // Use registered_fonts() to get all fonts from both fontdb and FontProvider
+                    let font_map: HashMap<String, String> = temp_renderer
+                        .layout_engine
+                        .registered_fonts()
+                        .iter()
+                        .enumerate()
+                        .map(|(i, f)| (f.postscript_name.clone(), format!("F{}", i + 1)))
+                        .collect();
 
                     for page_elements in laid_out_pages {
                         let content_id = temp_renderer.render_page_content(page_elements, &font_map, page_width, page_height)?;
@@ -203,7 +206,7 @@ impl RenderingStrategy for ComposingRenderer {
                     let ir_nodes = template.execute(&overlay_context_str, exec_config)?;
 
                     let store = LayoutStore::new();
-                    let ir_root = crate::core::idf::IRNode::Root(ir_nodes);
+                    let ir_root = petty_core::core::idf::IRNode::Root(ir_nodes);
                     let root_node = layout_engine.build_render_tree(&ir_root, &store)
                         .map_err(|e| PipelineError::Layout(e.to_string()))?;
 
@@ -219,13 +222,14 @@ impl RenderingStrategy for ComposingRenderer {
                         if !overlay_pages.is_empty() {
                             warn!("[COMPOSER] Overlay template for role '{}' generated more than one page of content. Only the first will be used.", role);
                         }
-                        let font_map: HashMap<String, String>;
-                        {
-                            let db_lock = layout_engine.font_db();
-                            let db = db_lock.read().unwrap();
-                            font_map = db.faces().enumerate().map(|(i, f)| (f.post_script_name.clone(), format!("F{}", i + 1))).collect();
-                        }
-                        let content = crate::render::lopdf_helpers::render_elements_to_content(elements, &font_map, page_width, page_height)?;
+                        // Use registered_fonts() to get all fonts from both fontdb and FontProvider
+                        let font_map: HashMap<String, String> = layout_engine
+                            .registered_fonts()
+                            .iter()
+                            .enumerate()
+                            .map(|(i, f)| (f.postscript_name.clone(), format!("F{}", i + 1)))
+                            .collect();
+                        let content = petty_core::render::lopdf_helpers::render_elements_to_content(elements, &font_map, page_width, page_height)?;
                         overlay_content(&mut main_doc, *page_id, content.encode()?)?;
                     }
                 }

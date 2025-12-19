@@ -1,0 +1,7 @@
+# Cargo configuration for the Petty workspace
+
+# WASM target configuration
+[target.wasm32-unknown-unknown]
+# Configure getrandom to use wasm_js backend for WASM targets
+# This is required for lopdf and printpdf dependencies which use rand
+rustflags = ['--cfg', 'getrandom_backend="wasm_js"']

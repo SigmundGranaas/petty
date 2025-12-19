@@ -12,4 +12,4 @@ pub(crate) mod worker;
 
 
 pub use builder::PipelineBuilder;
-pub use config::PdfBackend;
+pub use config::{PdfBackend, GenerationMode};

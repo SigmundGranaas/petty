@@ -37,6 +37,8 @@ pub struct TemplateFlags {
     pub has_page_number_placeholders: bool,
     /// True if the template uses the `petty:index()` extension function.
     pub uses_index_function: bool,
+    /// True if the template contains internal links (`<fo:link>`) or anchors (`id` attributes).
+    pub has_internal_links: bool,
 }
 
 /// A bundle of all compiled templates and their collective features, returned by the parser.

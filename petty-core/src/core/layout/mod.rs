@@ -36,7 +36,7 @@ pub mod text;
 
 // Re-exports for convenience within the layout crate
 pub use self::elements::{ImageElement, LayoutElement, PositionedElement, TextElement};
-pub use self::fonts::{LocalFontContext, SharedFontLibrary};
+pub use self::fonts::{FontFaceInfo, SharedFontLibrary};
 pub use self::style::ComputedStyle;
 pub use self::config::LayoutConfig;
 pub use crate::error::PipelineError;

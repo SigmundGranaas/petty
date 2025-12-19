@@ -101,9 +101,12 @@ impl<'a, 'b> TextBuilder<'a, 'b> {
                     let new_link_idx = self.links.len();
                     self.process_inlines_recursive(children, &style, new_link_idx);
                 }
-                InlineNode::PageReference { meta, children, .. } => {
+                InlineNode::PageReference { meta, children, target_id } => {
                     let style = self.resolve_meta_style(meta, parent_style);
-                    self.process_inlines_recursive(children, &style, current_link_idx);
+                    // PageReference is an internal link - add '#' prefix to target_id
+                    self.links.push(format!("#{}", target_id));
+                    let new_link_idx = self.links.len();
+                    self.process_inlines_recursive(children, &style, new_link_idx);
                 }
                 InlineNode::LineBreak => {
                     let start = self.raw_content.len();

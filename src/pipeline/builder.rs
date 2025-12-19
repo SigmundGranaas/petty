@@ -1,10 +1,15 @@
 use super::config::{GenerationMode, PdfBackend, PipelineCacheConfig};
 use super::orchestrator::DocumentPipeline;
-use crate::core::layout::fonts::SharedFontLibrary;
-use crate::error::PipelineError;
-use crate::parser::json::processor::JsonParser;
-use crate::parser::processor::{TemplateFeatures, TemplateParser};
-use crate::parser::xslt::processor::XsltParser;
+use petty_core::core::layout::fonts::SharedFontLibrary;
+use petty_core::error::PipelineError;
+use crate::executor::ExecutorImpl;
+#[cfg(feature = "rayon-executor")]
+use crate::executor::RayonExecutor;
+#[cfg(not(feature = "rayon-executor"))]
+use crate::executor::SyncExecutor;
+use petty_core::parser::json::processor::JsonParser;
+use petty_core::parser::processor::{TemplateFeatures, TemplateParser};
+use petty_core::parser::xslt::processor::XsltParser;
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::provider::metadata::MetadataGeneratingProvider;
 use crate::pipeline::provider::passthrough::PassThroughProvider;
@@ -12,7 +17,9 @@ use crate::pipeline::provider::Provider;
 use crate::pipeline::renderer::composing::ComposingRenderer;
 use crate::pipeline::renderer::streaming::SinglePassStreamingRenderer;
 use crate::pipeline::renderer::Renderer;
+use crate::resource::FilesystemResourceProvider;
 use crate::templating::Template;
+use petty_core::traits::ResourceProvider;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -24,6 +31,8 @@ pub struct PipelineBuilder {
     pdf_backend: PdfBackend,
     // Use the thread-safe SharedFontLibrary instead of FontManager
     font_library: SharedFontLibrary,
+    resource_provider: Arc<dyn ResourceProvider>,
+    executor: ExecutorImpl,
     generation_mode: GenerationMode,
     cache_config: PipelineCacheConfig,
     debug: bool,
@@ -33,10 +42,24 @@ impl Default for PipelineBuilder {
     fn default() -> Self {
         // SharedFontLibrary::default() loads fallback fonts automatically
         let font_library = SharedFontLibrary::default();
+
+        // Default to filesystem resources with current directory as base
+        let resource_provider: Arc<dyn ResourceProvider> =
+            Arc::new(FilesystemResourceProvider::new("."));
+
+        // Default to Rayon executor with auto-detected parallelism
+        #[cfg(feature = "rayon-executor")]
+        let executor = ExecutorImpl::Rayon(RayonExecutor::new());
+
+        #[cfg(not(feature = "rayon-executor"))]
+        let executor = ExecutorImpl::Sync(SyncExecutor::new());
+
         Self {
             template_features: None,
             pdf_backend: Default::default(),
             font_library,
+            resource_provider,
+            executor,
             generation_mode: Default::default(),
             cache_config: Default::default(),
             debug: false,
@@ -135,6 +158,31 @@ impl PipelineBuilder {
         self
     }
 
+    /// Sets a custom resource provider for loading images and other external resources.
+    ///
+    /// By default, the pipeline uses `FilesystemResourceProvider` with the current directory
+    /// as the base path. Use this method to provide:
+    /// - A filesystem provider with a different base path
+    /// - An in-memory provider for embedded resources
+    /// - A custom provider implementation
+    pub fn with_resource_provider(mut self, provider: Arc<dyn ResourceProvider>) -> Self {
+        self.resource_provider = provider;
+        self
+    }
+
+    /// Sets a custom executor for controlling parallelism and task execution.
+    ///
+    /// By default, the pipeline uses:
+    /// - `RayonExecutor` when the `rayon-executor` feature is enabled (default)
+    /// - `SyncExecutor` (sequential) when Rayon is not available
+    ///
+    /// Use this method to provide a custom executor implementation or to control
+    /// the level of parallelism explicitly.
+    pub fn with_executor(mut self, executor: ExecutorImpl) -> Self {
+        self.executor = executor;
+        self
+    }
+
     /// Consumes the builder and creates the `DocumentPipeline`.
     /// This is where the generation strategy is selected and instantiated.
     pub fn build(mut self) -> Result<DocumentPipeline, PipelineError> {
@@ -152,6 +200,8 @@ impl PipelineBuilder {
             role_templates: Arc::new(template_features.role_templates),
             // Pass the Arc-wrapped library
             font_library: Arc::new(self.font_library),
+            resource_provider: self.resource_provider,
+            executor: self.executor,
             cache_config: self.cache_config,
         });
 
@@ -177,6 +227,7 @@ impl PipelineBuilder {
                     || flags.uses_index_function
                     || flags.has_table_of_contents
                     || flags.has_page_number_placeholders
+                    || flags.has_internal_links
                 {
                     log::info!(
                         "Template uses advanced features. Selecting Metadata Generating pipeline."

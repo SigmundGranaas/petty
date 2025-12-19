@@ -1,18 +1,20 @@
 // src/pipeline/concurrency.rs
 
-use crate::core::layout::LayoutEngine;
-use crate::error::PipelineError;
-use crate::parser::processor::{DataSourceFormat, ExecutionConfig};
-use crate::pipeline::api::IndexEntry;
+use petty_core::core::layout::LayoutEngine;
+use petty_core::error::PipelineError;
+use crate::executor::Executor;
+use petty_core::parser::processor::{DataSourceFormat, ExecutionConfig};
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::worker::{finish_layout_and_resource_loading, LaidOutSequence};
-use crate::render::lopdf_helpers;
-use crate::render::lopdf_renderer::LopdfRenderer;
-use crate::render::renderer::{HyperlinkLocation, Pass1Result, ResolvedAnchor};
-use crate::render::DocumentRenderer;
+use petty_core::render::lopdf_helpers;
+use petty_core::render::lopdf_renderer::LopdfRenderer;
+use petty_core::render::renderer::{HyperlinkLocation, Pass1Result, ResolvedAnchor};
+use petty_core::render::DocumentRenderer;
+use crate::source::DataSource;
 use async_channel;
 use log::{debug, info, warn};
 use lopdf::dictionary;
+use petty_core::ApiIndexEntry;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Seek, Write};
@@ -64,9 +66,10 @@ pub(crate) fn spawn_workers(
         let current_font_lib = context.font_library.clone();
 
         let template_clone = Arc::clone(&context.compiled_template);
+        let resource_provider_clone = Arc::clone(&context.resource_provider);
 
         let worker_handle = task::spawn_blocking(move || {
-            info!("[WORKER-{}] Started with shared font library.", worker_id);
+            info!("[WORKER-{}] Started with shared font library and resource provider.", worker_id);
 
             let mut layout_engine = LayoutEngine::new(&current_font_lib, cache_config);
 
@@ -85,7 +88,7 @@ pub(crate) fn spawn_workers(
                                     worker_id,
                                     ir_nodes,
                                     context_arc.clone(),
-                                    template_clone.resource_base_path(),
+                                    resource_provider_clone.as_ref(),
                                     &mut layout_engine,
                                     &template_clone.stylesheet(),
                                     false,
@@ -131,17 +134,14 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
     let mut pass1_result = Pass1Result::default();
     let mut global_page_offset = 0;
 
-    let font_map: HashMap<String, String>;
-    {
-        // Using exposed font_db() instead of font_system()
-        let db_lock = renderer.layout_engine.font_db();
-        let db = db_lock.read().unwrap();
-        font_map = db
-            .faces()
-            .enumerate()
-            .map(|(i, face)| (face.post_script_name.clone(), format!("F{}", i + 1)))
-            .collect();
-    }
+    // Use registered_fonts() to get all fonts from both fontdb and FontProvider
+    let font_map: HashMap<String, String> = renderer
+        .layout_engine
+        .registered_fonts()
+        .iter()
+        .enumerate()
+        .map(|(i, font_info)| (font_info.postscript_name.clone(), format!("F{}", i + 1)))
+        .collect();
 
     let mut last_processed_time = Instant::now();
 
@@ -174,7 +174,7 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
                 }
                 for (term, locations) in &seq.index_entries {
                     for loc in locations {
-                        pass1_result.index_entries.push(IndexEntry {
+                        pass1_result.index_entries.push(ApiIndexEntry {
                             text: term.clone(),
                             page_number: global_page_offset + loc.local_page_index + 1,
                         });
@@ -189,7 +189,9 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
                             _ => None,
                         };
                         if let Some(href_str) = href {
+                            log::debug!("[HYPERLINK DETECTION] Found text with href: '{}'", href_str);
                             if let Some(target_id) = href_str.strip_prefix('#') {
+                                log::debug!("[HYPERLINK DETECTION] Adding internal link to target: '{}'", target_id);
                                 pass1_result.hyperlink_locations.push(HyperlinkLocation {
                                     global_page_index: current_global_page_idx,
                                     rect: [el.x, el.y, el.x + el.width, el.y + el.height],
@@ -218,7 +220,7 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
                     page_width,
                     page_height,
                 )?;
-                let writer = renderer.writer.as_mut().unwrap();
+                let writer = renderer.writer_mut().unwrap();
                 let content_id = writer.write_content_stream(content)?;
 
                 let page_dict = dictionary! {
@@ -240,4 +242,299 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
     }
 
     Ok((all_page_ids, pass1_result))
+}
+
+/// Process a batch of data items using the injected Executor trait.
+///
+/// This is a simpler, synchronous alternative to the async producer/worker/consumer pattern.
+/// It uses the Executor from the PipelineContext to process all items in parallel,
+/// then returns the results in order.
+///
+/// # Arguments
+///
+/// * `context` - Pipeline context containing the executor, template, and shared resources
+/// * `data_items` - Vector of JSON data items to process
+///
+/// # Returns
+///
+/// A vector of `LaidOutSequence` results, one for each input item, in the same order.
+pub(crate) fn process_batch_with_executor(
+    context: &PipelineContext,
+    data_items: Vec<Value>,
+) -> Vec<Result<LaidOutSequence, PipelineError>> {
+    let parallelism = context.executor.parallelism();
+    info!(
+        "[EXECUTOR] Processing {} items with parallelism level {}",
+        data_items.len(),
+        parallelism
+    );
+
+    // Wrap each data item with its index to preserve order
+    let indexed_items: Vec<(usize, Value)> = data_items
+        .into_iter()
+        .enumerate()
+        .collect();
+
+    // Clone Arc references that will be moved into the closure
+    let template_clone = Arc::clone(&context.compiled_template);
+    let font_library_clone = Arc::clone(&context.font_library);
+    let resource_provider_clone = Arc::clone(&context.resource_provider);
+    let cache_config = context.cache_config;
+
+    // Process all items in parallel using the executor
+    let results = context.executor.execute_all(
+        indexed_items,
+        move |(worker_id, data_item)| -> Result<LaidOutSequence, PipelineError> {
+            // Each worker gets its own layout engine instance
+            let mut layout_engine = LayoutEngine::new(&font_library_clone, cache_config);
+
+            let data_source_string = serde_json::to_string(&data_item)?;
+
+            let exec_config = ExecutionConfig {
+                format: DataSourceFormat::Json,
+                strict: false,
+            };
+
+            let ir_nodes = template_clone.execute(&data_source_string, exec_config)?;
+
+            let context_arc = Arc::new(data_item);
+            finish_layout_and_resource_loading(
+                worker_id,
+                ir_nodes,
+                context_arc,
+                resource_provider_clone.as_ref(),
+                &mut layout_engine,
+                &template_clone.stylesheet(),
+                false,
+            )
+        },
+    );
+
+    info!(
+        "[EXECUTOR] Completed processing {} items ({} succeeded, {} failed)",
+        results.len(),
+        results.iter().filter(|r| r.is_ok()).count(),
+        results.iter().filter(|r| r.is_err()).count()
+    );
+
+    results
+}
+
+/// Process a DataSource using the injected Executor trait.
+///
+/// This is similar to `process_batch_with_executor` but works with the DataSource
+/// abstraction, allowing for more flexible data input (iterators, channels, etc.).
+///
+/// # Arguments
+///
+/// * `context` - Pipeline context containing the executor, template, and shared resources
+/// * `source` - A DataSource that provides JSON data items
+///
+/// # Returns
+///
+/// A vector of `LaidOutSequence` results, one for each input item, in the same order.
+pub fn process_data_source_with_executor(
+    context: &PipelineContext,
+    mut source: impl DataSource,
+) -> Vec<Result<LaidOutSequence, PipelineError>> {
+    // Collect all items from the source
+    let mut data_items = Vec::new();
+    while let Some(item) = source.next() {
+        data_items.push(item);
+    }
+
+    // Use the existing batch processing function
+    process_batch_with_executor(context, data_items)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::layout::fonts::SharedFontLibrary;
+    use crate::executor::ExecutorImpl;
+    use crate::parser::json::processor::JsonParser;
+    use crate::parser::processor::TemplateParser;
+    use serde_json::json;
+    use std::path::PathBuf;
+
+    #[test]
+    fn test_batch_processing_with_executor() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        // Create a simple template
+        let template_json = json!({
+            "_stylesheet": {
+                "defaultPageMaster": "default",
+                "pageMasters": {
+                    "default": { "size": "A4", "margins": "1cm" }
+                },
+                "styles": {
+                    "default": { "font-family": "Helvetica" }
+                }
+            },
+            "_template": {
+                "type": "Paragraph",
+                "children": [
+                    { "type": "Text", "content": "Item {{id}}: {{name}}" }
+                ]
+            }
+        });
+        let template_str = serde_json::to_string(&template_json).unwrap();
+
+        let parser = JsonParser;
+        let features = parser.parse(&template_str, PathBuf::new()).unwrap();
+
+        let library = SharedFontLibrary::new();
+        library.load_fallback_font();
+
+        // Create context with sync executor for deterministic testing
+        let context = PipelineContext {
+            compiled_template: features.main_template,
+            role_templates: Arc::new(features.role_templates),
+            font_library: Arc::new(library),
+            resource_provider: Arc::new(crate::resource::InMemoryResourceProvider::new()),
+            executor: ExecutorImpl::Sync(crate::executor::SyncExecutor::new()),
+            cache_config: Default::default(),
+        };
+
+        // Create test data
+        let data = vec![
+            json!({"id": 1, "name": "First"}),
+            json!({"id": 2, "name": "Second"}),
+            json!({"id": 3, "name": "Third"}),
+        ];
+
+        // Process batch
+        let results = process_batch_with_executor(&context, data);
+
+        // Verify results
+        assert_eq!(results.len(), 3, "Should process all 3 items");
+        for (i, result) in results.iter().enumerate() {
+            assert!(
+                result.is_ok(),
+                "Item {} should succeed: {:?}",
+                i,
+                result.as_ref().err()
+            );
+            if let Ok(seq) = result {
+                assert!(
+                    !seq.pages.is_empty(),
+                    "Item {} should produce at least one page",
+                    i
+                );
+            }
+        }
+    }
+
+    #[test]
+    #[cfg(feature = "rayon-executor")]
+    fn test_batch_processing_with_rayon_executor() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        // Same setup as above but with Rayon executor
+        let template_json = json!({
+            "_stylesheet": {
+                "defaultPageMaster": "default",
+                "pageMasters": {
+                    "default": { "size": "A4", "margins": "1cm" }
+                },
+                "styles": {
+                    "default": { "font-family": "Helvetica" }
+                }
+            },
+            "_template": {
+                "type": "Paragraph",
+                "children": [
+                    { "type": "Text", "content": "Item {{id}}" }
+                ]
+            }
+        });
+        let template_str = serde_json::to_string(&template_json).unwrap();
+
+        let parser = JsonParser;
+        let features = parser.parse(&template_str, PathBuf::new()).unwrap();
+
+        let library = SharedFontLibrary::new();
+        library.load_fallback_font();
+
+        // Use Rayon executor for parallel processing
+        let context = PipelineContext {
+            compiled_template: features.main_template,
+            role_templates: Arc::new(features.role_templates),
+            font_library: Arc::new(library),
+            resource_provider: Arc::new(crate::resource::InMemoryResourceProvider::new()),
+            executor: ExecutorImpl::Rayon(crate::executor::RayonExecutor::new()),
+            cache_config: Default::default(),
+        };
+
+        // Create more data items to test parallel processing
+        let data: Vec<Value> = (1..=10)
+            .map(|i| json!({"id": i}))
+            .collect();
+
+        // Process batch in parallel
+        let results = process_batch_with_executor(&context, data);
+
+        // Verify all succeeded
+        assert_eq!(results.len(), 10);
+        assert!(
+            results.iter().all(|r| r.is_ok()),
+            "All items should process successfully"
+        );
+    }
+
+    #[test]
+    fn test_data_source_processing() {
+        let _ = env_logger::builder().is_test(true).try_init();
+
+        // Create a simple template
+        let template_json = json!({
+            "_stylesheet": {
+                "defaultPageMaster": "default",
+                "pageMasters": {
+                    "default": { "size": "A4", "margins": "1cm" }
+                },
+                "styles": {
+                    "default": { "font-family": "Helvetica" }
+                }
+            },
+            "_template": {
+                "type": "Paragraph",
+                "children": [
+                    { "type": "Text", "content": "Value: {{value}}" }
+                ]
+            }
+        });
+        let template_str = serde_json::to_string(&template_json).unwrap();
+
+        let parser = JsonParser;
+        let features = parser.parse(&template_str, PathBuf::new()).unwrap();
+
+        let library = SharedFontLibrary::new();
+        library.load_fallback_font();
+
+        let context = PipelineContext {
+            compiled_template: features.main_template,
+            role_templates: Arc::new(features.role_templates),
+            font_library: Arc::new(library),
+            resource_provider: Arc::new(crate::resource::InMemoryResourceProvider::new()),
+            executor: ExecutorImpl::Sync(crate::executor::SyncExecutor::new()),
+            cache_config: Default::default(),
+        };
+
+        // Create a VecDataSource
+        let data = vec![
+            json!({"value": "A"}),
+            json!({"value": "B"}),
+            json!({"value": "C"}),
+        ];
+        let source = crate::source::VecDataSource::new(data);
+
+        // Process using DataSource API
+        let results = process_data_source_with_executor(&context, source);
+
+        // Verify results
+        assert_eq!(results.len(), 3);
+        assert!(results.iter().all(|r| r.is_ok()));
+    }
 }

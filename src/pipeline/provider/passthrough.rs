@@ -1,4 +1,4 @@
-use crate::error::PipelineError;
+use petty_core::error::PipelineError;
 use crate::pipeline::api::PreparedDataSources;
 use crate::pipeline::provider::DataSourceProvider;
 use serde_json::Value;
@@ -27,9 +27,9 @@ impl DataSourceProvider for PassThroughProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::layout::fonts::SharedFontLibrary;
-    use crate::parser::json::processor::JsonParser;
-    use crate::parser::processor::TemplateParser;
+    use petty_core::core::layout::fonts::SharedFontLibrary;
+    use petty_core::parser::json::processor::JsonParser;
+    use petty_core::parser::processor::TemplateParser;
     use serde_json::json;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -52,6 +52,8 @@ mod tests {
             compiled_template: features.main_template,
             role_templates: Arc::new(HashMap::new()),
             font_library: Arc::new(SharedFontLibrary::new()),
+            resource_provider: Arc::new(crate::resource::InMemoryResourceProvider::new()),
+            executor: crate::executor::ExecutorImpl::Sync(crate::executor::SyncExecutor::new()),
             cache_config: Default::default(),
         };
 
