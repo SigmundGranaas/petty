@@ -237,11 +237,10 @@ impl LayoutEngine {
         };
 
         // 1. Check Global Cache
-        if let Ok(cache) = self.cache.fonts.read() {
-            if let Some(cached_result) = cache.get(&key) {
+        if let Ok(cache) = self.cache.fonts.read()
+            && let Some(cached_result) = cache.get(&key) {
                 return cached_result.clone();
             }
-        }
 
         // 2. Resolve & Cache
         let font_data = self.font_library.resolve_font_data(style).ok();
@@ -259,11 +258,10 @@ impl LayoutEngine {
 
         let key = (text.to_string(), style_hash);
 
-        if let Ok(cache) = self.cache.measurements.read() {
-            if let Some(&width) = cache.get(&key) {
+        if let Ok(cache) = self.cache.measurements.read()
+            && let Some(&width) = cache.get(&key) {
                 return width;
             }
-        }
 
         let font_data = match self.get_font_for_style(style) {
             Some(d) => d,
@@ -320,12 +318,11 @@ impl LayoutEngine {
     }
 
     pub fn get_cached_shaping_run(&self, key: &ShapingCacheKey) -> Option<Arc<Vec<ShapedRun>>> {
-        if let Ok(cache) = self.cache.shaping.read() {
-            if let Some(run) = cache.get(key) {
+        if let Ok(cache) = self.cache.shaping.read()
+            && let Some(run) = cache.get(key) {
                 self.profiler.count_hit();
                 return Some(run.clone());
             }
-        }
         None
     }
 
@@ -340,12 +337,11 @@ impl LayoutEngine {
         &self,
         key: &MultiSpanCacheKey,
     ) -> Option<Arc<Vec<ShapedRun>>> {
-        if let Ok(cache) = self.cache.multi_span.read() {
-            if let Some(run) = cache.get(key) {
+        if let Ok(cache) = self.cache.multi_span.read()
+            && let Some(run) = cache.get(key) {
                 self.profiler.count_hit();
                 return Some(run.clone());
             }
-        }
         None
     }
 

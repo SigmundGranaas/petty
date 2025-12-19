@@ -81,6 +81,7 @@ pub fn create_background_and_borders(
     let bounds_width = bounds.width;
 
     let mut draw_border = |b: &Option<Border>, rect: Rect| {
+        #[allow(clippy::collapsible_if)]
         if let Some(border) = b {
             if border.width > 0.0 {
                 let mut border_data = ComputedStyleData::default();

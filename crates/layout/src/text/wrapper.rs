@@ -273,6 +273,7 @@ fn finalize_line(
     // This serves two purposes:
     // 1. It makes `effective_width` accurate (visual width of text).
     // 2. It simplifies gap counting (we don't count the last space as a gap to fill).
+    #[allow(clippy::collapsible_if)]
     if matches!(align, TextAlign::Justify) {
         if let Some(last) = items.last_mut() {
             if last.end_glyph > 0 {

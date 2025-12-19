@@ -601,6 +601,7 @@ fn func_lang<'a, 'd, N: DataSourceNode<'a>>(
 
     while let Some(node) = current {
         for attr in node.attributes() {
+            #[allow(clippy::collapsible_if)]
             if let Some(name) = attr.name() {
                 if name.prefix == Some("xml") && name.local_part == "lang" {
                     let node_lang = attr.string_value().to_lowercase();
