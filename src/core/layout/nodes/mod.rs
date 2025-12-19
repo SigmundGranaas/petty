@@ -19,6 +19,8 @@ mod block_split_test;
 #[cfg(test)]
 mod flex_test;
 #[cfg(test)]
+mod flex_break_test;
+#[cfg(test)]
 mod image_test;
 #[cfg(test)]
 mod index_marker_test;

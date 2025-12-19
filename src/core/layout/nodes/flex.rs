@@ -131,17 +131,21 @@ impl<'a> FlexNode<'a> {
 
                     let min_w = known_dims.width.unwrap_or(0.0);
                     let max_w = match available_space.width {
-                        taffy::style::AvailableSpace::Definite(w) => w,
-                        taffy::style::AvailableSpace::MaxContent => f32::INFINITY,
-                        taffy::style::AvailableSpace::MinContent => 0.0,
+                        AvailableSpace::Definite(w) => w,
+                        AvailableSpace::MaxContent => f32::INFINITY,
+                        AvailableSpace::MinContent => 0.0,
                     };
 
                     let child_constraints = BoxConstraints::new(min_w, max_w, 0.0, f32::INFINITY);
 
                     match child.measure(env, child_constraints) {
-                        Ok(size) => taffy::geometry::Size {
-                            width: size.width,
-                            height: size.height,
+                        Ok(size) => {
+                            Size {
+                                // Ceil the width to ensure Taffy allocates enough space to avoid
+                                // rounding errors causing wrapping during the strict layout pass.
+                                width: size.width.ceil(),
+                                height: size.height,
+                            }
                         },
                         Err(e) => {
                             measure_error = Some(e);
@@ -257,7 +261,6 @@ impl<'a> LayoutNode for FlexNode<'a> {
         let mut next_child_state = None;
 
         const EPSILON: f32 = 0.01;
-        const LAYOUT_SLACK: f32 = 0.5;
         let ctx_bounds = ctx.bounds();
 
         for (i, layout) in layout_output.child_layouts.iter().enumerate() {
@@ -283,6 +286,7 @@ impl<'a> LayoutNode for FlexNode<'a> {
 
             let available_h_on_page = (ctx_bounds.height - abs_y).max(0.0);
 
+            const LAYOUT_SLACK: f32 = 0.5;
             let layout_bound_height = if child_h > available_h_on_page {
                 available_h_on_page
             } else {

@@ -1,14 +1,25 @@
 // FILE: examples/cv.rs
+use clap::Parser;
 use petty::{PdfBackend, PipelineBuilder, PipelineError};
 use serde_json::{from_str, Value};
 use std::env;
 use std::fs;
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Enable debug mode
+    #[arg(long, default_value_t = false)]
+    debug: bool,
+}
 
 fn main() -> Result<(), PipelineError> {
     if env::var("RUST_LOG").is_err() {
         unsafe { env::set_var("RUST_LOG", "petty=info"); }
     }
     env_logger::init();
+
+    let args = Args::parse();
 
     println!("Running CV/Resume Example (XSLT)...");
 
@@ -23,7 +34,7 @@ fn main() -> Result<(), PipelineError> {
     let pipeline = PipelineBuilder::new()
         .with_template_file(template_path)?
         .with_pdf_backend(PdfBackend::Lopdf)
-        .with_debug(true)
+        .with_debug(args.debug)
         .build()?;
     println!("✓ Pipeline built with XSLT engine.");
 

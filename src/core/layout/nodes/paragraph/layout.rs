@@ -174,7 +174,7 @@ impl<'a> ParagraphNode<'a> {
 
         // 1. Orphan check
         if start_line_index == 0 && lines_final < orphans && lines_final < total_lines {
-            if !ctx.is_empty() {
+            if !ctx.is_at_page_top() {
                 return Ok(LayoutResult::Break(NodeState::Paragraph(ParagraphState {
                     scroll_offset: 0.0,
                 })));
@@ -187,11 +187,20 @@ impl<'a> ParagraphNode<'a> {
             if lines_final > lines_to_move {
                 lines_final -= lines_to_move;
             } else {
-                lines_final = 0; // Push everything if possible
+                // Attempt to push everything to the next page.
+                // But if we are already at the top of the page (ctx.is_empty()),
+                // pushing to the next page won't help (assuming uniform pages).
+                // We must make progress to avoid infinite loops.
+                if !ctx.is_at_page_top() {
+                    lines_final = 0;
+                } else {
+                    // Force render what we have, violating widow constraints
+                    lines_final = lines_to_render;
+                }
             }
 
             if start_line_index == 0 && lines_final < orphans {
-                if !ctx.is_empty() {
+                if !ctx.is_at_page_top() {
                     return Ok(LayoutResult::Break(NodeState::Paragraph(ParagraphState {
                         scroll_offset: 0.0,
                     })));
@@ -201,9 +210,13 @@ impl<'a> ParagraphNode<'a> {
         }
 
         if lines_final == 0 && split {
-            return Ok(LayoutResult::Break(NodeState::Paragraph(ParagraphState {
-                scroll_offset: scroll_offset,
-            })));
+            if ctx.is_at_page_top() {
+                lines_final = 1;
+            } else {
+                return Ok(LayoutResult::Break(NodeState::Paragraph(ParagraphState {
+                    scroll_offset: scroll_offset,
+                })));
+            }
         }
 
         // --- Rendering ---

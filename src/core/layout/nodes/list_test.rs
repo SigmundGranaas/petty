@@ -264,3 +264,56 @@ fn test_list_with_complex_item_splits_correctly() {
     let line5 = find_first_text_box_with_content(page2, "Line 5").unwrap();
     assert_eq!(line5.y, 10.0, "Line 5 should be at the top of page 2");
 }
+
+#[test]
+fn test_list_item_splitting_behavior_bug() {
+    // Reproduction of "single word on each page" or aggressive splitting.
+    // We create a list item with a paragraph that has multiple lines.
+    // We set a page height that fits only ~1.5 lines of text per page after margins/padding.
+    // We expect it to split, but not degenerate into infinite 1-word pages unless space is truly that tight.
+
+    let stylesheet = Stylesheet {
+        page_masters: HashMap::from([(
+            "master".to_string(),
+            PageLayout {
+                size: PageSize::Custom { width: 300.0, height: 40.0 }, // Very short page!
+                margins: Some(Margins::all(10.0)), // 20.0 vertical margin -> 20.0 content height
+                ..Default::default()
+            },
+        )]),
+        default_page_master_name: Some("master".to_string()),
+        ..Default::default()
+    };
+
+    // Style with line-height ~14.4.
+    // Content height 20.0.
+    // 1 line (14.4) fits. 2 lines (28.8) do not.
+    // So we expect 1 line per page.
+    // This isn't necessarily a bug IF the page is that small.
+    // But if the user sees this on a normal page, it means `available_height` is being reported incorrectly.
+
+    let text = "Line 1\nLine 2\nLine 3\nLine 4\nLine 5";
+    let p1 = create_paragraph(text);
+    let nodes = vec![create_list(vec![create_list_item_with_children(vec![p1])], None, None)];
+
+    let (pages, _, _) = paginate_test_nodes(stylesheet, nodes).unwrap();
+
+    // With 20pt available and ~14.4pt line height, we expect roughly 1 line per page.
+    // Total 5 lines -> 5 pages.
+    println!("Pages generated: {}", pages.len());
+    for (i, p) in pages.iter().enumerate() {
+        println!("Page {}: {} elements", i+1, p.len());
+        for el in p {
+            if let LayoutElement::Text(t) = &el.element {
+                println!(" - '{}' at y={}", t.content, el.y);
+            }
+        }
+    }
+
+    // If the bug exists (loop or bad split), we might see:
+    // 1. Infinite loop (test timeout)
+    // 2. Many pages with 1 word each (if the paragraph was wrapping, not explicit newlines).
+
+    // Let's try wrapping text instead of explicit newlines to test width/wrapping split logic.
+    // "Word1 Word2 Word3 ..."
+}

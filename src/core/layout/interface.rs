@@ -126,6 +126,7 @@ pub struct LayoutContext<'a> {
     defined_anchors: &'a mut HashMap<TextStr, AnchorLocation>,
     index_entries: &'a mut HashMap<TextStr, Vec<IndexEntry>>,
     pub last_v_margin: f32,
+    root_top_y: f32,
 }
 
 impl<'a> LayoutContext<'a> {
@@ -138,6 +139,7 @@ impl<'a> LayoutContext<'a> {
         defined_anchors: &'a mut HashMap<TextStr, AnchorLocation>,
         index_entries: &'a mut HashMap<TextStr, Vec<IndexEntry>>,
     ) -> Self {
+        let root_top_y = bounds.y;
         Self {
             env,
             arena,
@@ -147,6 +149,7 @@ impl<'a> LayoutContext<'a> {
             defined_anchors,
             index_entries,
             last_v_margin: 0.0,
+            root_top_y,
         }
     }
 
@@ -156,6 +159,11 @@ impl<'a> LayoutContext<'a> {
 
     pub fn set_cursor_y(&mut self, y: f32) {
         self.cursor.1 = y;
+    }
+
+    pub fn is_at_page_top(&self) -> bool {
+        let absolute_y = self.bounds.y + self.cursor.1;
+        (absolute_y - self.root_top_y).abs() < 0.1
     }
 
     pub fn bounds(&self) -> geometry::Rect {
@@ -235,6 +243,7 @@ impl<'a> LayoutContext<'a> {
             defined_anchors: &mut *self.defined_anchors,
             index_entries: &mut *self.index_entries,
             last_v_margin: 0.0,
+            root_top_y: self.root_top_y,
         }
     }
 }

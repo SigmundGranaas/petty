@@ -1,3 +1,4 @@
+use clap::Parser;
 use petty::{PdfBackend, PipelineBuilder, PipelineError};
 use rand::prelude::*;
 use rand::rngs::StdRng;
@@ -11,6 +12,18 @@ const MOCK_ITEMS: &[&str] = &[
     "Standard Service Fee", "Premium Support Package", "Data Processing Unit",
     "Cloud Storage (1TB)", "API Access Key", "Consulting Hour", "Hardware Rental",
 ];
+
+#[derive(Parser, Debug)]
+#[command(version, about, long_about = None)]
+struct Args {
+    /// Number of records to generate
+    #[arg(default_value_t = 500)]
+    num_records: usize,
+
+    /// Maximum items per record
+    #[arg(default_value_t = 15)]
+    max_items: usize,
+}
 
 fn generate_perf_test_data_iter(
     num_records: usize,
@@ -63,14 +76,9 @@ fn main() -> Result<(), PipelineError> {
         println!("\nWARNING: Running in debug build. For accurate results, run with `--release`.\n");
     }
 
-    // Parse Args
-    let args: Vec<String> = env::args().collect();
-    if args.len() < 2 {
-        println!("Usage: program <num_records> <max_items>");
-        return Ok(());
-    }
-    let num_records = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(500);
-    let max_items = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(15);
+    let args = Args::parse();
+    let num_records = args.num_records;
+    let max_items = args.max_items;
 
     let template_path = "templates/perf_test_template.xsl";
     let data_iterator = generate_perf_test_data_iter(num_records, max_items);
