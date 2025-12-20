@@ -1,7 +1,7 @@
 //! Streaming renderer benchmark.
 //!
 //! Run with:
-//!   cargo run --release --example rayon_benchmark -- 2000
+//!   cargo run --release --example streaming_benchmark -- 2000
 
 use clap::Parser;
 use petty::pipeline::config::PdfBackend;

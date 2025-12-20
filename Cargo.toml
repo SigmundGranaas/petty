@@ -184,5 +184,5 @@ name = "json_css_dimensions"
 path = "examples/json_css_dimensions.rs"
 
 [[example]]
-name = "rayon_benchmark"
-path = "examples/rayon_benchmark.rs"
+name = "streaming_benchmark"
+path = "examples/streaming_benchmark.rs"
