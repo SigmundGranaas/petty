@@ -1,4 +1,5 @@
-use super::config::{GenerationMode, PdfBackend, PipelineCacheConfig};
+use super::adaptive::{AdaptiveConfig, AdaptiveScalingFacade};
+use super::config::{GenerationMode, PdfBackend, PipelineCacheConfig, ProcessingMode};
 use super::orchestrator::DocumentPipeline;
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::provider::Provider;
@@ -28,8 +29,13 @@ pub struct PipelineBuilder {
     font_library: SharedFontLibrary,
     resource_provider: Arc<dyn ResourceProvider>,
     generation_mode: GenerationMode,
+    processing_mode: ProcessingMode,
     cache_config: PipelineCacheConfig,
     debug: bool,
+    /// Optional explicit worker count (None = auto-detect from env or CPU count)
+    worker_count: Option<usize>,
+    /// Maximum workers for adaptive scaling (None = use AdaptiveConfig default)
+    max_workers: Option<usize>,
 }
 
 impl Default for PipelineBuilder {
@@ -47,8 +53,11 @@ impl Default for PipelineBuilder {
             font_library,
             resource_provider,
             generation_mode: Default::default(),
+            processing_mode: Default::default(),
             cache_config: Default::default(),
             debug: false,
+            worker_count: None,
+            max_workers: None,
         }
     }
 }
@@ -147,6 +156,86 @@ impl PipelineBuilder {
         self
     }
 
+    /// Sets the number of worker threads for parallel layout processing.
+    ///
+    /// If not set, the worker count is determined by:
+    /// 1. The `PETTY_WORKER_COUNT` environment variable
+    /// 2. Auto-detection based on CPU count (num_cpus - 1, minimum 2)
+    ///
+    /// Unlike previous versions, there is no artificial cap on worker count.
+    pub fn with_worker_count(mut self, count: usize) -> Self {
+        self.worker_count = Some(count.max(1));
+        self
+    }
+
+    /// Enables or disables adaptive worker scaling based on workload.
+    ///
+    /// When enabled, the pipeline will dynamically adjust the number of
+    /// active workers based on queue depth and throughput metrics.
+    ///
+    /// **Prefer `with_processing_mode(ProcessingMode::Adaptive)`** for new code.
+    pub fn with_adaptive_scaling(mut self, enabled: bool) -> Self {
+        if enabled {
+            self.processing_mode = ProcessingMode::Adaptive;
+        } else {
+            self.processing_mode = ProcessingMode::Standard;
+        }
+        self
+    }
+
+    /// Configures adaptive scaling with custom worker bounds.
+    ///
+    /// This is a convenience method that enables adaptive scaling with
+    /// custom minimum and maximum worker counts.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use petty::PipelineBuilder;
+    ///
+    /// let pipeline = PipelineBuilder::new()
+    ///     .with_template_file("template.json")?
+    ///     .with_adaptive_bounds(2, 16)  // Min 2, max 16 workers
+    ///     .build()?;
+    /// ```
+    pub fn with_adaptive_bounds(mut self, min_workers: usize, max_workers: usize) -> Self {
+        self.processing_mode = ProcessingMode::Adaptive;
+        // Store bounds for use in build()
+        self.worker_count = Some(min_workers.max(1)); // Start at minimum
+        self.max_workers = Some(max_workers.max(min_workers)); // Ensure max >= min
+        self
+    }
+
+    /// Sets the processing mode for the pipeline.
+    ///
+    /// This controls how work items are processed and whether metrics are collected.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use petty::{PipelineBuilder, ProcessingMode};
+    ///
+    /// // Standard mode (default)
+    /// let pipeline = PipelineBuilder::new()
+    ///     .with_template_file("template.json")?
+    ///     .build()?;
+    ///
+    /// // With metrics collection
+    /// let pipeline = PipelineBuilder::new()
+    ///     .with_template_file("template.json")?
+    ///     .with_processing_mode(ProcessingMode::WithMetrics)
+    ///     .build()?;
+    ///
+    /// // After processing, get metrics
+    /// if let Some(metrics) = pipeline.metrics() {
+    ///     println!("Throughput: {:.2} items/sec", metrics.throughput);
+    /// }
+    /// ```
+    pub fn with_processing_mode(mut self, mode: ProcessingMode) -> Self {
+        self.processing_mode = mode;
+        self
+    }
+
     /// Sets a custom resource provider for loading images and other external resources.
     ///
     /// By default, the pipeline uses `FilesystemResourceProvider` with the current directory
@@ -171,15 +260,37 @@ impl PipelineBuilder {
 
         let (provider, renderer) = self.select_components(&template_features)?;
 
+        // Create adaptive scaling facade if metrics or adaptive mode is enabled
+        let adaptive = if matches!(
+            self.processing_mode,
+            ProcessingMode::WithMetrics | ProcessingMode::Adaptive
+        ) {
+            let initial_workers = self.worker_count.unwrap_or_else(|| {
+                num_cpus::get().saturating_sub(1).max(2)
+            });
+
+            // Use custom bounds if provided
+            let config = if let Some(max) = self.max_workers {
+                AdaptiveConfig::with_worker_bounds(initial_workers, max)
+            } else {
+                AdaptiveConfig::default()
+            };
+
+            Some(Arc::new(AdaptiveScalingFacade::new(initial_workers, config)))
+        } else {
+            None
+        };
+
         let context = Arc::new(PipelineContext {
             compiled_template: template_features.main_template,
             role_templates: Arc::new(template_features.role_templates),
             font_library: Arc::new(self.font_library),
             resource_provider: self.resource_provider,
             cache_config: self.cache_config,
+            adaptive: adaptive.clone(),
         });
 
-        Ok(DocumentPipeline::new(provider, renderer, context))
+        Ok(DocumentPipeline::new(provider, renderer, context, adaptive))
     }
 
     fn select_components(
@@ -193,7 +304,10 @@ impl PipelineBuilder {
             GenerationMode::ForceStreaming => {
                 log::info!("Forcing Streaming pipeline.");
                 provider = Provider::PassThrough(PassThroughProvider);
-                renderer = Renderer::Streaming(SinglePassStreamingRenderer::new(self.pdf_backend));
+                renderer = Renderer::Streaming(SinglePassStreamingRenderer::with_config(
+                    self.pdf_backend,
+                    self.worker_count,
+                ));
             }
             GenerationMode::Auto => {
                 let flags = features.main_template.features();
@@ -206,13 +320,16 @@ impl PipelineBuilder {
                     log::info!(
                         "Template uses advanced features. Selecting Metadata Generating pipeline."
                     );
-                    provider = Provider::Metadata(MetadataGeneratingProvider);
+                    provider =
+                        Provider::Metadata(MetadataGeneratingProvider::with_worker_count(self.worker_count));
                     renderer = Renderer::Composing(ComposingRenderer);
                 } else {
                     log::info!("Template is streamable. Selecting simple Streaming pipeline.");
                     provider = Provider::PassThrough(PassThroughProvider);
-                    renderer =
-                        Renderer::Streaming(SinglePassStreamingRenderer::new(self.pdf_backend));
+                    renderer = Renderer::Streaming(SinglePassStreamingRenderer::with_config(
+                        self.pdf_backend,
+                        self.worker_count,
+                    ));
                 }
             }
         }

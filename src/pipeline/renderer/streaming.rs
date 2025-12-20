@@ -1,6 +1,6 @@
 use crate::MapRenderError;
 use crate::pipeline::api::PreparedDataSources;
-use crate::pipeline::concurrency::{producer_task, run_in_order_streaming_consumer, spawn_workers};
+use crate::pipeline::concurrency::{DynamicWorkerPool, producer_task, run_in_order_streaming_consumer, spawn_workers};
 use crate::pipeline::config::PdfBackend;
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::renderer::RenderingStrategy;
@@ -17,14 +17,92 @@ use tokio::task;
 use petty_core::layout::LayoutEngine;
 
 /// A rendering strategy that streams the document directly to the output.
+///
+/// This renderer processes documents in a streaming fashion, rendering pages
+/// as they are laid out without buffering the entire document in memory.
+///
+/// # Worker Configuration
+///
+/// The number of layout worker threads can be configured in order of priority:
+/// 1. Explicit `worker_count` in configuration
+/// 2. `PETTY_WORKER_COUNT` environment variable
+/// 3. Auto-detect based on CPU count (`num_cpus - 1`, minimum 2)
+///
+/// # Example
+///
+/// ```ignore
+/// use petty::pipeline::renderer::streaming::SinglePassStreamingRenderer;
+/// use petty::PdfBackend;
+///
+/// // Simple construction with defaults
+/// let renderer = SinglePassStreamingRenderer::new(PdfBackend::Lopdf);
+///
+/// // Advanced configuration
+/// let renderer = SinglePassStreamingRenderer::builder()
+///     .backend(PdfBackend::Lopdf)
+///     .worker_count(8)
+///     .build();
+/// ```
 #[derive(Clone)]
 pub struct SinglePassStreamingRenderer {
     pdf_backend: PdfBackend,
+    /// Optional override for worker count (None = auto-detect)
+    worker_count: Option<usize>,
 }
 
 impl SinglePassStreamingRenderer {
+    /// Create a new renderer with the specified PDF backend.
+    ///
+    /// Uses default settings:
+    /// - Worker count: auto-detected from CPU count
+    ///
+    /// For more control, use [`with_config`](Self::with_config).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let renderer = SinglePassStreamingRenderer::new(PdfBackend::Lopdf);
+    /// ```
+    #[allow(dead_code)] // Public API - may be used by external consumers
     pub fn new(pdf_backend: PdfBackend) -> Self {
-        Self { pdf_backend }
+        Self::with_config(pdf_backend, None)
+    }
+
+    /// Create a new renderer with explicit configuration.
+    ///
+    /// # Arguments
+    ///
+    /// * `pdf_backend` - The PDF backend to use for rendering
+    /// * `worker_count` - Optional explicit worker count (None = auto-detect)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let renderer = SinglePassStreamingRenderer::with_config(
+    ///     PdfBackend::Lopdf,
+    ///     Some(4),  // Use 4 workers
+    /// );
+    /// ```
+    pub fn with_config(
+        pdf_backend: PdfBackend,
+        worker_count: Option<usize>,
+    ) -> Self {
+        Self {
+            pdf_backend,
+            worker_count,
+        }
+    }
+
+    /// Determine the number of layout threads to use based on configuration.
+    ///
+    /// Priority: explicit config > env var > auto-detect
+    fn get_worker_count(&self) -> usize {
+        self.worker_count.unwrap_or_else(|| {
+            std::env::var("PETTY_WORKER_COUNT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or_else(|| num_cpus::get().saturating_sub(1).max(2))
+        })
     }
 }
 
@@ -59,7 +137,8 @@ impl RenderingStrategy for SinglePassStreamingRenderer {
             ));
         }
 
-        let num_layout_threads = num_cpus::get().saturating_sub(1).clamp(2, 6);
+        // Use dynamic worker count configuration (no artificial cap)
+        let num_layout_threads = self.get_worker_count();
         let channel_buffer_size = num_layout_threads;
 
         let max_in_flight = num_layout_threads + 2;
@@ -74,7 +153,32 @@ impl RenderingStrategy for SinglePassStreamingRenderer {
         let (tx2, rx2) = async_channel::bounded(channel_buffer_size);
 
         let producer = task::spawn(producer_task(sources.data_iterator, tx1, semaphore.clone()));
-        let workers = spawn_workers(num_layout_threads, context, rx1, tx2);
+        let workers = spawn_workers(num_layout_threads, context, rx1.clone(), tx2.clone());
+
+        // Create dynamic worker pool for adaptive scaling (when worker manager is available)
+        let mut worker_pool = context.worker_manager().map(|wm| {
+            DynamicWorkerPool::new(
+                Arc::new(context.clone()),
+                rx1.clone(),
+                wm,
+                num_layout_threads,
+            )
+        });
+
+        // Determine if we need adaptive scaling
+        let has_adaptive_scaling = worker_pool.is_some();
+
+        // Without adaptive scaling, drop the original senders to allow channel closure
+        // Workers already have clones, so this won't affect them
+        let result_sender = if has_adaptive_scaling {
+            // For adaptive scaling, keep tx2 for the consumer to manage
+            // (it will drop it when work is complete)
+            Some(tx2)
+        } else {
+            drop(tx2);
+            drop(rx1);
+            None
+        };
 
         // --- Consumer Stage ---
         info!("[CONSUMER] Started in-order streaming consumer. Awaiting laid-out sequences.");
@@ -99,6 +203,9 @@ impl RenderingStrategy for SinglePassStreamingRenderer {
             page_height,
             false,
             semaphore,
+            context.adaptive_controller(),
+            worker_pool.as_mut(),
+            result_sender,
         )?;
 
         let writer = Box::new(renderer).finish(all_page_ids).map_render_err()?;
@@ -107,6 +214,15 @@ impl RenderingStrategy for SinglePassStreamingRenderer {
         for worker in workers {
             worker.abort();
         }
+
+        // Abort dynamically spawned workers
+        if let Some(pool) = worker_pool {
+            let handles = pool.abort_all();
+            for handle in handles {
+                drop(handle);
+            }
+        }
+
         info!("[CONSUMER] Finished streaming.");
         Ok(writer)
     }
@@ -150,10 +266,11 @@ mod tests {
             font_library: Arc::new(library),
             resource_provider: Arc::new(petty_resource::InMemoryResourceProvider::new()),
             cache_config: Default::default(),
+            adaptive: None,
         };
 
         let provider = PassThroughProvider;
-        let renderer = SinglePassStreamingRenderer::new(PdfBackend::Lopdf);
+        let renderer = SinglePassStreamingRenderer::with_config(PdfBackend::Lopdf, None);
 
         let data = vec![json!({"name": "World"})];
         let iterator = data.into_iter();
@@ -168,7 +285,7 @@ mod tests {
         .unwrap()
         .unwrap();
 
-        let final_position = final_writer.seek(SeekFrom::Current(0)).unwrap();
+        let final_position = final_writer.stream_position().unwrap();
         assert!(final_position > 0, "The writer should contain data.");
 
         final_writer.seek(SeekFrom::Start(0)).unwrap();

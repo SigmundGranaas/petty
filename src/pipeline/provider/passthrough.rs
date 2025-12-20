@@ -55,6 +55,7 @@ mod tests {
             font_library: Arc::new(SharedFontLibrary::new()),
             resource_provider: Arc::new(petty_resource::InMemoryResourceProvider::new()),
             cache_config: Default::default(),
+            adaptive: None,
         };
 
         let provider = PassThroughProvider;

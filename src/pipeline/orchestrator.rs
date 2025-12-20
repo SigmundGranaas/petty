@@ -1,4 +1,5 @@
 // src/pipeline/orchestrator.rs
+use crate::pipeline::adaptive::{AdaptiveMetrics, AdaptiveScalingFacade};
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::provider::{DataSourceProvider, Provider};
 use crate::pipeline::renderer::{Renderer, RenderingStrategy};
@@ -12,12 +13,20 @@ use tokio::runtime::Builder;
 use tokio::task;
 
 /// The main document generation pipeline.
+///
 /// This struct holds the configured provider and renderer and orchestrates
 /// the two-stage process: data preparation, then rendering.
+///
+/// # Metrics
+///
+/// When adaptive scaling is enabled, the pipeline tracks throughput metrics
+/// that can be accessed via [`metrics()`](Self::metrics).
 pub struct DocumentPipeline {
     provider: Provider,
     renderer: Renderer,
     context: Arc<PipelineContext>,
+    /// Optional adaptive scaling facade for metrics and dynamic scaling
+    adaptive: Option<Arc<AdaptiveScalingFacade>>,
 }
 
 impl DocumentPipeline {
@@ -26,12 +35,72 @@ impl DocumentPipeline {
         provider: Provider,
         renderer: Renderer,
         context: Arc<PipelineContext>,
+        adaptive: Option<Arc<AdaptiveScalingFacade>>,
     ) -> Self {
         Self {
             provider,
             renderer,
             context,
+            adaptive,
         }
+    }
+
+    /// Get current pipeline metrics.
+    ///
+    /// Returns `Some(AdaptiveMetrics)` if adaptive scaling is enabled,
+    /// `None` otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// let pipeline = PipelineBuilder::new()
+    ///     .with_template_file("template.json")?
+    ///     .with_adaptive_scaling(true)
+    ///     .build()?;
+    ///
+    /// // After generating documents...
+    /// if let Some(metrics) = pipeline.metrics() {
+    ///     println!("Throughput: {:.2} items/sec", metrics.throughput);
+    ///     println!("Avg item time: {:?}", metrics.avg_item_time);
+    /// }
+    /// ```
+    pub fn metrics(&self) -> Option<AdaptiveMetrics> {
+        self.adaptive.as_ref().map(|f| f.metrics())
+    }
+
+    /// Reset the pipeline metrics.
+    ///
+    /// This is useful when running multiple batches and you want to
+    /// measure each batch independently.
+    pub fn reset_metrics(&self) {
+        if let Some(ref facade) = self.adaptive {
+            facade.controller().reset_metrics();
+        }
+    }
+
+    /// Check if adaptive scaling is enabled for this pipeline.
+    pub fn is_adaptive_scaling_enabled(&self) -> bool {
+        self.adaptive.is_some()
+    }
+
+    /// Get the number of pending worker shutdown requests.
+    ///
+    /// This is useful for monitoring the dynamic scaling behavior.
+    /// Returns `Some(count)` if adaptive scaling is enabled with the
+    /// `adaptive-scaling` feature, `None` otherwise.
+    #[cfg(feature = "adaptive-scaling")]
+    pub fn pending_shutdowns(&self) -> Option<usize> {
+        self.adaptive.as_ref().map(|f| f.manager().pending_shutdowns())
+    }
+
+    /// Get worker manager metrics (separate from controller metrics).
+    ///
+    /// This provides the same metrics as [`metrics()`](Self::metrics) but
+    /// accessed through the worker manager. Returns `None` if adaptive
+    /// scaling is not enabled.
+    #[cfg(feature = "adaptive-scaling")]
+    pub fn worker_manager_metrics(&self) -> Option<AdaptiveMetrics> {
+        self.adaptive.as_ref().map(|f| f.manager().metrics())
     }
 
     /// Asynchronously generates a document from any data source iterator.
@@ -122,7 +191,7 @@ mod tests {
 
         let mut final_writer = pipeline.generate(data.into_iter(), writer).await.unwrap();
 
-        let final_position = final_writer.seek(SeekFrom::Current(0)).unwrap();
+        let final_position = final_writer.stream_position().unwrap();
         assert!(final_position > 0, "The writer should contain data.");
 
         final_writer.seek(SeekFrom::Start(0)).unwrap();

@@ -107,6 +107,19 @@ tempfile = { version = "3.10.1", optional = true }
 dhat = { version = "0.3" }
 tempfile = "3.10.1"
 clap = { version = "4.5", features = ["derive"] }
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "pipeline_throughput"
+harness = false
+
+[[bench]]
+name = "layout_performance"
+harness = false
+
+[[bench]]
+name = "pdf_generation"
+harness = false
 
 [features]
 default = ["native", "rayon-executor"]
@@ -118,6 +131,13 @@ native = ["tempfile"]  # Enables system fonts, filesystem, tempfiles, etc.
 
 # Executor features
 rayon-executor = ["rayon"]
+
+# Parallel PDF rendering (Phase 3)
+parallel-render = ["petty-render-lopdf/parallel-render"]
+
+# Adaptive worker scaling (experimental)
+# Enables dynamic worker spawning/shutdown based on queue depth
+adaptive-scaling = []
 
 # Font features (for future phases)
 # embedded-fonts = []
