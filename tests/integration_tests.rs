@@ -179,6 +179,7 @@ fn extract_link_annotations(
                     }
                 }
             }
+        }
     }
 
     Ok(annotations)

@@ -794,7 +794,7 @@ where
                     let writer = renderer.writer_mut().unwrap();
                     let content_id = writer
                         .write_content_stream(content)
-                        .map_err(|e| PipelineError::Render(e.to_string()))?;
+                        .map_err(|e| PipelineError::Render(e.into()))?;
 
                     let page_dict = dictionary! {
                         "Type" => "Page",
@@ -823,7 +823,7 @@ where
                     let writer = renderer.writer_mut().unwrap();
                     let content_id = writer
                         .write_content_stream(content)
-                        .map_err(|e| PipelineError::Render(e.to_string()))?;
+                        .map_err(|e| PipelineError::Render(e.into()))?;
 
                     let page_dict = dictionary! {
                         "Type" => "Page",
