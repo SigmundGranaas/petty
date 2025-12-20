@@ -138,7 +138,7 @@ jobs:
 
       - name: Check bundle size with fonts
         run: |
-          SIZE=$(stat -f%z pkg/petty_wasm_bg.wasm 2>/dev/null || stat -c%s pkg/petty_wasm_bg.wasm)
+          SIZE=$(stat -f%z crates/wasm/pkg/petty_wasm_bg.wasm 2>/dev/null || stat -c%s crates/wasm/pkg/petty_wasm_bg.wasm)
           SIZE_MB=$(echo "scale=2; $SIZE / 1024 / 1024" | bc)
           echo "Bundle size with embedded fonts: ${SIZE_MB} MB"
           echo "WASM_SIZE_WITH_FONTS=${SIZE_MB}" >> $GITHUB_ENV
@@ -149,7 +149,7 @@ jobs:
 
       - name: Check bundle size without fonts
         run: |
-          SIZE=$(stat -f%z pkg-no-fonts/petty_wasm_bg.wasm 2>/dev/null || stat -c%s pkg-no-fonts/petty_wasm_bg.wasm)
+          SIZE=$(stat -f%z crates/wasm/pkg-no-fonts/petty_wasm_bg.wasm 2>/dev/null || stat -c%s crates/wasm/pkg-no-fonts/petty_wasm_bg.wasm)
           SIZE_MB=$(echo "scale=2; $SIZE / 1024 / 1024" | bc)
           echo "Bundle size without embedded fonts: ${SIZE_MB} MB"
           echo "WASM_SIZE_NO_FONTS=${SIZE_MB}" >> $GITHUB_ENV

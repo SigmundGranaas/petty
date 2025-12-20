@@ -7,6 +7,7 @@
 
 use crate::error::PettyError;
 use crate::types::{parse_font_style, parse_font_weight};
+#[cfg(feature = "embedded-fonts")]
 use petty_style::font::{FontStyle, FontWeight};
 use petty_traits::{FontProvider, InMemoryFontProvider};
 use std::sync::Arc;
