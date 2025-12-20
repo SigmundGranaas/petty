@@ -101,10 +101,7 @@ fn get_font_descriptors(
                         || desc_dict.has(b"FontFile2")
                         || desc_dict.has(b"FontFile3"))
                 {
-                    info.insert(
-                        "EmbeddedFont".to_string(),
-                        "true".to_string(),
-                    );
+                    info.insert("EmbeddedFont".to_string(), "true".to_string());
                 }
             }
 
