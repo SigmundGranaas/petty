@@ -1,3 +1,14 @@
+//! Layout engine implementation.
+//!
+//! # WASM Compatibility
+//!
+//! This module is fully compatible with WASM targets. When the `profiling` feature
+//! is enabled, it uses the `instant` crate instead of `std::time::Instant` for
+//! performance profiling, as std::time is not available in wasm32-unknown-unknown.
+//!
+//! The profiling overhead is completely eliminated when the `profiling` feature
+//! is disabled (default for WASM builds).
+
 use super::PositionedElement;
 use super::fonts::SharedFontLibrary;
 use super::interface::{
@@ -20,6 +31,8 @@ use petty_style::stylesheet::{ElementStyle, Stylesheet};
 use petty_types::geometry::{self as geom, BoxConstraints};
 
 use bumpalo::Bump;
+#[cfg(feature = "profiling")]
+use instant::Instant;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -28,7 +41,7 @@ use std::sync::Arc;
 #[cfg(feature = "system-fonts")]
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub struct LayoutStore {
     pub bump: Bump,
@@ -84,9 +97,9 @@ pub struct PageOutput {
 }
 
 pub struct LayoutEngine {
-    pub font_library: SharedFontLibrary,
-    pub cache: LayoutCache,
-    pub profiler: Box<dyn Profiler>,
+    font_library: SharedFontLibrary,
+    cache: LayoutCache,
+    profiler: Box<dyn Profiler>,
     _config: LayoutConfig,
 }
 
@@ -180,11 +193,16 @@ impl LayoutEngine {
         ir_root: &IRNode,
         store: &'a LayoutStore,
     ) -> Result<RenderNode<'a>, LayoutError> {
+        #[cfg(feature = "profiling")]
         let start = Instant::now();
+
         let default_style = self.get_default_style();
         let res = crate::nodes::build_node_tree(ir_root, self, default_style, store);
+
+        #[cfg(feature = "profiling")]
         self.profiler
             .record("LayoutEngine::build_render_tree", start.elapsed());
+
         res
     }
 
@@ -193,22 +211,24 @@ impl LayoutEngine {
         stylesheet: &'a Stylesheet,
         root_node: RenderNode<'a>,
         store: &'a LayoutStore,
-    ) -> Result<impl Iterator<Item = Result<PageOutput, LayoutError>> + 'a, LayoutError> {
+    ) -> Result<Paginator<'a>, LayoutError> {
         let current_master_name = stylesheet
             .default_page_master_name
             .clone()
             .ok_or_else(|| LayoutError::Generic("No default page master defined".to_string()))?;
 
-        Ok(PaginationIterator {
-            engine: self,
-            stylesheet,
-            root_node,
-            arena: &store.bump,
-            current_state: None,
-            current_master_name: Some(current_master_name),
-            page_count: 0,
-            thread_cache: ThreadLocalCache::default(),
-            finished: false,
+        Ok(Paginator {
+            inner: PaginationIterator {
+                engine: self,
+                stylesheet,
+                root_node,
+                arena: &store.bump,
+                current_state: None,
+                current_master_name: Some(current_master_name),
+                page_count: 0,
+                thread_cache: ThreadLocalCache::default(),
+                finished: false,
+            },
         })
     }
 
@@ -357,6 +377,49 @@ impl LayoutEngine {
     }
 }
 
+/// A paginator for laying out a document across multiple pages.
+///
+/// This type provides a first-class API for pagination with access to
+/// pagination state and metadata. It implements `Iterator` to yield pages
+/// one at a time.
+///
+/// # Example
+///
+/// ```ignore
+/// let paginator = layout_engine.paginate(&stylesheet, root_node, &store)?;
+///
+/// for page_result in paginator {
+///     let page = page_result?;
+///     println!("Page {} has {} elements", page.page_number, page.elements.len());
+/// }
+/// ```
+pub struct Paginator<'a> {
+    inner: PaginationIterator<'a>,
+}
+
+impl<'a> Paginator<'a> {
+    /// Returns the current page number (1-indexed).
+    ///
+    /// This is the number of the next page to be yielded, or the total
+    /// number of pages if pagination is complete.
+    pub fn current_page(&self) -> usize {
+        self.inner.page_count
+    }
+
+    /// Returns true if pagination has finished (either successfully or due to an error).
+    pub fn is_finished(&self) -> bool {
+        self.inner.finished
+    }
+}
+
+impl<'a> Iterator for Paginator<'a> {
+    type Item = Result<PageOutput, LayoutError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
+    }
+}
+
 struct PaginationIterator<'a> {
     engine: &'a LayoutEngine,
     stylesheet: &'a Stylesheet,
@@ -377,6 +440,7 @@ impl<'a> Iterator for PaginationIterator<'a> {
             return None;
         }
 
+        #[cfg(feature = "profiling")]
         let start = Instant::now();
 
         let result = (|| {
@@ -468,6 +532,7 @@ impl<'a> Iterator for PaginationIterator<'a> {
             }
         })();
 
+        #[cfg(feature = "profiling")]
         self.engine
             .profiler
             .record("PageLayout::generate_page", start.elapsed());

@@ -17,15 +17,15 @@ petty-xpath1 = { path = "../xpath1" }
 petty-template-core = { path = "../template-core" }
 
 # External
-roxmltree = "0.20.0"
-quick-xml = { version = "0.37.5", features = ["serialize"] }
+roxmltree = "0.21.1"
+quick-xml = { version = "0.38.4", features = ["serialize"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-thiserror = "2.0.12"
+thiserror = "2.0.17"
 log = "0.4"
-nom = "7.1"
-nom_locate = "4.2"
+nom = "8.0"
+nom_locate = "5.0"
 
 [dev-dependencies]
-roxmltree = "0.20.0"
+roxmltree = "0.21.1"
 serde_json = "1.0"

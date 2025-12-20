@@ -16,12 +16,6 @@ pub enum RenderError {
     Other(String),
 }
 
-impl From<lopdf::Error> for RenderError {
-    fn from(err: lopdf::Error) -> Self {
-        RenderError::Pdf(err.to_string())
-    }
-}
-
 impl From<&str> for RenderError {
     fn from(s: &str) -> Self {
         RenderError::Other(s.to_string())

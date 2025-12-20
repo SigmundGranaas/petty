@@ -1,2 +1,13 @@
 /target
 .idea
+
+# Test outputs
+*.pdf
+!docs/**/*.pdf  # Keep documentation PDFs
+
+# Vendor directory (for local testing)
+/vendor/
+
+# WASM build outputs
+crates/wasm/pkg/
+crates/wasm/node_modules/

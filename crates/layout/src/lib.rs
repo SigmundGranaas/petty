@@ -14,10 +14,11 @@ pub enum LayoutError {
 
 // New modules from refactor
 pub mod cache;
+pub mod output;
 
 // Existing modules
 pub(crate) mod engine;
-pub use self::engine::{LayoutEngine, LayoutStore};
+pub use self::engine::{LayoutEngine, LayoutStore, Paginator};
 pub use self::interface::{
     AnchorLocation, IndexEntry, LayoutContext, LayoutEnvironment, NodeState,
 };
@@ -41,6 +42,7 @@ pub mod text;
 pub use self::config::LayoutConfig;
 pub use self::elements::{ImageElement, LayoutElement, PositionedElement, TextElement};
 pub use self::fonts::{FontFaceInfo, SharedFontLibrary};
+pub use self::output::LaidOutSequence;
 pub use self::style::ComputedStyle;
 
 // Re-export geometry types used by nodes from base to prevent type mismatches

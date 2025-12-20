@@ -1,6 +1,7 @@
 // src/render/streaming_writer.rs
 use lopdf::content::Content;
-use lopdf::{Dictionary, Object, ObjectId, Stream, dictionary};
+use lopdf::{Dictionary, Object, Stream, dictionary};
+use petty_render_core::ObjectId;
 use std::collections::BTreeMap;
 use std::io::{self, Seek, Write};
 

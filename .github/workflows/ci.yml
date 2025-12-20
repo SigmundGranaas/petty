@@ -13,6 +13,10 @@ env:
   # Rust version to use across all jobs
   RUST_VERSION: "1.92.0"
 
+# Note: The petty-wasm crate is excluded from workspace operations
+# because it requires wasm32-unknown-unknown target and is tested
+# separately in wasm.yml workflow
+
 jobs:
   # ===========================================
   # Build and Test
@@ -27,7 +31,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -36,7 +40,7 @@ jobs:
           components: rustfmt, clippy
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -47,10 +51,10 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build workspace
-        run: cargo build --workspace --all-features
+        run: cargo build --workspace --exclude petty-wasm --all-features
 
       - name: Run tests
-        run: cargo test --workspace --all-features
+        run: cargo test --workspace --exclude petty-wasm --all-features
 
   # ===========================================
   # Lint - Clippy
@@ -60,7 +64,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -69,7 +73,7 @@ jobs:
           components: clippy
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -80,7 +84,7 @@ jobs:
             ${{ runner.os }}-cargo-clippy-
 
       - name: Run Clippy
-        run: cargo clippy --workspace --all-features -- -D warnings
+        run: cargo clippy --workspace --exclude petty-wasm --all-features -- -D warnings
 
   # ===========================================
   # Format Check
@@ -90,7 +94,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -109,7 +113,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -117,7 +121,7 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -166,7 +170,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
@@ -174,7 +178,7 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -185,7 +189,7 @@ jobs:
             ${{ runner.os }}-cargo-docs-
 
       - name: Build documentation
-        run: cargo doc --workspace --no-deps
+        run: cargo doc --workspace --exclude petty-wasm --no-deps
         env:
           RUSTDOCFLAGS: "-D warnings"
 
@@ -197,7 +201,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Install Rust toolchain (MSRV)
         uses: dtolnay/rust-toolchain@master
@@ -205,7 +209,7 @@ jobs:
           toolchain: ${{ env.RUST_VERSION }}
 
       - name: Cache cargo registry
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: |
             ~/.cargo/registry
@@ -216,4 +220,4 @@ jobs:
             ${{ runner.os }}-cargo-msrv-
 
       - name: Check MSRV
-        run: cargo check --workspace
+        run: cargo check --workspace --exclude petty-wasm

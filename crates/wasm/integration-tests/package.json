@@ -1,0 +1,18 @@
+{
+  "name": "petty-wasm-integration-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Integration tests for Petty WASM PDF generation",
+  "type": "module",
+  "scripts": {
+    "test": "node test/pdf-generation.test.js",
+    "test:verbose": "DEBUG=* node test/pdf-generation.test.js",
+    "clean": "rm -rf output/*.pdf"
+  },
+  "devDependencies": {
+    "pdf-parse": "^1.1.1"
+  },
+  "dependencies": {
+    "petty-wasm": "file:../pkg"
+  }
+}

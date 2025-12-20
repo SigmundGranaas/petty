@@ -11,8 +11,13 @@ petty-idf = { path = "../idf" }
 petty-traits = { path = "../traits" }
 
 # Layout algorithms
-bumpalo = "3.17.0"
-taffy = "0.8.1"
+bumpalo = "3.19.1"
+taffy = "0.9.2"
+
+# WASM-compatible time measurement (only needed for profiling)
+# Uses instant crate instead of std::time::Instant because std::time
+# is not available in wasm32-unknown-unknown target
+instant = { version = "0.1", features = ["wasm-bindgen"], optional = true }
 
 # Text shaping and fonts
 rustybuzz = "0.20.1"
@@ -20,7 +25,7 @@ ttf-parser = "0.25.1"
 fontdb = { version = "0.23.0", optional = true }
 
 # Error handling
-thiserror = "2.0.12"
+thiserror = "2.0.17"
 
 # Logging
 log = "0.4"
@@ -31,5 +36,5 @@ default = ["system-fonts"]
 # System font discovery via fontdb (native platforms only)
 system-fonts = ["fontdb"]
 
-# Performance profiling
-profiling = []
+# Performance profiling (includes instant crate for timing)
+profiling = ["dep:instant"]

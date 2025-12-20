@@ -786,7 +786,8 @@ where
                     &font_map,
                     page_width,
                     page_height,
-                );
+                )
+                .map_render_err()?;
 
                 for content_result in contents {
                     let content = content_result.map_render_err()?;
