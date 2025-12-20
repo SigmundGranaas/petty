@@ -24,6 +24,8 @@ members = [
     "crates/template-dsl",
     # Integration layer
     "crates/core",
+    # WASM bindings
+    "crates/wasm",
 ]
 resolver = "2"
 
@@ -92,10 +94,10 @@ serde_json = "1.0"
 thiserror = "2.0.12"
 
 # Additional deps used in pipeline/templating
-printpdf = { version = "0.8.2", features = ["png"] }
+printpdf = { version = "0.8.2", default-features = false, features = ["png"] }
 itertools = "0.14.0"
-lopdf = "0.36.0"
-chrono = "0.4.42"
+lopdf = { version = "0.36.0", default-features = false }
+chrono = { version = "0.4.42", default-features = false, features = ["clock", "wasmbind"] }
 rand = "0.9.1"
 slug = "0.1"
 bumpalo = "3.17.0"
@@ -111,7 +113,10 @@ clap = { version = "4.5", features = ["derive"] }
 [features]
 default = ["native", "rayon-executor"]
 dhat-heap = []
-profiling = []
+
+# Performance profiling - enables timing measurements in layout engine
+# Adds ~1.5MB to binary and runtime overhead. Use only for debugging.
+profiling = ["petty-layout/profiling"]
 
 # Platform features
 native = ["tempfile"]  # Enables system fonts, filesystem, tempfiles, etc.

@@ -5,6 +5,6 @@ edition = "2024"
 description = "PDF composition utilities - merge, overlay, deep copy"
 
 [dependencies]
-lopdf = "0.36.0"
+lopdf = { version = "0.36.0", default-features = false }
 thiserror = "2.0.12"
 log = "0.4"

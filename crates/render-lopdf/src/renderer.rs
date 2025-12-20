@@ -1,10 +1,10 @@
 // src/render/lopdf_renderer.rs
 use crate::helpers;
 use crate::writer::StreamingPdfWriter;
-use lopdf::{Dictionary, Object, ObjectId, dictionary};
+use lopdf::{Dictionary, Object, dictionary};
 use petty_idf::SharedData;
 use petty_layout::{LayoutEngine, PositionedElement};
-use petty_render_core::{DocumentRenderer, RenderError};
+use petty_render_core::{DocumentRenderer, ObjectId, RenderError};
 use petty_style::stylesheet::Stylesheet;
 use std::any::Any;
 use std::collections::HashMap;
