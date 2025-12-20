@@ -1,3 +1,6 @@
+// Allow dead code since these are library functions that may not all be used
+#![allow(dead_code)]
+
 use lopdf::Document as LopdfDocument;
 use std::collections::BTreeMap;
 

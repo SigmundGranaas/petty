@@ -1,4 +1,6 @@
-use serde_json::{Value, json};
+#![allow(dead_code)]
+
+use serde_json::{json, Value};
 
 /// Create a minimal valid JSON template
 pub fn minimal_template() -> Value {
