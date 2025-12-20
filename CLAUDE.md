@@ -628,20 +628,17 @@ pub fn get_font(&self, id: FontId) -> Result<&Font, LayoutError> {
 ### Building
 ```bash
 # Native build
-cargo build --release
+cargo ci-build --release
 
 # WASM build (petty-core only)
-cd petty-core
+cd crates/core
 wasm-pack build --target web
 ```
 
 ### Testing
 ```bash
-# Unit tests
-cargo test
-
-# Integration tests
-cargo test --test '*'
+# Run all tests
+cargo ci-test
 
 # Specific module
 cargo test -p petty-core layout::tests
@@ -659,13 +656,48 @@ cargo flamegraph --bin example_invoice
 ### Linting
 ```bash
 # Clippy (strict mode)
-cargo clippy -- -D warnings
+cargo ci-clippy
 
 # Format check
-cargo fmt --check
+cargo ci-fmt
 ```
 
 ---
+
+## CI Verification Suite
+
+Run these commands to verify your changes against the project's CI standards.
+
+### Native Verification (Run for all changes)
+```bash
+# 1. Format
+cargo ci-fmt
+
+# 2. Lint (Clippy)
+cargo ci-clippy
+
+# 3. Build
+cargo ci-build
+
+# 4. Test
+cargo ci-test
+
+# 5. Examples
+cargo build --examples
+```
+
+### WASM Verification (Run if modifying petty-core)
+```bash
+RUSTFLAGS='--cfg getrandom_backend="wasm_js"' cargo check --package petty-wasm --target wasm32-unknown-unknown
+```
+
+## Mandatory Verification Protocol
+
+**Claude, you must adhere to this protocol:**
+1.  **Always run the Native Verification commands** before finishing a task.
+2.  **Fix any issues** found (formatting, clippy warnings, test failures).
+3.  **Run WASM Verification** if changes involve `petty-core`.
+4.  **Do not ask for permission** to run these checks; they are mandatory.
 
 ## Key Architecture Documents
 

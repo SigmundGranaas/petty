@@ -5,3 +5,12 @@
 # Configure getrandom to use wasm_js backend for WASM targets
 # This is required for lopdf and printpdf dependencies which use rand
 rustflags = ['--cfg', 'getrandom_backend="wasm_js"']
+
+[alias]
+ci-build = "build --workspace --exclude petty-wasm --all-features"
+ci-test = "test --workspace --exclude petty-wasm --all-features"
+ci-clippy = "clippy --workspace --exclude petty-wasm --all-features -- -D warnings"
+ci-check = "check --workspace --exclude petty-wasm --all-features"
+ci-docs = "doc --workspace --exclude petty-wasm --no-deps"
+ci-fmt = "fmt --all -- --check"
+fmt-all = "fmt --all"
