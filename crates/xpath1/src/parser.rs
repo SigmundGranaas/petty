@@ -3,7 +3,7 @@
 use super::ast::*;
 use crate::error::XPathError;
 use nom::{
-    IResult,
+    IResult, Parser,
     branch::alt,
     bytes::complete::{tag, take_while, take_while1},
     character::complete::{char, multispace0},
@@ -28,24 +28,25 @@ pub fn parse_expression(input: &str) -> Result<Expression, XPathError> {
 
 // --- Combinators & Helpers ---
 
-fn ws<'a, F, O>(inner: F) -> impl FnMut(&'a str) -> IResult<&'a str, O>
+fn ws<'a, F, O, E>(inner: F) -> impl Parser<&'a str, Output = O, Error = E>
 where
-    F: FnMut(&'a str) -> IResult<&'a str, O>,
+    F: Parser<&'a str, Output = O, Error = E>,
+    E: nom::error::ParseError<&'a str>,
 {
     delimited(multispace0, inner, multispace0)
 }
 
 fn build_binary_expr_parser<'a, F, G>(
-    mut sub_expr_parser: F,
-    mut op_parser: G,
+    sub_expr_parser: F,
+    op_parser: G,
 ) -> impl FnMut(&'a str) -> IResult<&'a str, Expression>
 where
-    F: FnMut(&'a str) -> IResult<&'a str, Expression>,
-    G: FnMut(&'a str) -> IResult<&'a str, BinaryOperator>,
+    F: Parser<&'a str, Output = Expression, Error = nom::error::Error<&'a str>> + Clone,
+    G: Parser<&'a str, Output = BinaryOperator, Error = nom::error::Error<&'a str>> + Clone,
 {
     move |input: &str| {
-        let (input, mut left) = sub_expr_parser(input)?;
-        let (input, remainder) = many0(pair(ws(&mut op_parser), &mut sub_expr_parser))(input)?;
+        let (input, mut left) = sub_expr_parser.clone().parse(input)?;
+        let (input, remainder) = many0(pair(ws(op_parser.clone()), sub_expr_parser.clone())).parse(input)?;
 
         for (op, right) in remainder {
             left = Expression::BinaryOp {
@@ -64,63 +65,79 @@ fn expression(input: &str) -> IResult<&str, Expression> {
     or_expr(input)
 }
 
+fn or_op(input: &str) -> IResult<&str, BinaryOperator> {
+    map(tag("or"), |_| BinaryOperator::Or).parse(input)
+}
+
+fn and_op(input: &str) -> IResult<&str, BinaryOperator> {
+    map(tag("and"), |_| BinaryOperator::And).parse(input)
+}
+
 fn or_expr(input: &str) -> IResult<&str, Expression> {
-    build_binary_expr_parser(and_expr, map(tag("or"), |_| BinaryOperator::Or))(input)
+    build_binary_expr_parser(and_expr, or_op)(input)
 }
 
 fn and_expr(input: &str) -> IResult<&str, Expression> {
-    build_binary_expr_parser(equality_expr, map(tag("and"), |_| BinaryOperator::And))(input)
+    build_binary_expr_parser(equality_expr, and_op)(input)
+}
+
+fn equality_op(input: &str) -> IResult<&str, BinaryOperator> {
+    alt((
+        map(tag("="), |_| BinaryOperator::Equals),
+        map(tag("!="), |_| BinaryOperator::NotEquals),
+    )).parse(input)
+}
+
+fn relational_op(input: &str) -> IResult<&str, BinaryOperator> {
+    alt((
+        map(tag("<="), |_| BinaryOperator::LessThanOrEqual),
+        map(tag("&lt;="), |_| BinaryOperator::LessThanOrEqual),
+        map(tag(">="), |_| BinaryOperator::GreaterThanOrEqual),
+        map(tag("&gt;="), |_| BinaryOperator::GreaterThanOrEqual),
+        map(tag("<"), |_| BinaryOperator::LessThan),
+        map(tag("&lt;"), |_| BinaryOperator::LessThan),
+        map(tag(">"), |_| BinaryOperator::GreaterThan),
+        map(tag("&gt;"), |_| BinaryOperator::GreaterThan),
+    )).parse(input)
+}
+
+fn additive_op(input: &str) -> IResult<&str, BinaryOperator> {
+    alt((
+        map(char('+'), |_| BinaryOperator::Plus),
+        map(char('-'), |_| BinaryOperator::Minus),
+    )).parse(input)
+}
+
+fn multiplicative_op(input: &str) -> IResult<&str, BinaryOperator> {
+    alt((
+        map(char('*'), |_| BinaryOperator::Multiply),
+        map(tag("div"), |_| BinaryOperator::Divide),
+        map(tag("mod"), |_| BinaryOperator::Modulo),
+    )).parse(input)
+}
+
+fn union_op(input: &str) -> IResult<&str, BinaryOperator> {
+    map(char('|'), |_| BinaryOperator::Union).parse(input)
 }
 
 fn equality_expr(input: &str) -> IResult<&str, Expression> {
-    build_binary_expr_parser(
-        relational_expr,
-        alt((
-            map(tag("="), |_| BinaryOperator::Equals),
-            map(tag("!="), |_| BinaryOperator::NotEquals),
-        )),
-    )(input)
+    build_binary_expr_parser(relational_expr, equality_op)(input)
 }
 
 fn relational_expr(input: &str) -> IResult<&str, Expression> {
-    build_binary_expr_parser(
-        additive_expr,
-        alt((
-            map(tag("<="), |_| BinaryOperator::LessThanOrEqual),
-            map(tag("&lt;="), |_| BinaryOperator::LessThanOrEqual),
-            map(tag(">="), |_| BinaryOperator::GreaterThanOrEqual),
-            map(tag("&gt;="), |_| BinaryOperator::GreaterThanOrEqual),
-            map(tag("<"), |_| BinaryOperator::LessThan),
-            map(tag("&lt;"), |_| BinaryOperator::LessThan),
-            map(tag(">"), |_| BinaryOperator::GreaterThan),
-            map(tag("&gt;"), |_| BinaryOperator::GreaterThan),
-        )),
-    )(input)
+    build_binary_expr_parser(additive_expr, relational_op)(input)
 }
 
 fn additive_expr(input: &str) -> IResult<&str, Expression> {
-    build_binary_expr_parser(
-        multiplicative_expr,
-        alt((
-            map(char('+'), |_| BinaryOperator::Plus),
-            map(char('-'), |_| BinaryOperator::Minus),
-        )),
-    )(input)
+    build_binary_expr_parser(multiplicative_expr, additive_op)(input)
 }
 
 fn multiplicative_expr(input: &str) -> IResult<&str, Expression> {
-    build_binary_expr_parser(
-        unary_expr,
-        alt((
-            map(char('*'), |_| BinaryOperator::Multiply),
-            map(tag("div"), |_| BinaryOperator::Divide),
-            map(tag("mod"), |_| BinaryOperator::Modulo),
-        )),
-    )(input)
+    build_binary_expr_parser(unary_expr, multiplicative_op)(input)
 }
 
 fn unary_expr(input: &str) -> IResult<&str, Expression> {
-    let (i, neg_op) = opt(ws(char('-')))(input)?;
+    let (i, neg_op) = opt(ws(char('-'))).parse(input)?;
     let (i, expr) = union_expr(i)?;
 
     if neg_op.is_some() {
@@ -138,7 +155,7 @@ fn unary_expr(input: &str) -> IResult<&str, Expression> {
 
 // The union operator `|` has higher precedence than the others, but only applies to paths.
 fn union_expr(input: &str) -> IResult<&str, Expression> {
-    build_binary_expr_parser(path_expr, map(char('|'), |_| BinaryOperator::Union))(input)
+    build_binary_expr_parser(path_expr, union_op)(input)
 }
 
 /// This is the core parser that handles the ambiguity between location paths
@@ -147,9 +164,9 @@ fn path_expr(input: &str) -> IResult<&str, Expression> {
     // Try primary expressions FIRST, because a function call like `position()` is a primary expression,
     // but the more general `location_path` parser might incorrectly parse `position` as a step name
     // before the `function_call` parser gets a chance to see the `()`.
-    let (i, start_expr) = alt((primary_expr, map(location_path, Expression::LocationPath)))(input)?;
+    let (i, start_expr) = alt((primary_expr, map(location_path, Expression::LocationPath))).parse(input)?;
 
-    let (i, remainder_steps) = many0(pair(alt((tag("//"), tag("/"))), step))(i)?;
+    let (i, remainder_steps) = many0(pair(alt((tag("//"), tag("/"))), step)).parse(i)?;
 
     if remainder_steps.is_empty() {
         return Ok((i, start_expr));
@@ -187,7 +204,7 @@ fn primary_expr(input: &str) -> IResult<&str, Expression> {
         map(string_literal, Expression::Literal),
         function_call,
         delimited(ws(char('(')), expression, ws(char(')'))),
-    )))(input)
+    ))).parse(input)
 }
 
 // --- Literal Parsers ---
@@ -198,12 +215,12 @@ fn string_literal(input: &str) -> IResult<&str, String> {
             delimited(char('"'), take_while(|c| c != '"'), char('"')),
         )),
         |s: &str| s.to_string(),
-    )(input)
+    ).parse(input)
 }
 
 // --- Variable Reference Parser ---
 fn variable_reference(input: &str) -> IResult<&str, Expression> {
-    map(preceded(char('$'), q_name), Expression::Variable)(input)
+    map(preceded(char('$'), q_name), Expression::Variable).parse(input)
 }
 
 // --- Name and NodeTest Parsers ---
@@ -211,14 +228,14 @@ fn nc_name(input: &str) -> IResult<&str, &str> {
     recognize(pair(
         take_while1(|c: char| c.is_alphabetic() || c == '_'),
         take_while(|c: char| c.is_alphanumeric() || c == '_' || c == '-'),
-    ))(input)
+    )).parse(input)
 }
 
 fn q_name(input: &str) -> IResult<&str, String> {
     map(
         recognize(pair(nc_name, opt(pair(tag(":"), nc_name)))),
         |s: &str| s.to_string(),
-    )(input)
+    ).parse(input)
 }
 
 fn node_type_test(input: &str) -> IResult<&str, NodeTest> {
@@ -238,7 +255,7 @@ fn node_type_test(input: &str) -> IResult<&str, NodeTest> {
             "processing-instruction" => NodeTest::NodeType(NodeTypeTest::ProcessingInstruction),
             _ => NodeTest::NodeType(NodeTypeTest::Node), // "node"
         },
-    )(input)
+    ).parse(input)
 }
 
 pub fn node_test(input: &str) -> IResult<&str, NodeTest> {
@@ -246,7 +263,7 @@ pub fn node_test(input: &str) -> IResult<&str, NodeTest> {
         map(tag("*"), |_| NodeTest::Wildcard),
         node_type_test,
         map(q_name, NodeTest::Name),
-    ))(input)
+    )).parse(input)
 }
 
 // --- Path Parsers ---
@@ -281,11 +298,11 @@ fn axis(input: &str) -> IResult<&str, Axis> {
             "preceding" => Axis::Preceding,
             _ => Axis::Child, // child
         },
-    )(input)
+    ).parse(input)
 }
 
 fn predicate(input: &str) -> IResult<&str, Expression> {
-    delimited(ws(char('[')), expression, ws(char(']')))(input)
+    delimited(ws(char('[')), expression, ws(char(']'))).parse(input)
 }
 
 fn step(input: &str) -> IResult<&str, Step> {
@@ -297,9 +314,9 @@ fn step(input: &str) -> IResult<&str, Step> {
         map(pair(opt(axis), node_test), |(ax, nt)| {
             (ax.unwrap_or(Axis::Child), nt)
         }),
-    ))(input)?;
+    )).parse(input)?;
     let (axis, node_test) = main_part;
-    let (i, predicates) = many0(predicate)(i)?;
+    let (i, predicates) = many0(predicate).parse(i)?;
     Ok((
         i,
         Step {
@@ -338,7 +355,7 @@ fn location_path(input: &str) -> IResult<&str, LocationPath> {
 
     let (i, mut steps) = (i, first_step);
     // After the first step, subsequent steps MUST be preceded by / or //.
-    let (i, remainder) = many0(pair(alt((tag("//"), tag("/"))), step))(i)?;
+    let (i, remainder) = many0(pair(alt((tag("//"), tag("/"))), step)).parse(i)?;
 
     for (sep, next_step) in remainder {
         if sep == "//" {
@@ -366,7 +383,7 @@ fn function_call(input: &str) -> IResult<&str, Expression> {
     // A function call must be a QName followed by '('. This lookahead avoids
     // parsing a simple step name (like 'foo' in 'foo/bar') as a function.
     let (i, name) = q_name(input)?;
-    let (i, _) = peek(ws(char('(')))(i)?;
+    let (i, _) = peek(ws(char('('))).parse(i)?;
 
     // Node-type tests like text() are not functions. They are handled by the step parser.
     // If the name is a node type test, fail this parser.
@@ -382,7 +399,7 @@ fn function_call(input: &str) -> IResult<&str, Expression> {
         char('('),
         separated_list0(ws(char(',')), expression),
         char(')'),
-    )(i)?;
+    ).parse(i)?;
 
     Ok((i, Expression::FunctionCall { name, args }))
 }

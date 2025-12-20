@@ -9,13 +9,13 @@ use crate::flex::{AlignItems, AlignSelf, FlexDirection, FlexWrap, JustifyContent
 use crate::font::{FontStyle, FontWeight};
 use crate::list::ListStyleType;
 use crate::text::TextAlign;
-use nom::IResult;
+use nom::{IResult, Parser};
 use nom::branch::alt;
 use nom::bytes::complete::{tag, tag_no_case, take_while_m_n};
 use nom::character::complete::{char, space0, space1};
 use nom::combinator::{map, map_res, opt, recognize};
 use nom::multi::separated_list1;
-use nom::sequence::{delimited, pair, preceded, tuple};
+use nom::sequence::{delimited, pair, preceded};
 use petty_types::Color;
 use thiserror::Error;
 
@@ -34,9 +34,10 @@ pub enum StyleParseError {
 
 // --- Helper Parsers ---
 
-fn ws<'a, F, O>(inner: F) -> impl FnMut(&'a str) -> IResult<&'a str, O>
+fn ws<'a, F, O, E>(inner: F) -> impl Parser<&'a str, Output = O, Error = E>
 where
-    F: FnMut(&'a str) -> IResult<&'a str, O>,
+    F: Parser<&'a str, Output = O, Error = E>,
+    E: nom::error::ParseError<&'a str>,
 {
     delimited(space0, inner, space0)
 }
@@ -46,21 +47,21 @@ fn parse_f32(input: &str) -> IResult<&str, f32> {
         recognize(pair(
             opt(alt((char('+'), char('-')))),
             alt((
-                recognize(tuple((
+                recognize(pair(
                     take_while_m_n(1, 10, |c: char| c.is_ascii_digit()),
-                    opt(tuple((
+                    opt(pair(
                         char('.'),
                         take_while_m_n(1, 10, |c: char| c.is_ascii_digit()),
-                    ))),
-                ))),
-                recognize(tuple((
+                    )),
+                )),
+                recognize(pair(
                     char('.'),
                     take_while_m_n(1, 10, |c: char| c.is_ascii_digit()),
-                ))),
+                )),
             )),
         )),
         |s: &str| s.parse::<f32>(),
-    )(input)
+    ).parse(input)
 }
 
 // --- Unit & Dimension Parsers ---
@@ -72,13 +73,13 @@ fn parse_unit(input: &str) -> IResult<&str, f32> {
         map(tag_no_case("in"), |_| 72.0),
         map(tag_no_case("cm"), |_| 28.35),
         map(tag_no_case("mm"), |_| 2.835),
-    ))(input)
+    )).parse(input)
 }
 
 /// Parses a length value with optional unit (e.g., "12pt", "1in", "10mm").
 pub fn parse_length(input: &str) -> IResult<&str, f32> {
     let (input, value) = parse_f32(input)?;
-    let (input, unit_multiplier) = opt(parse_unit)(input)?;
+    let (input, unit_multiplier) = opt(parse_unit).parse(input)?;
     Ok((input, value * unit_multiplier.unwrap_or(1.0)))
 }
 
@@ -90,12 +91,12 @@ pub fn parse_dimension(input: &str) -> IResult<&str, Dimension> {
             Dimension::Percent(val)
         }),
         map(parse_length, Dimension::Pt),
-    ))(input)
+    )).parse(input)
 }
 
 /// Parses CSS shorthand margins (1, 2, or 4 values).
 pub fn parse_shorthand_margins(input: &str) -> Result<Margins, StyleParseError> {
-    let parts_res = separated_list1(space1, parse_length)(input.trim());
+    let parts_res = separated_list1(space1, parse_length).parse(input.trim());
 
     match parts_res {
         Ok(("", parts)) => match parts.len() {
@@ -140,35 +141,35 @@ fn is_hex_digit(c: char) -> bool {
 }
 
 fn hex_primary(input: &str) -> IResult<&str, u8> {
-    map_res(take_while_m_n(2, 2, is_hex_digit), from_hex)(input)
+    map_res(take_while_m_n(2, 2, is_hex_digit), from_hex).parse(input)
 }
 
 fn hex_color_6(input: &str) -> IResult<&str, Color> {
     map(
-        tuple((hex_primary, hex_primary, hex_primary)),
+        (hex_primary, hex_primary, hex_primary),
         |(r, g, b)| Color { r, g, b, a: 1.0 },
-    )(input)
+    ).parse(input)
 }
 
 fn hex_color_3(input: &str) -> IResult<&str, Color> {
     map(
-        tuple((
+        (
             take_while_m_n(1, 1, is_hex_digit),
             take_while_m_n(1, 1, is_hex_digit),
             take_while_m_n(1, 1, is_hex_digit),
-        )),
+        ),
         |(r_s, g_s, b_s): (&str, &str, &str)| Color {
             r: from_hex(&format!("{}{}", r_s, r_s)).unwrap(),
             g: from_hex(&format!("{}{}", g_s, g_s)).unwrap(),
             b: from_hex(&format!("{}{}", b_s, b_s)).unwrap(),
             a: 1.0,
         },
-    )(input)
+    ).parse(input)
 }
 
 /// Parses a hex color (e.g., "#FF0000" or "#F00").
 pub fn parse_color(input: &str) -> IResult<&str, Color> {
-    preceded(char('#'), alt((hex_color_6, hex_color_3)))(input)
+    preceded(char('#'), alt((hex_color_6, hex_color_3))).parse(input)
 }
 
 /// Parses a border style keyword.
@@ -179,19 +180,19 @@ pub fn parse_border_style(input: &str) -> IResult<&str, BorderStyle> {
         map(tag_no_case("dotted"), |_| BorderStyle::Dotted),
         map(tag_no_case("double"), |_| BorderStyle::Double),
         map(tag_no_case("none"), |_| BorderStyle::None),
-    ))(input)
+    )).parse(input)
 }
 
 /// Parses a CSS border shorthand (e.g., "2pt solid #00ff00").
 pub fn parse_border(input: &str) -> IResult<&str, Border> {
     map(
-        tuple((ws(parse_length), ws(parse_border_style), ws(parse_color))),
+        (ws(parse_length), ws(parse_border_style), ws(parse_color)),
         |(width, style, color)| Border {
             width,
             style,
             color,
         },
-    )(input)
+    ).parse(input)
 }
 
 /// Helper to run a nom parser and convert its result to a `Result<T, StyleParseError>`.
