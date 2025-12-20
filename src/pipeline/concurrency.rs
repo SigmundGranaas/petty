@@ -35,6 +35,7 @@ use petty_render_core::DocumentRenderer;
 use petty_render_core::{HyperlinkLocation, Pass1Result, ResolvedAnchor};
 use petty_render_lopdf::LopdfRenderer;
 use petty_template_core::{DataSourceFormat, ExecutionConfig};
+use rayon::prelude::*;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Seek, Write};
@@ -47,8 +48,24 @@ use tokio::task;
 // Type Aliases for Channel Types
 // ============================================================================
 
-/// Work item sent from producer to workers (index + data).
-pub(crate) type WorkItem = Result<(usize, Arc<Value>), PipelineError>;
+/// Default batch size for producer batching.
+/// Larger batches reduce channel overhead but increase latency.
+/// 64 provides good balance for most workloads.
+const PRODUCER_BATCH_SIZE: usize = 64;
+
+/// Pre-serialized work item containing index, serialized JSON, and original data.
+/// The serialized string avoids redundant serialization in workers.
+#[derive(Clone)]
+pub(crate) struct SerializedWorkItem {
+    pub index: usize,
+    /// Pre-serialized JSON string (avoids re-serialization in workers)
+    pub serialized: Arc<String>,
+    /// Original data for resource loading (shared reference)
+    pub data: Arc<Value>,
+}
+
+/// Work item sent from producer to workers (pre-serialized).
+pub(crate) type WorkItem = Result<SerializedWorkItem, PipelineError>;
 
 /// Result sent from workers to consumer (index + layout result).
 pub(crate) type LayoutResult = (usize, Result<LaidOutSequence, PipelineError>);
@@ -151,7 +168,7 @@ impl ScalingBehavior for AdaptiveScaling<'_> {
 
     fn check_scaling(&mut self, result_sender: Option<&LayoutResultSender>) -> bool {
         self.check_counter = self.check_counter.wrapping_add(1);
-        if self.check_counter % self.check_interval != 0 {
+        if !self.check_counter.is_multiple_of(self.check_interval) {
             return false;
         }
 
@@ -176,64 +193,7 @@ impl ScalingBehavior for AdaptiveScaling<'_> {
 }
 
 // ============================================================================
-// RAII Channel Guards
-// ============================================================================
-
-/// RAII guard ensuring channel sender is dropped when guard goes out of scope.
-///
-/// This replaces manual `drop(sender)` calls with automatic cleanup,
-/// ensuring channels close properly even in error paths.
-///
-/// # Example
-///
-/// ```ignore
-/// let (tx, rx) = async_channel::bounded::<i32>(10);
-/// let guard = SenderGuard::new(tx);
-///
-/// // Clone sender for workers
-/// let worker_tx = guard.sender().clone();
-///
-/// // When guard goes out of scope, channel is closed automatically
-/// ```
-pub(crate) struct SenderGuard<T> {
-    sender: Option<async_channel::Sender<T>>,
-}
-
-impl<T> SenderGuard<T> {
-    /// Create a new guard taking ownership of the sender.
-    pub fn new(sender: async_channel::Sender<T>) -> Self {
-        Self {
-            sender: Some(sender),
-        }
-    }
-
-    /// Get a reference to the sender for cloning.
-    ///
-    /// # Panics
-    ///
-    /// Panics if called after `close()` was called.
-    pub fn sender(&self) -> &async_channel::Sender<T> {
-        self.sender.as_ref().expect("sender already closed")
-    }
-
-    /// Explicitly close the sender before natural drop.
-    ///
-    /// This is useful when you need to close the channel at a specific point
-    /// in the code before the guard goes out of scope.
-    #[allow(dead_code)]
-    pub fn close(mut self) {
-        drop(self.sender.take());
-    }
-}
-
-impl<T> Drop for SenderGuard<T> {
-    fn drop(&mut self) {
-        // Sender is dropped automatically when Option is dropped
-    }
-}
-
-// ============================================================================
-// Dynamic Worker Pool (requires adaptive-scaling feature)
+// Dynamic Worker Pool (for adaptive scaling)
 // ============================================================================
 
 /// A pool of workers that can dynamically scale based on workload.
@@ -351,19 +311,19 @@ impl DynamicWorkerPool {
                 let item_start = Instant::now();
 
                 let (index, work_result) = match result {
-                    Ok((index, context_arc)) => {
-                        let data_source_string = serde_json::to_string(&*context_arc).unwrap();
+                    Ok(work_item) => {
+                        // Use pre-serialized string from producer
                         let exec_config = ExecutionConfig {
                             format: DataSourceFormat::Json,
                             strict: false,
                         };
                         let layout_result = template_clone
-                            .execute(&data_source_string, exec_config)
+                            .execute(&work_item.serialized, exec_config)
                             .and_then(|ir_nodes| {
                                 finish_layout_and_resource_loading(
                                     worker_id,
                                     ir_nodes,
-                                    context_arc.clone(),
+                                    work_item.data.clone(),
                                     resource_provider_clone.as_ref(),
                                     &mut layout_engine,
                                     &template_clone.stylesheet(),
@@ -371,7 +331,7 @@ impl DynamicWorkerPool {
                                 )
                             });
 
-                        (index, layout_result)
+                        (work_item.index, layout_result)
                     }
                     Err(e) => (0, Err(e)),
                 };
@@ -386,11 +346,11 @@ impl DynamicWorkerPool {
                 }
 
                 // Check for cooperative shutdown signal
-                if let Some(ref manager) = worker_manager {
-                    if manager.should_worker_shutdown() {
-                        info!("[WORKER-{}] Received shutdown signal, scaling down.", worker_id);
-                        break;
-                    }
+                if let Some(ref manager) = worker_manager
+                    && manager.should_worker_shutdown()
+                {
+                    info!("[WORKER-{}] Received shutdown signal, scaling down.", worker_id);
+                    break;
                 }
             }
             info!("[WORKER-{}] Shutting down.", worker_id);
@@ -463,9 +423,12 @@ pub fn configure_rayon_pool(num_threads: usize) {
 
 /// Producer task that sends data items to workers.
 ///
-/// Iterates over the data source and sends each item with its index to the
-/// worker channel. Uses semaphore-based backpressure to prevent unbounded
-/// queue growth.
+/// This optimized producer:
+/// 1. Collects items in batches for efficient processing
+/// 2. Serializes batches in parallel using Rayon (removes serialization from workers)
+/// 3. Sends pre-serialized items through the channel
+///
+/// Uses semaphore-based backpressure to prevent unbounded queue growth.
 pub(crate) async fn producer_task<I>(
     data_iterator: I,
     tx: WorkItemSender,
@@ -473,21 +436,88 @@ pub(crate) async fn producer_task<I>(
 ) where
     I: Iterator<Item = Value> + Send + 'static,
 {
-    info!("[PRODUCER] Starting sequence production from iterator.");
-    for (i, item) in data_iterator.enumerate() {
-        if let Ok(permit) = semaphore.acquire().await {
-            permit.forget();
+    info!("[PRODUCER] Starting batched producer with batch_size={}.", PRODUCER_BATCH_SIZE);
+
+    // Move iterator processing to a blocking task for Rayon access
+    let (batch_tx, batch_rx) = async_channel::bounded::<Vec<SerializedWorkItem>>(4);
+
+    // Spawn blocking task for batch collection and parallel serialization
+    let batch_producer = task::spawn_blocking(move || {
+        let mut batch = Vec::with_capacity(PRODUCER_BATCH_SIZE);
+        let mut global_idx = 0usize;
+
+        for item in data_iterator {
+            batch.push((global_idx, item));
+            global_idx += 1;
+
+            if batch.len() >= PRODUCER_BATCH_SIZE {
+                // Parallel serialize the batch using Rayon
+                let serialized_batch: Vec<SerializedWorkItem> = batch
+                    .par_drain(..)
+                    .map(|(idx, value)| {
+                        let serialized = serde_json::to_string(&value)
+                            .unwrap_or_else(|_| "{}".to_string());
+                        SerializedWorkItem {
+                            index: idx,
+                            serialized: Arc::new(serialized),
+                            data: Arc::new(value),
+                        }
+                    })
+                    .collect();
+
+                if batch_tx.send_blocking(serialized_batch).is_err() {
+                    break;
+                }
+            }
         }
 
-        if i % 100 == 0 {
-            debug!("[PRODUCER] Sending item #{}...", i);
+        // Process remaining items in the last partial batch
+        if !batch.is_empty() {
+            let serialized_batch: Vec<SerializedWorkItem> = batch
+                .par_drain(..)
+                .map(|(idx, value)| {
+                    let serialized = serde_json::to_string(&value)
+                        .unwrap_or_else(|_| "{}".to_string());
+                    SerializedWorkItem {
+                        index: idx,
+                        serialized: Arc::new(serialized),
+                        data: Arc::new(value),
+                    }
+                })
+                .collect();
+
+            let _ = batch_tx.send_blocking(serialized_batch);
         }
-        if tx.send(Ok((i, Arc::new(item)))).await.is_err() {
-            warn!("[PRODUCER] Layout channel closed, stopping producer.");
-            break;
+
+        info!("[PRODUCER] Batch producer finished, {} items total.", global_idx);
+    });
+
+    // Receive batches and send items to workers
+    let mut total_sent = 0usize;
+    while let Ok(batch) = batch_rx.recv().await {
+        // Send items with per-item backpressure
+        // (batch permit acquisition would deadlock if batch > semaphore permits)
+        for item in batch {
+            if let Ok(permit) = semaphore.acquire().await {
+                permit.forget();
+            }
+
+            if tx.send(Ok(item)).await.is_err() {
+                warn!("[PRODUCER] Worker channel closed, stopping producer.");
+                batch_producer.abort();
+                return;
+            }
+            total_sent += 1;
+        }
+
+        if total_sent.is_multiple_of(500) && total_sent > 0 {
+            debug!("[PRODUCER] Sent {} items...", total_sent);
         }
     }
-    info!("[PRODUCER] Finished sequence production.");
+
+    // Wait for batch producer to finish
+    let _ = batch_producer.await;
+    info!("[PRODUCER] Finished sending {} items.", total_sent);
 }
 
 /// Spawn layout worker threads.
@@ -544,19 +574,19 @@ pub(crate) fn spawn_workers(
                 let item_start = Instant::now();
 
                 let (index, work_result) = match result {
-                    Ok((index, context_arc)) => {
-                        let data_source_string = serde_json::to_string(&*context_arc).unwrap();
+                    Ok(work_item) => {
+                        // Use pre-serialized string from producer (no redundant serialization!)
                         let exec_config = ExecutionConfig {
                             format: DataSourceFormat::Json,
                             strict: false,
                         };
                         let layout_result = template_clone
-                            .execute(&data_source_string, exec_config)
+                            .execute(&work_item.serialized, exec_config)
                             .and_then(|ir_nodes| {
                                 finish_layout_and_resource_loading(
                                     worker_id,
                                     ir_nodes,
-                                    context_arc.clone(),
+                                    work_item.data.clone(),
                                     resource_provider_clone.as_ref(),
                                     &mut layout_engine,
                                     &template_clone.stylesheet(),
@@ -570,13 +600,13 @@ pub(crate) fn spawn_workers(
                                 warn!(
                                     "[WORKER-{}] LARGE ITEM #{}: ~{:.2} MB",
                                     worker_id,
-                                    index,
+                                    work_item.index,
                                     size as f64 / 1_000_000.0
                                 );
                             }
                         }
 
-                        (index, layout_result)
+                        (work_item.index, layout_result)
                     }
                     Err(e) => (0, Err(e)),
                 };
@@ -592,11 +622,11 @@ pub(crate) fn spawn_workers(
                 }
 
                 // Check for cooperative shutdown signal (adaptive scaling)
-                if let Some(ref manager) = worker_manager {
-                    if manager.should_worker_shutdown() {
-                        info!("[WORKER-{}] Received shutdown signal, scaling down.", worker_id);
-                        break;
-                    }
+                if let Some(ref manager) = worker_manager
+                    && manager.should_worker_shutdown()
+                {
+                    info!("[WORKER-{}] Received shutdown signal, scaling down.", worker_id);
+                    break;
                 }
             }
             info!("[WORKER-{}] Shutting down.", worker_id);
@@ -627,6 +657,7 @@ pub(crate) fn spawn_workers(
 /// * `adaptive_controller` - Optional controller for queue depth tracking
 /// * `worker_pool` - Optional dynamic worker pool for scaling
 /// * `result_sender` - Optional result sender (will be dropped when work is complete)
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
     rx2: LayoutResultReceiver,
     renderer: &mut LopdfRenderer<W>,
@@ -662,6 +693,7 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
 /// by delegating scaling decisions to the `ScalingBehavior` trait.
 ///
 /// Uses blocking receive for all modes - no polling!
+#[allow(clippy::too_many_arguments)]
 fn run_consumer_unified<W, S>(
     rx2: LayoutResultReceiver,
     renderer: &mut LopdfRenderer<W>,
@@ -759,14 +791,14 @@ where
                             LayoutElement::Text(t) => t.href.as_ref(),
                             _ => None,
                         };
-                        if let Some(href_str) = href {
-                            if let Some(target_id) = href_str.strip_prefix('#') {
-                                pass1_result.hyperlink_locations.push(HyperlinkLocation {
-                                    global_page_index: current_global_page_idx,
-                                    rect: [el.x, el.y, el.x + el.width, el.y + el.height],
-                                    target_id: target_id.to_string(),
-                                });
-                            }
+                        if let Some(href_str) = href
+                            && let Some(target_id) = href_str.strip_prefix('#')
+                        {
+                            pass1_result.hyperlink_locations.push(HyperlinkLocation {
+                                global_page_index: current_global_page_idx,
+                                rect: [el.x, el.y, el.x + el.width, el.y + el.height],
+                                target_id: target_id.to_string(),
+                            });
                         }
                     }
                 }
@@ -854,80 +886,6 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_sender_guard_drops_sender() {
-        let (tx, rx) = async_channel::bounded::<i32>(1);
-        {
-            let _guard = SenderGuard::new(tx);
-            // Guard holds sender, channel still open
-            assert!(!rx.is_closed());
-        }
-        // Guard dropped, sender dropped, channel closed
-        assert!(rx.is_closed());
-    }
-
-    #[test]
-    fn test_sender_guard_clone_works() {
-        let (tx, rx) = async_channel::bounded::<i32>(1);
-        let guard = SenderGuard::new(tx);
-
-        // Clone the sender through the guard
-        let cloned = guard.sender().clone();
-
-        // Send through cloned sender
-        cloned.send_blocking(42).unwrap();
-        assert_eq!(rx.recv_blocking().unwrap(), 42);
-
-        // Original guard still valid
-        guard.sender().send_blocking(43).unwrap();
-        assert_eq!(rx.recv_blocking().unwrap(), 43);
-    }
-
-    #[test]
-    fn test_sender_guard_close() {
-        let (tx, rx) = async_channel::bounded::<i32>(1);
-        let guard = SenderGuard::new(tx);
-
-        assert!(!rx.is_closed());
-        guard.close();
-        assert!(rx.is_closed());
-    }
-
-    #[test]
-    fn test_sender_guard_with_workers() {
-        // Simulate the worker pattern: guard holds sender, workers get clones
-        let (tx, rx) = async_channel::bounded::<i32>(10);
-        let guard = SenderGuard::new(tx);
-
-        // "Spawn" workers with cloned senders
-        let worker_tx1 = guard.sender().clone();
-        let worker_tx2 = guard.sender().clone();
-
-        // Workers can send
-        worker_tx1.send_blocking(1).unwrap();
-        worker_tx2.send_blocking(2).unwrap();
-
-        // Drop worker senders
-        drop(worker_tx1);
-        drop(worker_tx2);
-
-        // Channel still open because guard holds original
-        assert!(!rx.is_closed());
-
-        // Drop guard - now channel closes
-        drop(guard);
-        assert!(rx.is_closed());
-
-        // Verify messages were received
-        assert_eq!(rx.recv_blocking().unwrap(), 1);
-        assert_eq!(rx.recv_blocking().unwrap(), 2);
-        assert!(rx.recv_blocking().is_err()); // Channel closed
-    }
-
-    // ========================================
-    // ScalingBehavior Tests
-    // ========================================
 
     #[test]
     fn test_no_scaling_without_controller() {

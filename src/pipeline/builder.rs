@@ -36,6 +36,9 @@ pub struct PipelineBuilder {
     worker_count: Option<usize>,
     /// Maximum workers for adaptive scaling (None = use AdaptiveConfig default)
     max_workers: Option<usize>,
+    /// Buffer size for pipelining (rendered pages buffered before writing)
+    /// Higher values trade memory for throughput. Default: 64.
+    render_buffer_size: usize,
 }
 
 impl Default for PipelineBuilder {
@@ -58,6 +61,7 @@ impl Default for PipelineBuilder {
             debug: false,
             worker_count: None,
             max_workers: None,
+            render_buffer_size: 16, // Default: buffer 16 pages (benchmarks show smaller is optimal)
         }
     }
 }
@@ -165,6 +169,36 @@ impl PipelineBuilder {
     /// Unlike previous versions, there is no artificial cap on worker count.
     pub fn with_worker_count(mut self, count: usize) -> Self {
         self.worker_count = Some(count.max(1));
+        self
+    }
+
+    /// Sets the buffer size for pipelining rendered pages before writing.
+    ///
+    /// Higher values allow more pages to be rendered ahead of PDF writing,
+    /// trading memory for throughput. This is especially useful when:
+    /// - PDF writing is slower than rendering
+    /// - You have memory to spare and want maximum throughput
+    ///
+    /// # Memory Trade-off
+    ///
+    /// Each buffered page uses approximately 10-50KB depending on content.
+    /// - `32`: ~0.5-1.5MB buffer (conservative)
+    /// - `64`: ~1-3MB buffer (default, balanced)
+    /// - `128`: ~2-6MB buffer (aggressive)
+    /// - `256`: ~4-12MB buffer (maximum throughput)
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use petty::PipelineBuilder;
+    ///
+    /// let pipeline = PipelineBuilder::new()
+    ///     .with_template_file("template.json")?
+    ///     .with_render_buffer_size(128)  // Buffer 128 pages
+    ///     .build()?;
+    /// ```
+    pub fn with_render_buffer_size(mut self, size: usize) -> Self {
+        self.render_buffer_size = size.max(1);
         self
     }
 
@@ -308,10 +342,7 @@ impl PipelineBuilder {
             GenerationMode::ForceStreaming => {
                 log::info!("Forcing Streaming pipeline.");
                 provider = Provider::PassThrough(PassThroughProvider);
-                renderer = Renderer::Streaming(SinglePassStreamingRenderer::with_config(
-                    self.pdf_backend,
-                    self.worker_count,
-                ));
+                renderer = self.create_simple_renderer();
             }
             GenerationMode::Auto => {
                 let flags = features.main_template.features();
@@ -328,17 +359,28 @@ impl PipelineBuilder {
                         Provider::Metadata(MetadataGeneratingProvider::with_worker_count(self.worker_count));
                     renderer = Renderer::Composing(ComposingRenderer);
                 } else {
-                    log::info!("Template is streamable. Selecting simple Streaming pipeline.");
+                    log::info!("Template is streamable. Selecting simple pipeline.");
                     provider = Provider::PassThrough(PassThroughProvider);
-                    renderer = Renderer::Streaming(SinglePassStreamingRenderer::with_config(
-                        self.pdf_backend,
-                        self.worker_count,
-                    ));
+                    renderer = self.create_simple_renderer();
                 }
             }
         }
 
         Ok((provider, renderer))
+    }
+
+    /// Creates the streaming renderer for simple templates.
+    fn create_simple_renderer(&self) -> Renderer {
+        log::info!(
+            "Using streaming renderer with {} workers, buffer_size={}.",
+            self.worker_count.map_or("auto".to_string(), |w| w.to_string()),
+            self.render_buffer_size
+        );
+        Renderer::Streaming(SinglePassStreamingRenderer::with_config(
+            self.pdf_backend,
+            self.worker_count,
+            self.render_buffer_size,
+        ))
     }
 
     fn get_parser_for_extension(

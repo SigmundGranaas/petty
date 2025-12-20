@@ -1,6 +1,6 @@
 use crate::MapRenderError;
 use crate::pipeline::api::PreparedDataSources;
-use crate::pipeline::concurrency::{DynamicWorkerPool, SenderGuard, producer_task, run_in_order_streaming_consumer, spawn_workers};
+use crate::pipeline::concurrency::{DynamicWorkerPool, producer_task, run_in_order_streaming_consumer, spawn_workers};
 use crate::pipeline::config::PdfBackend;
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::renderer::RenderingStrategy;
@@ -26,7 +26,7 @@ use petty_core::layout::LayoutEngine;
 /// The number of layout worker threads can be configured in order of priority:
 /// 1. Explicit `worker_count` in configuration
 /// 2. `PETTY_WORKER_COUNT` environment variable
-/// 3. Auto-detect based on CPU count (`num_cpus - 1`, minimum 2)
+/// 3. Auto-detect: `physical_cores / 2 + 1` (benchmarks show ~half physical cores is optimal)
 ///
 /// # Example
 ///
@@ -43,18 +43,25 @@ use petty_core::layout::LayoutEngine;
 ///     .worker_count(8)
 ///     .build();
 /// ```
+/// Default render buffer size for pipelining.
+/// Benchmarks show smaller buffers (16) outperform larger ones.
+const DEFAULT_RENDER_BUFFER_SIZE: usize = 16;
+
 #[derive(Clone)]
 pub struct SinglePassStreamingRenderer {
     pdf_backend: PdfBackend,
     /// Optional override for worker count (None = auto-detect)
     worker_count: Option<usize>,
+    /// Buffer size for async PDF writing pipeline
+    render_buffer_size: usize,
 }
 
 impl SinglePassStreamingRenderer {
     /// Create a new renderer with the specified PDF backend.
     ///
     /// Uses default settings:
-    /// - Worker count: auto-detected from CPU count
+    /// - Worker count: auto-detected (~half physical cores + 1)
+    /// - Render buffer: 16 pages
     ///
     /// For more control, use [`with_config`](Self::with_config).
     ///
@@ -65,7 +72,7 @@ impl SinglePassStreamingRenderer {
     /// ```
     #[allow(dead_code)] // Public API - may be used by external consumers
     pub fn new(pdf_backend: PdfBackend) -> Self {
-        Self::with_config(pdf_backend, None)
+        Self::with_config(pdf_backend, None, DEFAULT_RENDER_BUFFER_SIZE)
     }
 
     /// Create a new renderer with explicit configuration.
@@ -74,34 +81,49 @@ impl SinglePassStreamingRenderer {
     ///
     /// * `pdf_backend` - The PDF backend to use for rendering
     /// * `worker_count` - Optional explicit worker count (None = auto-detect)
+    /// * `render_buffer_size` - Number of rendered pages to buffer before writing
+    ///
+    /// The render buffer enables async PDF writing by allowing rendering to
+    /// continue while I/O is in progress. Higher values trade memory for throughput.
     ///
     /// # Example
     ///
     /// ```ignore
     /// let renderer = SinglePassStreamingRenderer::with_config(
     ///     PdfBackend::Lopdf,
-    ///     Some(4),  // Use 4 workers
+    ///     Some(4),   // Use 4 workers
+    ///     128,       // Buffer 128 pages
     /// );
     /// ```
     pub fn with_config(
         pdf_backend: PdfBackend,
         worker_count: Option<usize>,
+        render_buffer_size: usize,
     ) -> Self {
         Self {
             pdf_backend,
             worker_count,
+            render_buffer_size: render_buffer_size.max(1),
         }
     }
 
     /// Determine the number of layout threads to use based on configuration.
     ///
     /// Priority: explicit config > env var > auto-detect
+    ///
+    /// Benchmarks show optimal throughput at approximately half the physical core count + 1.
+    /// More workers cause contention; fewer leave cores idle.
     fn get_worker_count(&self) -> usize {
         self.worker_count.unwrap_or_else(|| {
             std::env::var("PETTY_WORKER_COUNT")
                 .ok()
                 .and_then(|s| s.parse().ok())
-                .unwrap_or_else(|| num_cpus::get().saturating_sub(1).max(2))
+                .unwrap_or_else(|| {
+                    // Use ~half of physical cores + 1 for optimal throughput
+                    // Leaves cores available for consumer, producer, and I/O
+                    let physical = num_cpus::get_physical();
+                    (physical / 2 + 1).max(2)
+                })
         })
     }
 }
@@ -139,7 +161,23 @@ impl RenderingStrategy for SinglePassStreamingRenderer {
 
         // Use dynamic worker count configuration (no artificial cap)
         let num_layout_threads = self.get_worker_count();
-        let channel_buffer_size = num_layout_threads;
+
+        // Warn if worker count exceeds physical cores (hyperthreading overhead)
+        let physical_cores = num_cpus::get_physical();
+        if num_layout_threads > physical_cores {
+            warn!(
+                "Worker count ({}) exceeds physical cores ({}). \
+                 Performance may degrade due to hyperthreading overhead. \
+                 Consider using {} workers for optimal throughput.",
+                num_layout_threads, physical_cores, physical_cores.saturating_sub(1).max(2)
+            );
+        }
+
+        // Work channel: 2x worker count to reduce blocking contention
+        let work_channel_size = num_layout_threads * 2;
+        // Results channel: use configured render buffer size for buffering
+        // This allows workers to produce ahead of consumer processing
+        let results_channel_size = self.render_buffer_size;
 
         // Get max_in_flight_buffer from config, default to 2 if no adaptive facade
         let buffer_headroom = context.adaptive
@@ -150,12 +188,12 @@ impl RenderingStrategy for SinglePassStreamingRenderer {
         let semaphore = Arc::new(Semaphore::new(max_in_flight));
 
         info!(
-            "Starting Single-Pass Streaming pipeline with {} layout workers (Max in-flight: {}).",
-            num_layout_threads, max_in_flight
+            "Starting Single-Pass Streaming pipeline with {} layout workers (Max in-flight: {}, Buffer: {}).",
+            num_layout_threads, max_in_flight, results_channel_size
         );
 
-        let (tx1, rx1) = async_channel::bounded(channel_buffer_size);
-        let (tx2, rx2) = async_channel::bounded(channel_buffer_size);
+        let (tx1, rx1) = async_channel::bounded(work_channel_size);
+        let (tx2, rx2) = async_channel::bounded(results_channel_size);
 
         let producer = task::spawn(producer_task(sources.data_iterator, tx1, semaphore.clone()));
         let workers = spawn_workers(num_layout_threads, context, rx1.clone(), tx2.clone());
@@ -170,21 +208,20 @@ impl RenderingStrategy for SinglePassStreamingRenderer {
             )
         });
 
-        // Determine if we need adaptive scaling
+        // Determine if we need adaptive scaling (dynamic worker spawning)
         let has_adaptive_scaling = worker_pool.is_some();
 
-        // Use SenderGuard for RAII-based channel cleanup
-        // Workers already have clones, so dropping the guard won't affect them
-        let tx2_guard = SenderGuard::new(tx2);
-
+        // CRITICAL: Drop original tx2 BEFORE consumer starts!
+        // Workers already have clones. If we hold tx2, the channel won't close
+        // when workers finish, causing consumer to block forever.
+        //
+        // For adaptive mode: clone tx2 FIRST, then drop original
         let result_sender = if has_adaptive_scaling {
-            // For adaptive scaling, keep tx2 for the consumer to manage
-            // The guard ensures it gets dropped when this function exits
-            Some(tx2_guard.sender().clone())
+            let sender_for_consumer = tx2.clone();
+            drop(tx2);  // Drop original - workers + consumer clone remain
+            Some(sender_for_consumer)
         } else {
-            // Drop guards immediately to close channels
-            drop(tx2_guard);
-            drop(rx1);  // Drop rx1 directly since it's a receiver
+            drop(tx2);  // Drop original - only worker clones remain
             None
         };
 
@@ -278,7 +315,7 @@ mod tests {
         };
 
         let provider = PassThroughProvider;
-        let renderer = SinglePassStreamingRenderer::with_config(PdfBackend::Lopdf, None);
+        let renderer = SinglePassStreamingRenderer::with_config(PdfBackend::Lopdf, None, 16);
 
         let data = vec![json!({"name": "World"})];
         let iterator = data.into_iter();

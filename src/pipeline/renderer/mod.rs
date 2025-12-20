@@ -1,4 +1,15 @@
 // src/pipeline/renderer/mod.rs
+//!
+//! Document rendering strategies.
+//!
+//! This module provides two rendering approaches:
+//!
+//! - [`SinglePassStreamingRenderer`]: High-performance streaming renderer with
+//!   true pipeline parallelism. Used for simple templates without forward references.
+//!
+//! - [`ComposingRenderer`]: Two-pass renderer for templates with forward references
+//!   (ToC, page numbers, internal links). Renders body first, then composes with metadata.
+
 use crate::pipeline::api::PreparedDataSources;
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::renderer::composing::ComposingRenderer;
@@ -10,11 +21,15 @@ pub mod composing;
 pub mod streaming;
 
 /// An enum for static dispatch of `RenderingStrategy` implementations.
-/// This avoids the need for `Box<dyn ...>` which is not possible with the
-/// generic `render` method.
+///
+/// This enum provides two variants:
+/// - `Streaming`: High-performance single-pass rendering for simple templates
+/// - `Composing`: Two-pass rendering for templates with forward references
 #[derive(Clone)]
 pub enum Renderer {
+    /// Single-pass streaming renderer with pipeline parallelism.
     Streaming(SinglePassStreamingRenderer),
+    /// Two-pass composing renderer for templates with forward references.
     Composing(ComposingRenderer),
 }
 

@@ -1,6 +1,6 @@
 use crate::MapRenderError;
 use crate::pipeline::api::{Anchor, Document, Heading, Hyperlink, PreparedDataSources};
-use crate::pipeline::concurrency::{DynamicWorkerPool, SenderGuard, producer_task, run_in_order_streaming_consumer, spawn_workers};
+use crate::pipeline::concurrency::{DynamicWorkerPool, producer_task, run_in_order_streaming_consumer, spawn_workers};
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::provider::DataSourceProvider;
 use chrono::Utc;
@@ -61,7 +61,21 @@ impl DataSourceProvider for MetadataGeneratingProvider {
     {
         // Use dynamic worker count configuration (no artificial cap)
         let num_layout_threads = self.get_worker_count();
-        let channel_buffer_size = num_layout_threads;
+
+        // Warn if worker count exceeds physical cores (hyperthreading overhead)
+        let physical_cores = num_cpus::get_physical();
+        if num_layout_threads > physical_cores {
+            log::warn!(
+                "Worker count ({}) exceeds physical cores ({}). \
+                 Performance may degrade due to hyperthreading overhead. \
+                 Consider using {} workers for optimal throughput.",
+                num_layout_threads, physical_cores, physical_cores.saturating_sub(1).max(2)
+            );
+        }
+
+        // Use 2x worker count for channel buffers to reduce blocking contention
+        // when workers produce faster than consumer can process
+        let channel_buffer_size = num_layout_threads * 2;
 
         // Get max_in_flight_buffer from config, default to 2 if no adaptive facade
         let buffer_headroom = context.adaptive
@@ -92,21 +106,20 @@ impl DataSourceProvider for MetadataGeneratingProvider {
             )
         });
 
-        // Determine if we need adaptive scaling
+        // Determine if we need adaptive scaling (dynamic worker spawning)
         let has_adaptive_scaling = worker_pool.is_some();
 
-        // Use SenderGuard for RAII-based channel cleanup
-        // Workers already have clones, so dropping the guard won't affect them
-        let tx2_guard = SenderGuard::new(tx2);
-
+        // CRITICAL: Drop original tx2 BEFORE consumer starts!
+        // Workers already have clones. If we hold tx2, the channel won't close
+        // when workers finish, causing consumer to block forever.
+        //
+        // For adaptive mode: clone tx2 FIRST, then drop original
         let result_sender = if has_adaptive_scaling {
-            // For adaptive scaling, keep tx2 for the consumer to manage
-            // The guard ensures it gets dropped when this function exits
-            Some(tx2_guard.sender().clone())
+            let sender_for_consumer = tx2.clone();
+            drop(tx2);  // Drop original - workers + consumer clone remain
+            Some(sender_for_consumer)
         } else {
-            // Drop guards immediately to close channels
-            drop(tx2_guard);
-            drop(rx1);  // Drop rx1 directly since it's a receiver
+            drop(tx2);  // Drop original - only worker clones remain
             None
         };
 

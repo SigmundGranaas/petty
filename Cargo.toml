@@ -182,3 +182,7 @@ path = "examples/perf_toc.rs"
 [[example]]
 name = "json_css_dimensions"
 path = "examples/json_css_dimensions.rs"
+
+[[example]]
+name = "rayon_benchmark"
+path = "examples/rayon_benchmark.rs"

@@ -25,13 +25,13 @@
 //! pipeline.generate_to_file(data, "output.pdf")?;
 //! ```
 
-mod adapters;
+pub mod adapters;
 pub mod adaptive;
 pub mod api;
 mod builder;
 pub(crate) mod concurrency;
-mod config;
-pub(crate) mod context;
+pub mod config;
+pub mod context;
 mod orchestrator;
 pub mod provider;
 pub mod renderer;

@@ -41,6 +41,7 @@ struct Args {
     /// Workers will dynamically scale up/down based on queue depth
     #[arg(short, long)]
     adaptive: bool,
+
 }
 
 fn generate_perf_test_data_iter(
@@ -114,6 +115,7 @@ fn main() -> Result<(), PipelineError> {
     } else {
         println!("  Workers: auto (based on CPU count)");
     }
+    println!("  Renderer: Streaming");
     println!("  Metrics: {}", if args.metrics || args.adaptive { "enabled" } else { "disabled" });
     println!("  Adaptive scaling: {}", if args.adaptive { "enabled" } else { "disabled" });
 

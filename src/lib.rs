@@ -172,7 +172,7 @@ pub use types_base::{AnchorId, BoxConstraints, Color, IndexTerm, Rect, ResourceU
 pub use traits::{Executor, FontProvider, ResourceProvider};
 
 // Pipeline module (orchestration layer - stays in main crate)
-mod pipeline;
+pub mod pipeline;
 
 // Public API
 pub use crate::pipeline::{GenerationMode, PdfBackend, PipelineBuilder, ProcessingMode};
