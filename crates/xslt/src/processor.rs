@@ -26,7 +26,7 @@ pub struct XsltTemplate {
     entry_mode: Option<String>,
 }
 
-impl CompiledTemplate for XsltTemplate {
+impl petty_template_core::TemplateExecutor for XsltTemplate {
     fn execute(
         &self,
         data_source_str: &str,
@@ -54,7 +54,9 @@ impl CompiledTemplate for XsltTemplate {
         }
         Ok(builder.get_result())
     }
+}
 
+impl petty_template_core::TemplateMetadata for XsltTemplate {
     fn stylesheet(&self) -> Arc<Stylesheet> {
         Arc::clone(&self.compiled.stylesheet)
     }

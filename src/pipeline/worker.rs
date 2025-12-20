@@ -65,7 +65,7 @@ pub(super) fn finish_layout_and_resource_loading(
     let build_tree_start = Instant::now();
     let root_render_node = layout_engine
         .build_render_tree(&tree, &store)
-        .map_err(|e| PipelineError::Layout(e.to_string()))?;
+        .map_err(PipelineError::Layout)?;
     if build_tree_start.elapsed().as_millis() > 1 {
         trace!(
             "[WORKER-{}] Build Render Tree took {:?}",
@@ -76,14 +76,14 @@ pub(super) fn finish_layout_and_resource_loading(
 
     let iterator = layout_engine
         .paginate(stylesheet, root_render_node, &store)
-        .map_err(|e| PipelineError::Layout(e.to_string()))?;
+        .map_err(PipelineError::Layout)?;
 
     let mut pages = Vec::new();
     let mut defined_anchors = HashMap::new();
     let mut index_entries: HashMap<String, Vec<IndexEntry>> = HashMap::new();
 
     for page_res in iterator {
-        let page = page_res.map_err(|e| PipelineError::Layout(e.to_string()))?;
+        let page = page_res.map_err(PipelineError::Layout)?;
         pages.push(page.elements);
         defined_anchors.extend(page.anchors);
         for (k, v) in page.index_entries {

@@ -3,6 +3,8 @@
 
 use crate::layout::LayoutError;
 use crate::parser::ParseError;
+use petty_render_core::RenderError;
+use petty_template_core::TemplateError;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -15,6 +17,8 @@ pub enum ExecutionError {
     FunctionError { function: String, message: String },
     #[error("Type error: {0}")]
     TypeError(String),
+    #[error("Template error: {0}")]
+    Template(#[from] TemplateError),
 }
 
 /// The main error enum for all high-level operations within the engine.
@@ -29,33 +33,22 @@ pub enum PipelineError {
     #[error("Template parsing error: {0}")]
     Parse(#[from] ParseError),
     #[error("Rendering error: {0}")]
-    Render(String),
+    Render(#[from] RenderError),
     #[error("Layout error: {0}")]
-    Layout(String),
+    Layout(#[from] LayoutError),
     #[error("JSON serialization/deserialization error: {0}")]
     Json(#[from] serde_json::Error),
     #[error("Template execution error: {0}")]
-    TemplateExecution(String),
+    TemplateExecution(#[from] ExecutionError),
     #[error("PDF processing error: {0}")]
-    Pdf(String),
+    Pdf(#[from] lopdf::Error),
     #[error("Other pipeline error: {0}")]
     Other(String),
 }
 
-impl From<LayoutError> for PipelineError {
-    fn from(e: LayoutError) -> Self {
-        PipelineError::Layout(e.to_string())
-    }
-}
-
-impl From<ExecutionError> for PipelineError {
-    fn from(e: ExecutionError) -> Self {
-        PipelineError::TemplateExecution(e.to_string())
-    }
-}
-
-impl From<lopdf::Error> for PipelineError {
-    fn from(e: lopdf::Error) -> Self {
-        PipelineError::Pdf(e.to_string())
+// Add a direct conversion from TemplateError to PipelineError
+impl From<TemplateError> for PipelineError {
+    fn from(e: TemplateError) -> Self {
+        PipelineError::TemplateExecution(ExecutionError::Template(e))
     }
 }

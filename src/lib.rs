@@ -22,46 +22,107 @@
 //! pipeline.generate_to_file(vec![data], "output.pdf")?;
 //! ```
 
-// Re-export foundation crates
+// ============================================================================
+// Foundation Crates - Basic types and abstractions
+// ============================================================================
+
+/// Intermediate Document Format - IR nodes representing document structure
 pub use petty_idf as idf;
+/// Styling system - CSS-like styles and dimensions
 pub use petty_style as style;
+/// Core traits for extensibility (Executor, FontProvider, ResourceProvider)
 pub use petty_traits as traits;
+/// Base types (geometry, colors, document metadata)
 pub use petty_types as types_base;
 
-// Re-export algorithm crates
+// ============================================================================
+// Algorithm Crates - Data querying and layout
+// ============================================================================
+
+/// JSONPath implementation for data querying
 pub use petty_jpath as jpath;
+/// Layout engine - converts IR to positioned elements
 pub use petty_layout as layout;
+/// XPath 1.0 implementation for data querying
 pub use petty_xpath1 as xpath;
 
-// Re-export parser crates
+// ============================================================================
+// Template Crates - Template parsing and compilation
+// ============================================================================
+
+/// JSON template parser and executor
 pub use petty_json_template as json_template;
+/// Template core abstractions (shared by all template engines)
+pub use petty_template_core as template_core;
+/// XSLT 1.0 parser and executor
 pub use petty_xslt as xslt;
 
-// Re-export render crates
+// ============================================================================
+// Render Crates - PDF generation
+// ============================================================================
+
+/// PDF document composition utilities
 pub use petty_pdf_composer as pdf_composer;
+/// Core rendering abstractions and types
 pub use petty_render_core as render_core;
+/// lopdf-based PDF renderer implementation
 pub use petty_render_lopdf as render_lopdf;
 
-// Re-export core modules from petty-core
+// ============================================================================
+// Platform Crates - Platform-specific functionality
+// ============================================================================
+
+/// Execution strategies (single-threaded, multi-threaded, async)
+pub use petty_executor as executor;
+/// Resource loading and caching
+pub use petty_resource as resource;
+/// Data source abstractions
+pub use petty_source as source;
+/// Fluent builder API for programmatic document creation
+pub use petty_template_dsl as templating;
+
+// ============================================================================
+// Core Integration Layer
+// ============================================================================
+
+/// Integration layer combining all subsystems
 pub use petty_core as core_internal;
-pub use petty_core::PipelineError;
 pub use petty_core::core;
 pub use petty_core::error;
 pub use petty_core::parser;
 pub use petty_core::types;
-pub use petty_core::{ApiIndexEntry, LaidOutSequence, TocEntry};
 
-// Convenience re-exports from foundation crates
+// ============================================================================
+// High-Level API - Most commonly used types
+// ============================================================================
+
+// Errors
+pub use petty_core::PipelineError;
+
+// Document types
+pub use layout::LaidOutSequence;
+pub use petty_core::{ApiIndexEntry, TocEntry};
+
+// IR types
 pub use idf::{IRNode, InlineNode};
-pub use style::{Dimension, ElementStyle, FontStyle, FontWeight};
-pub use traits::{Executor, FontProvider, ResourceProvider};
-pub use types_base::{BoxConstraints, Color, Rect, Size};
 
-// Re-export platform crates
-pub use petty_executor as executor;
-pub use petty_resource as resource;
-pub use petty_source as source;
-pub use petty_template_dsl as templating;
+// Style types
+pub use style::{Dimension, ElementStyle, FontStyle, FontWeight};
+
+// Layout types
+pub use layout::{LayoutEngine, LayoutStore, Paginator, PositionedElement};
+
+// Template types
+pub use template_core::{
+    CompiledTemplate, DataSourceFormat, ExecutionConfig, TemplateExecutor, TemplateFeatures,
+    TemplateFlags, TemplateMetadata, TemplateParser,
+};
+
+// Geometry and colors
+pub use types_base::{AnchorId, BoxConstraints, Color, IndexTerm, Rect, ResourceUri, Size};
+
+// Traits for extensibility
+pub use traits::{Executor, FontProvider, ResourceProvider};
 
 // Pipeline module (orchestration layer - stays in main crate)
 mod pipeline;
@@ -76,6 +137,20 @@ pub(crate) trait MapRenderError<T> {
 
 impl<T> MapRenderError<T> for Result<T, render_core::RenderError> {
     fn map_render_err(self) -> Result<T, PipelineError> {
-        self.map_err(|e| PipelineError::Render(e.to_string()))
+        self.map_err(PipelineError::Render)
+    }
+}
+
+// Helper trait for ComposerError conversion
+pub(crate) trait MapComposerError<T> {
+    fn map_composer_err(self) -> Result<T, PipelineError>;
+}
+
+impl<T> MapComposerError<T> for Result<T, pdf_composer::ComposerError> {
+    fn map_composer_err(self) -> Result<T, PipelineError> {
+        self.map_err(|e| match e {
+            pdf_composer::ComposerError::Pdf(lopdf_err) => PipelineError::Pdf(lopdf_err),
+            pdf_composer::ComposerError::Other(msg) => PipelineError::Other(msg),
+        })
     }
 }

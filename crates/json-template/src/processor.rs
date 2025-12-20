@@ -24,7 +24,7 @@ pub struct CompiledJsonTemplate {
     resource_base_path: PathBuf,
 }
 
-impl CompiledTemplate for CompiledJsonTemplate {
+impl petty_template_core::TemplateExecutor for CompiledJsonTemplate {
     fn execute(
         &self,
         data_source: &str,
@@ -38,7 +38,9 @@ impl CompiledTemplate for CompiledJsonTemplate {
             .build_tree(&self.instructions, &data)
             .map_err(|e: crate::error::JsonTemplateError| -> TemplateError { e.into() })
     }
+}
 
+impl petty_template_core::TemplateMetadata for CompiledJsonTemplate {
     fn stylesheet(&self) -> Arc<Stylesheet> {
         Arc::clone(&self.stylesheet)
     }

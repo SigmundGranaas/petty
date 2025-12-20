@@ -249,7 +249,6 @@ mod tests {
                 text: "Rust".to_string(),
                 page_number: 4,
             }],
-            ..Default::default()
         };
 
         let doc = build_document_from_pass1_result(pass1_result);

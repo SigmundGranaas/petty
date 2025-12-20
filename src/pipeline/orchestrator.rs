@@ -122,7 +122,7 @@ mod tests {
 
         let mut final_writer = pipeline.generate(data.into_iter(), writer).await.unwrap();
 
-        let final_position = final_writer.seek(SeekFrom::Current(0)).unwrap();
+        let final_position = final_writer.stream_position().unwrap();
         assert!(final_position > 0, "The writer should contain data.");
 
         final_writer.seek(SeekFrom::Start(0)).unwrap();

@@ -92,7 +92,7 @@ impl fmt::Debug for TemplateFeatures {
 #[derive(Debug)]
 struct NopTemplate;
 
-impl CompiledTemplate for NopTemplate {
+impl TemplateExecutor for NopTemplate {
     fn execute(
         &self,
         _data_source: &str,
@@ -100,7 +100,9 @@ impl CompiledTemplate for NopTemplate {
     ) -> Result<Vec<IRNode>, TemplateError> {
         Ok(vec![])
     }
+}
 
+impl TemplateMetadata for NopTemplate {
     fn stylesheet(&self) -> Arc<Stylesheet> {
         Arc::new(Stylesheet::default())
     }
@@ -165,15 +167,24 @@ impl TemplateFeatures {
     }
 }
 
-/// A reusable, data-agnostic, compiled template artifact.
-pub trait CompiledTemplate: Send + Sync {
+/// Core template execution capability.
+///
+/// This trait represents the fundamental ability to execute a template
+/// against input data to produce an IRNode tree.
+pub trait TemplateExecutor: Send + Sync {
     /// Executes the template against a data context to produce a self-contained IRNode tree.
     fn execute(
         &self,
         data_source: &str,
         config: ExecutionConfig,
     ) -> Result<Vec<IRNode>, TemplateError>;
+}
 
+/// Metadata about a compiled template.
+///
+/// This trait provides access to template configuration and features
+/// without executing the template.
+pub trait TemplateMetadata: Send + Sync {
     /// Returns a shared pointer to the stylesheet.
     fn stylesheet(&self) -> Arc<Stylesheet>;
 
@@ -183,6 +194,16 @@ pub trait CompiledTemplate: Send + Sync {
     /// Returns a summary of features detected in this specific template fragment.
     fn features(&self) -> TemplateFlags;
 }
+
+/// A reusable, data-agnostic, compiled template artifact.
+///
+/// This is a convenience trait that combines execution and metadata capabilities.
+/// Any type that implements both `TemplateExecutor` and `TemplateMetadata`
+/// automatically implements `CompiledTemplate`.
+pub trait CompiledTemplate: TemplateExecutor + TemplateMetadata {}
+
+/// Blanket implementation: any type implementing both traits gets CompiledTemplate for free.
+impl<T: TemplateExecutor + TemplateMetadata> CompiledTemplate for T {}
 
 /// A parser responsible for compiling a template string into a `CompiledTemplate`.
 pub trait TemplateParser {
