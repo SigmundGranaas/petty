@@ -1,9 +1,11 @@
 {
   "_stylesheet": {
-    "page": {
-      "size": "Letter",
-      "margins": "20mm",
-      "footer_text": "{{companyName}} - {{reportTitle}} | Page {{page_num}}"
+    "defaultPageMaster": "default",
+    "pageMasters": {
+      "default": {
+        "size": "Letter",
+        "margins": "20mm"
+      }
     },
     "styles": {
       "header": { "fontSize": "24pt", "color": "#2a4d69" },
@@ -39,37 +41,20 @@
             {
               "each": "tables",
               "template": {
-                "type": "Table",
-                "columns": [
-                  { "width": "75%" },
-                  { "width": "25%" }
-                ],
-                "body": {
-                  "rows": [
-                    {
-                      "each": "data",
-                      "template": {
-                        "type": "TableRow",
-                        "children": [
-                          {
-                            "type": "TableCell",
-                            "styleNames": ["td"],
-                            "children": [{ "type": "Paragraph", "children": [{ "type": "Text", "content": "{{label}}" }] }]
-                          },
-                          {
-                            "type": "TableCell",
-                            "styleNames": [
-                              "td", "td-numeric",
-                              "{{#if (eq type 'subtotal')}}td-subtotal{{/if}}",
-                              "{{#if (eq type 'total')}}td-total{{/if}}"
-                            ],
-                            "children": [{ "type": "Paragraph", "children": [{ "type": "Text", "content": "{{formatCurrency value}}" }] }]
-                          }
-                        ]
-                      }
+                "type": "Block",
+                "children": [
+                  {
+                    "each": "data",
+                    "template": {
+                      "type": "Paragraph",
+                      "styleNames": ["p"],
+                      "children": [
+                        { "type": "Text", "content": "{{label}}: " },
+                        { "type": "Text", "content": "{{value}}" }
+                      ]
                     }
-                  ]
-                }
+                  }
+                ]
               }
             }
           ]

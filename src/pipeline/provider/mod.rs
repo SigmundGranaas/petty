@@ -1,6 +1,6 @@
-use crate::error::PipelineError;
 use crate::pipeline::api::PreparedDataSources;
 use crate::pipeline::context::PipelineContext;
+use petty_core::error::PipelineError;
 use serde_json::Value;
 
 pub mod metadata;
@@ -19,9 +19,9 @@ pub enum Provider {
 }
 
 impl DataSourceProvider for Provider {
-    fn provide<'a, I>(
+    fn provide<I>(
         &self,
-        context: &'a PipelineContext,
+        context: &PipelineContext,
         data_iterator: I,
     ) -> Result<PreparedDataSources, PipelineError>
     where
@@ -42,9 +42,9 @@ impl DataSourceProvider for Provider {
 /// temporary file for the main body content.
 pub trait DataSourceProvider {
     /// Prepares the data sources for rendering.
-    fn provide<'a, I>(
+    fn provide<I>(
         &self,
-        context: &'a PipelineContext,
+        context: &PipelineContext,
         data_iterator: I,
     ) -> Result<PreparedDataSources, PipelineError>
     where

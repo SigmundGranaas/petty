@@ -2,51 +2,62 @@
   "documentTitle": "Annual Company Report 2023",
   "sections": [
     {
+      "id": "section-1",
       "title": "1. Introduction",
       "content": "This document provides a comprehensive overview of the company's performance, strategic initiatives, and financial results for the fiscal year 2023. It outlines our achievements, challenges, and future outlook.",
       "subsections": [
         {
+          "id": "section-1-1",
           "title": "1.1. Mission Statement",
           "content": "Our mission is to innovate and lead in our industry, providing exceptional value to our customers and stakeholders through sustainable and ethical practices."
         },
         {
+          "id": "section-1-2",
           "title": "1.2. Executive Summary",
           "content": "The fiscal year 2023 was a period of significant growth, marked by a 15% increase in revenue and the successful launch of three new product lines. We expanded our market share in key regions and invested heavily in research and development to secure our future competitive edge."
         }
       ]
     },
     {
+      "id": "section-2",
       "title": "2. Financial Performance",
       "content": "This section details the financial health of the company, including revenue, profit margins, and a breakdown of operational costs.",
       "subsections": [
         {
+          "id": "section-2-1",
           "title": "2.1. Revenue Analysis",
           "content": "Total revenue for 2023 reached $1.2 billion, a significant increase from the previous year. This growth was primarily driven by strong performance in the North American and European markets."
         },
         {
+          "id": "section-2-2",
           "title": "2.2. Profitability",
           "content": "Net profit margin improved to 22%, up from 19% in the previous year, demonstrating effective cost management and operational efficiency improvements across all departments."
         }
       ]
     },
     {
+      "id": "section-3",
       "title": "3. Strategic Initiatives and Outlook",
       "content": "Looking ahead, our strategy will focus on three key pillars: digital transformation, sustainability, and market expansion into emerging economies. We are committed to maintaining our growth trajectory while delivering long-term value.",
       "subsections": []
     },
     {
+      "id": "section-4",
       "title": "4. Market Analysis",
       "content": "A thorough analysis of the market landscape shows emerging trends in consumer behavior and technological adoption. Our competitive positioning remains strong, but we must adapt to new challenges.",
       "subsections": [
         {
+          "id": "section-4-1",
           "title": "4.1. Competitive Landscape",
           "content": "The market is becoming increasingly crowded, with new entrants leveraging disruptive technologies. Our primary competitors have increased their R&D spending by an average of 10%."
         },
         {
+          "id": "section-4-2",
           "title": "4.2. Consumer Trends",
           "content": "There is a growing demand for personalized services and sustainable products. Consumers are more informed and value transparency and corporate social responsibility."
         },
         {
+          "id": "section-4-3",
           "title": "4.3. Regulatory Environment",
           "content": "New data privacy regulations are expected to be enacted in the next fiscal year, which will require significant compliance efforts across the industry. We have already initiated a task force to address these changes."
         }

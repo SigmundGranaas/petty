@@ -1,8 +1,8 @@
 // src/pipeline/orchestrator.rs
-use crate::error::PipelineError;
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::provider::{DataSourceProvider, Provider};
 use crate::pipeline::renderer::{Renderer, RenderingStrategy};
+use petty_core::error::PipelineError;
 use serde_json::Value;
 use std::fs;
 use std::io;
@@ -27,7 +27,11 @@ impl DocumentPipeline {
         renderer: Renderer,
         context: Arc<PipelineContext>,
     ) -> Self {
-        Self { provider, renderer, context }
+        Self {
+            provider,
+            renderer,
+            context,
+        }
     }
 
     /// Asynchronously generates a document from any data source iterator.
@@ -50,17 +54,13 @@ impl DocumentPipeline {
             let sources = provider.provide(&context_clone, data_iterator)?;
             renderer.render(&context_clone, sources, writer)
         })
-            .await
-            .unwrap() // Propagate panics from the spawned task
+        .await
+        .unwrap() // Propagate panics from the spawned task
     }
 
     /// A convenience method to generate a document to a file path from a dataset in memory
     /// or a lazy iterator.
-    pub fn generate_to_file<P, I>(
-        &self,
-        data: I,
-        path: P,
-    ) -> Result<(), PipelineError>
+    pub fn generate_to_file<P, I>(&self, data: I, path: P) -> Result<(), PipelineError>
     where
         P: AsRef<Path>,
         I: IntoIterator<Item = Value> + Send + 'static,
@@ -82,7 +82,6 @@ impl DocumentPipeline {
         Ok(())
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -131,8 +130,14 @@ mod tests {
         final_writer.read_to_end(&mut buffer).unwrap();
 
         let pdf_content = String::from_utf8_lossy(&buffer);
-        assert!(pdf_content.starts_with("%PDF-1.7"), "Output should be a PDF file.");
-        assert!(pdf_content.contains("Hello World"), "Output should contain rendered text.");
+        assert!(
+            pdf_content.starts_with("%PDF-1.7"),
+            "Output should be a PDF file."
+        );
+        assert!(
+            pdf_content.contains("Hello World"),
+            "Output should contain rendered text."
+        );
     }
 
     #[tokio::test]
@@ -158,10 +163,13 @@ mod tests {
         let template_str = serde_json::to_string(&template_json).unwrap();
 
         let pipeline = PipelineBuilder::new()
-            .with_template_source(&template_str, "json").unwrap()
+            .with_template_source(&template_str, "json")
+            .unwrap()
             // Auto should detect the ToC and select the metadata pipeline
             .with_generation_mode(GenerationMode::Auto)
-            .with_pdf_backend(PdfBackend::Lopdf).build().unwrap();
+            .with_pdf_backend(PdfBackend::Lopdf)
+            .build()
+            .unwrap();
 
         let data = vec![json!({})];
         let writer = Cursor::new(Vec::new());
@@ -172,15 +180,23 @@ mod tests {
         let doc = lopdf::Document::load_mem(&pdf_bytes).expect("Failed to parse generated PDF");
 
         // 1. Check for Outlines (from ToC entries)
-        let catalog = doc.get_dictionary(doc.trailer.get(b"Root").unwrap().as_reference().unwrap()).unwrap();
-        assert!(catalog.has(b"Outlines"), "PDF should have an Outlines dictionary for the bookmarks.");
+        let catalog = doc
+            .get_dictionary(doc.trailer.get(b"Root").unwrap().as_reference().unwrap())
+            .unwrap();
+        assert!(
+            catalog.has(b"Outlines"),
+            "PDF should have an Outlines dictionary for the bookmarks."
+        );
 
         // 2. Check for Link Annotation
         let pages = doc.get_pages();
         assert_eq!(pages.len(), 2);
         let page1_id = pages.get(&1).unwrap();
         let page1_dict = doc.get_object(*page1_id).unwrap().as_dict().unwrap();
-        assert!(page1_dict.has(b"Annots"), "Page 1 should have an Annots array for the hyperlink.");
+        assert!(
+            page1_dict.has(b"Annots"),
+            "Page 1 should have an Annots array for the hyperlink."
+        );
     }
 
     #[test]
@@ -196,8 +212,10 @@ mod tests {
         let template_str = serde_json::to_string(&template_json).unwrap();
 
         let pipeline = PipelineBuilder::new()
-            .with_template_source(&template_str, "json").unwrap()
-            .build().unwrap();
+            .with_template_source(&template_str, "json")
+            .unwrap()
+            .build()
+            .unwrap();
 
         let data = vec![json!({})];
         pipeline.generate_to_file(data, &output_path).unwrap();

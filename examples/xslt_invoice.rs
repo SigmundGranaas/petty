@@ -1,12 +1,13 @@
-// FILE: examples/xslt_invoice.rs
 use petty::{PipelineBuilder, PipelineError};
-use serde_json::{from_str, Value};
+use serde_json::{Value, from_str};
 use std::env;
 use std::fs;
 
 fn main() -> Result<(), PipelineError> {
     if env::var("RUST_LOG").is_err() {
-        unsafe { env::set_var("RUST_LOG", "petty=info"); }
+        unsafe {
+            env::set_var("RUST_LOG", "petty=info");
+        }
     }
     env_logger::init();
 

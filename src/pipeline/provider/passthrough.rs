@@ -1,16 +1,16 @@
-use crate::error::PipelineError;
 use crate::pipeline::api::PreparedDataSources;
-use crate::pipeline::provider::DataSourceProvider;
-use serde_json::Value;
 use crate::pipeline::context::PipelineContext;
+use crate::pipeline::provider::DataSourceProvider;
+use petty_core::error::PipelineError;
+use serde_json::Value;
 
 #[derive(Clone)]
 pub struct PassThroughProvider;
 
 impl DataSourceProvider for PassThroughProvider {
-    fn provide<'a, I>(
+    fn provide<I>(
         &self,
-        _context: &'a PipelineContext,
+        _context: &PipelineContext,
         data_iterator: I,
     ) -> Result<PreparedDataSources, PipelineError>
     where
@@ -27,9 +27,10 @@ impl DataSourceProvider for PassThroughProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::layout::fonts::SharedFontLibrary;
-    use crate::parser::json::processor::JsonParser;
-    use crate::parser::processor::TemplateParser;
+    use crate::pipeline::adapters::TemplateParserAdapter;
+    use petty_core::layout::fonts::SharedFontLibrary;
+    use petty_core::parser::processor::TemplateParser;
+    use petty_json_template::JsonParser;
     use serde_json::json;
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -37,7 +38,7 @@ mod tests {
 
     #[test]
     fn pass_through_provider_works() {
-        let parser = JsonParser;
+        let parser = TemplateParserAdapter::new(JsonParser);
         let template_str = r#"
         {
             "_stylesheet": {
@@ -52,6 +53,7 @@ mod tests {
             compiled_template: features.main_template,
             role_templates: Arc::new(HashMap::new()),
             font_library: Arc::new(SharedFontLibrary::new()),
+            resource_provider: Arc::new(petty_resource::InMemoryResourceProvider::new()),
             cache_config: Default::default(),
         };
 

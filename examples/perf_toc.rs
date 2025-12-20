@@ -1,15 +1,32 @@
-use petty::{ PdfBackend, PipelineBuilder, PipelineError};
+use petty::{PdfBackend, PipelineBuilder, PipelineError};
 use rand::rngs::StdRng;
 use rand::{Rng, SeedableRng};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::env;
 use std::time::Instant;
 
 /// A simple Lorem Ipsum generator for content.
 fn lorem_ipsum(rng: &mut StdRng, num_paragraphs: usize) -> String {
     const WORDS: &[&str] = &[
-        "lorem", "ipsum", "dolor", "sit", "amet", "consectetur", "adipiscing", "elit", "sed",
-        "do", "eiusmod", "tempor", "incididunt", "ut", "labore", "et", "dolore", "magna", "aliqua",
+        "lorem",
+        "ipsum",
+        "dolor",
+        "sit",
+        "amet",
+        "consectetur",
+        "adipiscing",
+        "elit",
+        "sed",
+        "do",
+        "eiusmod",
+        "tempor",
+        "incididunt",
+        "ut",
+        "labore",
+        "et",
+        "dolore",
+        "magna",
+        "aliqua",
     ];
     let mut paragraphs = Vec::new();
     for _ in 0..num_paragraphs {
@@ -45,10 +62,7 @@ fn lorem_ipsum(rng: &mut StdRng, num_paragraphs: usize) -> String {
 }
 
 /// Generates a structured document with sections and subsections.
-fn generate_structured_data(
-    num_sections: usize,
-    subsections_per_section: usize,
-) -> Vec<Value> {
+fn generate_structured_data(num_sections: usize, subsections_per_section: usize) -> Vec<Value> {
     println!(
         "Generating {} sections, each with up to {} subsections...",
         num_sections, subsections_per_section
@@ -76,17 +90,23 @@ fn generate_structured_data(
         }));
     }
 
-    vec![json!({ "documentTitle": "Performance Test with Table of Contents", "sections": sections })]
+    vec![
+        json!({ "documentTitle": "Performance Test with Table of Contents", "sections": sections }),
+    ]
 }
 
 fn main() -> Result<(), PipelineError> {
     if env::var("RUST_LOG").is_err() {
-        unsafe { env::set_var("RUST_LOG", "petty=info"); }
+        unsafe {
+            env::set_var("RUST_LOG", "petty=info");
+        }
     }
     env_logger::init();
 
     if cfg!(debug_assertions) {
-        println!("\nWARNING: Running in debug build. For accurate results, run with `--release`.\n");
+        println!(
+            "\nWARNING: Running in debug build. For accurate results, run with `--release`.\n"
+        );
     }
     println!("Running Large Table of Contents Performance Test...");
 
@@ -117,7 +137,10 @@ fn main() -> Result<(), PipelineError> {
     println!("✓ Pipeline built with XSLT engine.");
 
     let output_path = "performance_toc_output.pdf";
-    println!("Starting PDF generation for {} headings to {}...", total_headings, output_path);
+    println!(
+        "Starting PDF generation for {} headings to {}...",
+        total_headings, output_path
+    );
     let start_time = Instant::now();
 
     pipeline.generate_to_file(data, output_path)?;

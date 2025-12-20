@@ -1,5 +1,5 @@
 use petty::{PipelineBuilder, PipelineError};
-use serde_json::{from_str, Value};
+use serde_json::{Value, from_str};
 use std::env;
 use std::fs;
 use std::thread;

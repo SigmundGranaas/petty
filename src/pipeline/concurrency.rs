@@ -1,18 +1,17 @@
 // src/pipeline/concurrency.rs
 
-use crate::core::layout::LayoutEngine;
-use crate::error::PipelineError;
-use crate::parser::processor::{DataSourceFormat, ExecutionConfig};
-use crate::pipeline::api::IndexEntry;
+use crate::MapRenderError;
 use crate::pipeline::context::PipelineContext;
-use crate::pipeline::worker::{finish_layout_and_resource_loading, LaidOutSequence};
-use crate::render::lopdf_helpers;
-use crate::render::lopdf_renderer::LopdfRenderer;
-use crate::render::renderer::{HyperlinkLocation, Pass1Result, ResolvedAnchor};
-use crate::render::DocumentRenderer;
-use async_channel;
+use crate::pipeline::worker::{LaidOutSequence, finish_layout_and_resource_loading};
 use log::{debug, info, warn};
 use lopdf::dictionary;
+use petty_core::ApiIndexEntry;
+use petty_core::error::PipelineError;
+use petty_layout::LayoutEngine;
+use petty_render_core::DocumentRenderer;
+use petty_render_core::{HyperlinkLocation, Pass1Result, ResolvedAnchor};
+use petty_render_lopdf::LopdfRenderer;
+use petty_template_core::{DataSourceFormat, ExecutionConfig};
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
 use std::io::{Seek, Write};
@@ -64,9 +63,13 @@ pub(crate) fn spawn_workers(
         let current_font_lib = context.font_library.clone();
 
         let template_clone = Arc::clone(&context.compiled_template);
+        let resource_provider_clone = Arc::clone(&context.resource_provider);
 
         let worker_handle = task::spawn_blocking(move || {
-            info!("[WORKER-{}] Started with shared font library.", worker_id);
+            info!(
+                "[WORKER-{}] Started with shared font library and resource provider.",
+                worker_id
+            );
 
             let mut layout_engine = LayoutEngine::new(&current_font_lib, cache_config);
 
@@ -85,7 +88,7 @@ pub(crate) fn spawn_workers(
                                     worker_id,
                                     ir_nodes,
                                     context_arc.clone(),
-                                    template_clone.resource_base_path(),
+                                    resource_provider_clone.as_ref(),
                                     &mut layout_engine,
                                     &template_clone.stylesheet(),
                                     false,
@@ -95,7 +98,12 @@ pub(crate) fn spawn_workers(
                         if let Ok(seq) = &layout_result {
                             let size = seq.rough_heap_size();
                             if size > 2 * 1024 * 1024 {
-                                warn!("[WORKER-{}] LARGE ITEM #{}: ~{:.2} MB", worker_id, index, size as f64 / 1_000_000.0);
+                                warn!(
+                                    "[WORKER-{}] LARGE ITEM #{}: ~{:.2} MB",
+                                    worker_id,
+                                    index,
+                                    size as f64 / 1_000_000.0
+                                );
                             }
                         }
 
@@ -131,17 +139,14 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
     let mut pass1_result = Pass1Result::default();
     let mut global_page_offset = 0;
 
-    let font_map: HashMap<String, String>;
-    {
-        // Using exposed font_db() instead of font_system()
-        let db_lock = renderer.layout_engine.font_db();
-        let db = db_lock.read().unwrap();
-        font_map = db
-            .faces()
-            .enumerate()
-            .map(|(i, face)| (face.post_script_name.clone(), format!("F{}", i + 1)))
-            .collect();
-    }
+    // Use registered_fonts() to get all fonts from both fontdb and FontProvider
+    let font_map: HashMap<String, String> = renderer
+        .layout_engine
+        .registered_fonts()
+        .iter()
+        .enumerate()
+        .map(|(i, font_info)| (font_info.postscript_name.clone(), format!("F{}", i + 1)))
+        .collect();
 
     let mut last_processed_time = Instant::now();
 
@@ -154,7 +159,11 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
         buffer.insert(index, result);
 
         if buffer.len() > 20 {
-            debug!("[CONSUMER] Buffer growing: {} items waiting. Looking for #{}.", buffer.len(), next_sequence_idx);
+            debug!(
+                "[CONSUMER] Buffer growing: {} items waiting. Looking for #{}.",
+                buffer.len(),
+                next_sequence_idx
+            );
         }
 
         while let Some(res) = buffer.remove(&next_sequence_idx) {
@@ -174,7 +183,7 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
                 }
                 for (term, locations) in &seq.index_entries {
                     for loc in locations {
-                        pass1_result.index_entries.push(IndexEntry {
+                        pass1_result.index_entries.push(ApiIndexEntry {
                             text: term.clone(),
                             page_number: global_page_offset + loc.local_page_index + 1,
                         });
@@ -183,13 +192,21 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
                 for (local_page_idx, page_elements) in seq.pages.iter().enumerate() {
                     let current_global_page_idx = global_page_offset + local_page_idx + 1;
                     for el in page_elements {
-                        use crate::core::layout::LayoutElement;
+                        use petty_layout::LayoutElement;
                         let href = match &el.element {
                             LayoutElement::Text(t) => t.href.as_ref(),
                             _ => None,
                         };
                         if let Some(href_str) = href {
+                            log::debug!(
+                                "[HYPERLINK DETECTION] Found text with href: '{}'",
+                                href_str
+                            );
                             if let Some(target_id) = href_str.strip_prefix('#') {
+                                log::debug!(
+                                    "[HYPERLINK DETECTION] Adding internal link to target: '{}'",
+                                    target_id
+                                );
                                 pass1_result.hyperlink_locations.push(HyperlinkLocation {
                                     global_page_index: current_global_page_idx,
                                     rect: [el.x, el.y, el.x + el.width, el.y + el.height],
@@ -201,25 +218,26 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
                 }
                 pass1_result.total_pages += seq.pages.len();
                 global_page_offset += seq.pages.len();
-            } else {
-                if !seq.toc_entries.is_empty() || !seq.index_entries.is_empty() {
-                    return Err(PipelineError::Config(
-                        "Template uses advanced features (ToC/Index) which require Auto (metadata) mode."
-                            .into(),
-                    ));
-                }
+            } else if !seq.toc_entries.is_empty() || !seq.index_entries.is_empty() {
+                return Err(PipelineError::Config(
+                    "Template uses advanced features (ToC/Index) which require Auto (metadata) mode."
+                        .into(),
+                ));
             }
 
-            renderer.add_resources(&seq.resources)?;
+            renderer.add_resources(&seq.resources).map_render_err()?;
             for page_elements in seq.pages {
-                let content = lopdf_helpers::render_elements_to_content(
+                let content = petty_render_lopdf::render_elements_to_content(
                     page_elements,
                     &font_map,
                     page_width,
                     page_height,
-                )?;
-                let writer = renderer.writer.as_mut().unwrap();
-                let content_id = writer.write_content_stream(content)?;
+                )
+                .map_render_err()?;
+                let writer = renderer.writer_mut().unwrap();
+                let content_id = writer
+                    .write_content_stream(content)
+                    .map_err(|e| PipelineError::Render(e.to_string()))?;
 
                 let page_dict = dictionary! {
                     "Type" => "Page",

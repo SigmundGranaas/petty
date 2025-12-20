@@ -1,0 +1,10 @@
+[package]
+name = "petty-pdf-composer"
+version = "0.1.0"
+edition = "2024"
+description = "PDF composition utilities - merge, overlay, deep copy"
+
+[dependencies]
+lopdf = "0.36.0"
+thiserror = "2.0.12"
+log = "0.4"

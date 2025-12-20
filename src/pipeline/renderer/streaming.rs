@@ -1,21 +1,20 @@
-use crate::error::PipelineError;
+use crate::MapRenderError;
 use crate::pipeline::api::PreparedDataSources;
+use crate::pipeline::concurrency::{producer_task, run_in_order_streaming_consumer, spawn_workers};
 use crate::pipeline::config::PdfBackend;
-use crate::pipeline::concurrency::{
-    producer_task, run_in_order_streaming_consumer, spawn_workers,
-};
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::renderer::RenderingStrategy;
-use crate::render::lopdf_renderer::LopdfRenderer;
-use crate::render::DocumentRenderer;
 use log::{info, warn};
+use petty_core::error::PipelineError;
+use petty_render_core::DocumentRenderer;
+use petty_render_lopdf::LopdfRenderer;
 use std::io::{Seek, Write};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 use tokio::task;
 
 // Need to import LayoutEngine for the consumer stage.
-use crate::core::layout::LayoutEngine;
+use petty_core::layout::LayoutEngine;
 
 /// A rendering strategy that streams the document directly to the output.
 #[derive(Clone)]
@@ -40,13 +39,20 @@ impl RenderingStrategy for SinglePassStreamingRenderer {
         W: Write + Seek + Send + 'static,
     {
         if sources.document.is_some() {
-            warn!("SinglePassStreamingRenderer received Document metadata but cannot use it. The metadata will be ignored.");
+            warn!(
+                "SinglePassStreamingRenderer received Document metadata but cannot use it. The metadata will be ignored."
+            );
         }
         if sources.body_artifact.is_some() {
-            warn!("SinglePassStreamingRenderer received a pre-rendered body artifact but cannot use it. The artifact will be ignored.");
+            warn!(
+                "SinglePassStreamingRenderer received a pre-rendered body artifact but cannot use it. The artifact will be ignored."
+            );
         }
 
-        if !matches!(self.pdf_backend, PdfBackend::Lopdf | PdfBackend::LopdfParallel) {
+        if !matches!(
+            self.pdf_backend,
+            PdfBackend::Lopdf | PdfBackend::LopdfParallel
+        ) {
             return Err(PipelineError::Config(
                 "SinglePassStreamingRenderer only supports the 'Lopdf' or 'LopdfParallel' backend."
                     .into(),
@@ -76,11 +82,15 @@ impl RenderingStrategy for SinglePassStreamingRenderer {
         let final_stylesheet = context.compiled_template.stylesheet();
 
         // Pass Arc<Stylesheet> correctly
-        let mut renderer = LopdfRenderer::new(final_layout_engine, final_stylesheet.clone())?;
-        renderer.begin_document(writer)?;
+        let mut renderer =
+            LopdfRenderer::new(final_layout_engine, final_stylesheet.clone()).map_render_err()?;
+        renderer.begin_document(writer).map_render_err()?;
 
-        let (page_width, page_height) =
-            renderer.stylesheet.get_default_page_layout().size.dimensions_pt();
+        let (page_width, page_height) = renderer
+            .stylesheet
+            .get_default_page_layout()
+            .size
+            .dimensions_pt();
 
         let (all_page_ids, _) = run_in_order_streaming_consumer(
             rx2,
@@ -88,10 +98,10 @@ impl RenderingStrategy for SinglePassStreamingRenderer {
             page_width,
             page_height,
             false,
-            semaphore
+            semaphore,
         )?;
 
-        let writer = Box::new(renderer).finish(all_page_ids)?;
+        let writer = Box::new(renderer).finish(all_page_ids).map_render_err()?;
 
         producer.abort();
         for worker in workers {
@@ -105,11 +115,12 @@ impl RenderingStrategy for SinglePassStreamingRenderer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::layout::fonts::SharedFontLibrary;
-    use crate::parser::json::processor::JsonParser;
-    use crate::parser::processor::TemplateParser;
-    use crate::pipeline::provider::passthrough::PassThroughProvider;
+    use crate::pipeline::adapters::TemplateParserAdapter;
     use crate::pipeline::provider::DataSourceProvider;
+    use crate::pipeline::provider::passthrough::PassThroughProvider;
+    use petty_core::layout::fonts::SharedFontLibrary;
+    use petty_core::parser::processor::TemplateParser;
+    use petty_json_template::JsonParser;
     use serde_json::json;
     use std::io::{Cursor, Read, SeekFrom};
     use std::path::PathBuf;
@@ -128,7 +139,7 @@ mod tests {
             }
         });
         let template_str = serde_json::to_string(&template_json).unwrap();
-        let parser = JsonParser;
+        let parser = TemplateParserAdapter::new(JsonParser);
         let features = parser.parse(&template_str, PathBuf::new()).unwrap();
         let library = SharedFontLibrary::new();
         library.load_fallback_font();
@@ -137,6 +148,7 @@ mod tests {
             compiled_template: features.main_template,
             role_templates: Arc::new(features.role_templates),
             font_library: Arc::new(library),
+            resource_provider: Arc::new(petty_resource::InMemoryResourceProvider::new()),
             cache_config: Default::default(),
         };
 
@@ -152,9 +164,9 @@ mod tests {
         let mut final_writer = tokio::task::spawn_blocking(move || {
             renderer.render(&context, prepared_sources, writer)
         })
-            .await
-            .unwrap()
-            .unwrap();
+        .await
+        .unwrap()
+        .unwrap();
 
         let final_position = final_writer.seek(SeekFrom::Current(0)).unwrap();
         assert!(final_position > 0, "The writer should contain data.");
@@ -164,6 +176,9 @@ mod tests {
         final_writer.read_to_end(&mut buffer).unwrap();
 
         let pdf_content = String::from_utf8_lossy(&buffer);
-        assert!(pdf_content.starts_with("%PDF-1.7"), "Output should be a PDF file.");
+        assert!(
+            pdf_content.starts_with("%PDF-1.7"),
+            "Output should be a PDF file."
+        );
     }
 }

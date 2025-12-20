@@ -1,16 +1,15 @@
-use crate::core::layout::LayoutEngine;
-use crate::error::PipelineError;
+use crate::MapRenderError;
 use crate::pipeline::api::{Anchor, Document, Heading, Hyperlink, PreparedDataSources};
-use crate::pipeline::concurrency::{
-    producer_task, run_in_order_streaming_consumer, spawn_workers,
-};
+use crate::pipeline::concurrency::{producer_task, run_in_order_streaming_consumer, spawn_workers};
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::provider::DataSourceProvider;
-use crate::render::lopdf_renderer::LopdfRenderer;
-use crate::render::renderer::Pass1Result;
-use crate::render::DocumentRenderer;
 use chrono::Utc;
 use log::info;
+use petty_core::error::PipelineError;
+use petty_core::layout::LayoutEngine;
+use petty_render_core::DocumentRenderer;
+use petty_render_core::Pass1Result;
+use petty_render_lopdf::LopdfRenderer;
 use serde_json::Value;
 use std::io::{BufWriter, Seek, SeekFrom};
 use std::sync::Arc;
@@ -22,9 +21,9 @@ use tokio::task;
 pub struct MetadataGeneratingProvider;
 
 impl DataSourceProvider for MetadataGeneratingProvider {
-    fn provide<'a, I>(
+    fn provide<I>(
         &self,
-        context: &'a PipelineContext,
+        context: &PipelineContext,
         data_iterator: I,
     ) -> Result<PreparedDataSources, PipelineError>
     where
@@ -47,23 +46,48 @@ impl DataSourceProvider for MetadataGeneratingProvider {
         let producer = task::spawn(producer_task(data_iterator, tx1, semaphore.clone()));
         let workers = spawn_workers(num_layout_threads, context, rx1, tx2);
 
-        // --- Analysis Pass (Render to Tempfile via In-Order Streaming Consumer) ---
-        info!("[METADATA] Starting analysis pass, streaming render to temporary file.");
+        // --- Analysis Pass (Render to Temporary Storage via In-Order Streaming Consumer) ---
+        #[cfg(feature = "tempfile")]
+        {
+            info!("[METADATA] Starting analysis pass, streaming render to tempfile (native).");
+        }
+        #[cfg(not(feature = "tempfile"))]
+        {
+            info!(
+                "[METADATA] Starting analysis pass, streaming render to in-memory buffer (WASM)."
+            );
+        }
 
-        let temp_file = tempfile::tempfile()?;
-        let buf_writer = BufWriter::new(temp_file);
+        // Use tempfile on native platforms for memory efficiency, in-memory buffer for WASM
+        #[cfg(feature = "tempfile")]
+        let buf_writer = {
+            let temp_file = tempfile::tempfile()?;
+            BufWriter::new(temp_file)
+        };
+
+        #[cfg(not(feature = "tempfile"))]
+        let buf_writer = {
+            let memory_buffer = Cursor::new(Vec::new());
+            BufWriter::new(memory_buffer)
+        };
+
         let pass1_result: Pass1Result;
 
         let final_buf_writer = {
-            let final_layout_engine = LayoutEngine::new(&context.font_library, context.cache_config);
+            let final_layout_engine =
+                LayoutEngine::new(&context.font_library, context.cache_config);
             let final_stylesheet = context.compiled_template.stylesheet();
 
             // Pass Arc<Stylesheet> correctly
-            let mut renderer = LopdfRenderer::new(final_layout_engine, final_stylesheet.clone())?;
-            renderer.begin_document(buf_writer)?;
+            let mut renderer = LopdfRenderer::new(final_layout_engine, final_stylesheet.clone())
+                .map_render_err()?;
+            renderer.begin_document(buf_writer).map_render_err()?;
 
-            let (page_width, page_height) =
-                renderer.stylesheet.get_default_page_layout().size.dimensions_pt();
+            let (page_width, page_height) = renderer
+                .stylesheet
+                .get_default_page_layout()
+                .size
+                .dimensions_pt();
 
             let (page_ids, p1_result) = run_in_order_streaming_consumer(
                 rx2,
@@ -71,18 +95,19 @@ impl DataSourceProvider for MetadataGeneratingProvider {
                 page_width,
                 page_height,
                 true,
-                semaphore
+                semaphore,
             )?;
             pass1_result = p1_result;
 
-            Box::new(renderer).finish(page_ids)?
+            Box::new(renderer).finish(page_ids).map_render_err()?
         };
 
         info!(
-            "[METADATA] Analysis pass complete. Pass1 Result: total_pages={}, toc_entries={}, resolved_anchors={}",
+            "[METADATA] Analysis pass complete. Pass1 Result: total_pages={}, toc_entries={}, resolved_anchors={}, hyperlinks={}",
             pass1_result.total_pages,
             pass1_result.toc_entries.len(),
             pass1_result.resolved_anchors.len(),
+            pass1_result.hyperlink_locations.len(),
         );
 
         producer.abort();
@@ -92,9 +117,9 @@ impl DataSourceProvider for MetadataGeneratingProvider {
 
         let document = build_document_from_pass1_result(pass1_result);
 
-        let mut temp_file = final_buf_writer.into_inner().map_err(|e| {
-            PipelineError::Io(e.into_error())
-        })?;
+        let mut temp_file = final_buf_writer
+            .into_inner()
+            .map_err(|e| PipelineError::Io(e.into_error()))?;
 
         temp_file.seek(SeekFrom::Start(0))?;
 
@@ -111,12 +136,15 @@ fn build_document_from_pass1_result(pass1_result: Pass1Result) -> Document {
         .toc_entries
         .iter()
         .filter_map(|entry| {
-            pass1_result.resolved_anchors.get(&entry.target_id).map(|anchor| Heading {
-                id: entry.target_id.clone(),
-                level: entry.level,
-                text: entry.text.clone(),
-                page_number: anchor.global_page_index,
-            })
+            pass1_result
+                .resolved_anchors
+                .get(&entry.target_id)
+                .map(|anchor| Heading {
+                    id: entry.target_id.clone(),
+                    level: entry.level,
+                    text: entry.text.clone(),
+                    page_number: anchor.global_page_index,
+                })
         })
         .collect();
 
@@ -154,13 +182,14 @@ fn build_document_from_pass1_result(pass1_result: Pass1Result) -> Document {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::layout::fonts::SharedFontLibrary;
-    use crate::parser::json::processor::JsonParser;
-    use crate::parser::processor::TemplateParser;
+    use crate::pipeline::adapters::TemplateParserAdapter;
     use crate::pipeline::api::IndexEntry;
     use crate::pipeline::context::PipelineContext;
-    use crate::render::renderer::{HyperlinkLocation, ResolvedAnchor};
     use crate::pipeline::worker::TocEntry;
+    use petty_core::layout::fonts::SharedFontLibrary;
+    use petty_core::parser::processor::TemplateParser;
+    use petty_json_template::JsonParser;
+    use petty_render_core::{HyperlinkLocation, ResolvedAnchor};
     use serde_json::json;
     use std::collections::HashMap;
     use std::io::Read;
@@ -171,22 +200,39 @@ mod tests {
         let mut resolved_anchors = HashMap::new();
         resolved_anchors.insert(
             "h1".to_string(),
-            ResolvedAnchor { global_page_index: 1, y_pos: 700.0 },
+            ResolvedAnchor {
+                global_page_index: 1,
+                y_pos: 700.0,
+            },
         );
         resolved_anchors.insert(
             "h2".to_string(),
-            ResolvedAnchor { global_page_index: 2, y_pos: 650.0 },
+            ResolvedAnchor {
+                global_page_index: 2,
+                y_pos: 650.0,
+            },
         );
         resolved_anchors.insert(
             "some-other-anchor".to_string(),
-            ResolvedAnchor { global_page_index: 3, y_pos: 100.0 },
+            ResolvedAnchor {
+                global_page_index: 3,
+                y_pos: 100.0,
+            },
         );
 
         let pass1_result = Pass1Result {
             total_pages: 5,
             toc_entries: vec![
-                TocEntry { level: 1, text: "Heading 1".to_string(), target_id: "h1".to_string() },
-                TocEntry { level: 2, text: "Heading 2".to_string(), target_id: "h2".to_string() },
+                TocEntry {
+                    level: 1,
+                    text: "Heading 1".to_string(),
+                    target_id: "h1".to_string(),
+                },
+                TocEntry {
+                    level: 2,
+                    text: "Heading 2".to_string(),
+                    target_id: "h2".to_string(),
+                },
                 TocEntry {
                     level: 2,
                     text: "No Anchor".to_string(),
@@ -199,7 +245,10 @@ mod tests {
                 rect: [10.0, 20.0, 30.0, 40.0],
                 target_id: "h2".to_string(),
             }],
-            index_entries: vec![IndexEntry { text: "Rust".to_string(), page_number: 4 }],
+            index_entries: vec![IndexEntry {
+                text: "Rust".to_string(),
+                page_number: 4,
+            }],
             ..Default::default()
         };
 
@@ -230,7 +279,7 @@ mod tests {
             ]}
         });
         let template_str = serde_json::to_string(&template_json).unwrap();
-        let parser = JsonParser;
+        let parser = TemplateParserAdapter::new(JsonParser);
         let features = parser.parse(&template_str, PathBuf::new()).unwrap();
         let library = SharedFontLibrary::new();
         library.load_fallback_font();
@@ -239,6 +288,7 @@ mod tests {
             compiled_template: features.main_template,
             role_templates: Arc::new(features.role_templates),
             font_library: Arc::new(library),
+            resource_provider: Arc::new(petty_resource::InMemoryResourceProvider::new()),
             cache_config: Default::default(),
         };
 
@@ -248,14 +298,15 @@ mod tests {
             "section2": { "title": "Second Section" },
         })];
 
-        let sources = tokio::task::spawn_blocking(move || {
-            provider.provide(&context, data.into_iter())
-        })
-            .await
-            .unwrap()
-            .unwrap();
+        let sources =
+            tokio::task::spawn_blocking(move || provider.provide(&context, data.into_iter()))
+                .await
+                .unwrap()
+                .unwrap();
 
-        let doc = sources.document.expect("Document object should be generated");
+        let doc = sources
+            .document
+            .expect("Document object should be generated");
         assert_eq!(doc.page_count, 2);
 
         let mut artifact = sources.body_artifact.expect("Body artifact should exist");

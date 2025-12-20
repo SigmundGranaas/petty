@@ -1,0 +1,11 @@
+[package]
+name = "petty-resource"
+version = "0.1.0"
+edition = "2024"
+description = "Resource provider implementations for Petty PDF pipeline"
+
+[dependencies]
+petty-traits = { path = "../traits" }
+
+[dev-dependencies]
+tempfile = "3.10.1"

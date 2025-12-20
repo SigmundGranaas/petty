@@ -1,18 +1,20 @@
 use super::config::{GenerationMode, PdfBackend, PipelineCacheConfig};
 use super::orchestrator::DocumentPipeline;
-use crate::core::layout::fonts::SharedFontLibrary;
-use crate::error::PipelineError;
-use crate::parser::json::processor::JsonParser;
-use crate::parser::processor::{TemplateFeatures, TemplateParser};
-use crate::parser::xslt::processor::XsltParser;
 use crate::pipeline::context::PipelineContext;
+use crate::pipeline::provider::Provider;
 use crate::pipeline::provider::metadata::MetadataGeneratingProvider;
 use crate::pipeline::provider::passthrough::PassThroughProvider;
-use crate::pipeline::provider::Provider;
+use crate::pipeline::renderer::Renderer;
 use crate::pipeline::renderer::composing::ComposingRenderer;
 use crate::pipeline::renderer::streaming::SinglePassStreamingRenderer;
-use crate::pipeline::renderer::Renderer;
-use crate::templating::Template;
+use petty_core::error::PipelineError;
+use petty_core::layout::fonts::SharedFontLibrary;
+use petty_core::parser::processor::{TemplateFeatures, TemplateParser};
+use petty_core::traits::ResourceProvider;
+use petty_json_template::JsonParser;
+use petty_resource::FilesystemResourceProvider;
+use petty_template_dsl::Template;
+use petty_xslt::XsltParser;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -24,6 +26,7 @@ pub struct PipelineBuilder {
     pdf_backend: PdfBackend,
     // Use the thread-safe SharedFontLibrary instead of FontManager
     font_library: SharedFontLibrary,
+    resource_provider: Arc<dyn ResourceProvider>,
     generation_mode: GenerationMode,
     cache_config: PipelineCacheConfig,
     debug: bool,
@@ -33,10 +36,16 @@ impl Default for PipelineBuilder {
     fn default() -> Self {
         // SharedFontLibrary::default() loads fallback fonts automatically
         let font_library = SharedFontLibrary::default();
+
+        // Default to filesystem resources with current directory as base
+        let resource_provider: Arc<dyn ResourceProvider> =
+            Arc::new(FilesystemResourceProvider::new("."));
+
         Self {
             template_features: None,
             pdf_backend: Default::default(),
             font_library,
+            resource_provider,
             generation_mode: Default::default(),
             cache_config: Default::default(),
             debug: false,
@@ -54,10 +63,7 @@ impl PipelineBuilder {
     /// The template language (XSLT, JSON) is inferred from the file extension.
     pub fn with_template_file<P: AsRef<Path>>(mut self, path: P) -> Result<Self, PipelineError> {
         let path_ref = path.as_ref();
-        let extension = path_ref
-            .extension()
-            .and_then(|s| s.to_str())
-            .unwrap_or("");
+        let extension = path_ref.extension().and_then(|s| s.to_str()).unwrap_or("");
         let resource_base_path = path_ref
             .parent()
             .unwrap_or_else(|| Path::new(""))
@@ -65,7 +71,11 @@ impl PipelineBuilder {
         let template_source = fs::read_to_string(path_ref).map_err(|e| {
             PipelineError::Io(io::Error::new(
                 e.kind(),
-                format!("Failed to read template from '{}': {}", path_ref.display(), e),
+                format!(
+                    "Failed to read template from '{}': {}",
+                    path_ref.display(),
+                    e
+                ),
             ))
         })?;
 
@@ -89,8 +99,10 @@ impl PipelineBuilder {
 
     /// Configures the pipeline with a programmatically-built `Template` object.
     pub fn with_template_object(mut self, template: Template) -> Result<Self, PipelineError> {
+        use crate::pipeline::adapters::TemplateParserAdapter;
+
         let template_source = template.to_json()?;
-        let parser = JsonParser;
+        let parser = TemplateParserAdapter::new(JsonParser);
         let resource_base_path = PathBuf::new();
         self.template_features = Some(parser.parse(&template_source, resource_base_path)?);
         Ok(self)
@@ -135,6 +147,18 @@ impl PipelineBuilder {
         self
     }
 
+    /// Sets a custom resource provider for loading images and other external resources.
+    ///
+    /// By default, the pipeline uses `FilesystemResourceProvider` with the current directory
+    /// as the base path. Use this method to provide:
+    /// - A filesystem provider with a different base path
+    /// - An in-memory provider for embedded resources
+    /// - A custom provider implementation
+    pub fn with_resource_provider(mut self, provider: Arc<dyn ResourceProvider>) -> Self {
+        self.resource_provider = provider;
+        self
+    }
+
     /// Consumes the builder and creates the `DocumentPipeline`.
     /// This is where the generation strategy is selected and instantiated.
     pub fn build(mut self) -> Result<DocumentPipeline, PipelineError> {
@@ -150,8 +174,8 @@ impl PipelineBuilder {
         let context = Arc::new(PipelineContext {
             compiled_template: template_features.main_template,
             role_templates: Arc::new(template_features.role_templates),
-            // Pass the Arc-wrapped library
             font_library: Arc::new(self.font_library),
+            resource_provider: self.resource_provider,
             cache_config: self.cache_config,
         });
 
@@ -177,6 +201,7 @@ impl PipelineBuilder {
                     || flags.uses_index_function
                     || flags.has_table_of_contents
                     || flags.has_page_number_placeholders
+                    || flags.has_internal_links
                 {
                     log::info!(
                         "Template uses advanced features. Selecting Metadata Generating pipeline."
@@ -186,7 +211,8 @@ impl PipelineBuilder {
                 } else {
                     log::info!("Template is streamable. Selecting simple Streaming pipeline.");
                     provider = Provider::PassThrough(PassThroughProvider);
-                    renderer = Renderer::Streaming(SinglePassStreamingRenderer::new(self.pdf_backend));
+                    renderer =
+                        Renderer::Streaming(SinglePassStreamingRenderer::new(self.pdf_backend));
                 }
             }
         }
@@ -198,9 +224,11 @@ impl PipelineBuilder {
         &self,
         extension: &str,
     ) -> Result<Box<dyn TemplateParser>, PipelineError> {
+        use crate::pipeline::adapters::TemplateParserAdapter;
+
         match extension {
-            "xslt" | "xsl" | "fo" => Ok(Box::new(XsltParser)),
-            "json" => Ok(Box::new(JsonParser)),
+            "xslt" | "xsl" | "fo" => Ok(Box::new(TemplateParserAdapter::new(XsltParser))),
+            "json" => Ok(Box::new(TemplateParserAdapter::new(JsonParser))),
             _ => Err(PipelineError::Config(format!(
                 "Unsupported template file extension: .{}",
                 extension

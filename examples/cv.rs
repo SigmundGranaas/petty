@@ -1,7 +1,6 @@
-// FILE: examples/cv.rs
 use clap::Parser;
 use petty::{PdfBackend, PipelineBuilder, PipelineError};
-use serde_json::{from_str, Value};
+use serde_json::{Value, from_str};
 use std::env;
 use std::fs;
 
@@ -15,7 +14,9 @@ struct Args {
 
 fn main() -> Result<(), PipelineError> {
     if env::var("RUST_LOG").is_err() {
-        unsafe { env::set_var("RUST_LOG", "petty=info"); }
+        unsafe {
+            env::set_var("RUST_LOG", "petty=info");
+        }
     }
     env_logger::init();
 

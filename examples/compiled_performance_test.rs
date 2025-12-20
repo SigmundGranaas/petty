@@ -1,18 +1,18 @@
-use petty::core::style::dimension::{Dimension, Margins};
-use petty::core::style::flex::JustifyContent;
-use petty::core::style::font::FontWeight;
-use petty::core::style::stylesheet::PageLayout;
-use petty::core::style::text::TextAlign;
+use petty::style::dimension::{Dimension, Margins};
+use petty::style::flex::JustifyContent;
+use petty::style::font::FontWeight;
+use petty::style::stylesheet::PageLayout;
+use petty::style::text::TextAlign;
 use petty::templating::builders::*;
-use petty::templating::{h1, h2, h3, p, subtitle, Template};
+use petty::templating::{Template, h1, h2, h3, p, subtitle};
+use petty::types_base::color::Color;
 use petty::{PdfBackend, PipelineBuilder, PipelineError};
+use rand::SeedableRng;
 use rand::prelude::*;
 use rand::rngs::StdRng;
-use rand::SeedableRng;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::env;
 use std::time::Instant;
-use petty::core::base::color::Color;
 
 #[cfg(feature = "dhat-heap")]
 #[global_allocator]
@@ -88,11 +88,7 @@ fn create_invoice_template() -> Template {
             .justify_content(JustifyContent::SpaceBetween)
             .child(p(label))
             .child(
-                Paragraph::new(
-                    Span::new()
-                        .child(Text::new("$"))
-                        .child(Text::new(value)),
-                )
+                Paragraph::new(Span::new().child(Text::new("$")).child(Text::new(value)))
                     .text_align(TextAlign::Right),
             )
     };
@@ -104,8 +100,14 @@ fn create_invoice_template() -> Template {
         .child(
             Flex::new()
                 .justify_content(JustifyContent::SpaceBetween)
-                .padding(Margins { bottom: 20.0, ..Default::default() })
-                .margin(Margins { bottom: 20.0, ..Default::default() })
+                .padding(Margins {
+                    bottom: 20.0,
+                    ..Default::default()
+                })
+                .margin(Margins {
+                    bottom: 20.0,
+                    ..Default::default()
+                })
                 .border_bottom((1.0, "solid", Color::gray(221)).into())
                 .child(
                     Block::new()
@@ -124,7 +126,10 @@ fn create_invoice_template() -> Template {
         .child(
             Flex::new()
                 .justify_content(JustifyContent::SpaceBetween)
-                .margin(Margins { bottom: 30.0, ..Default::default() })
+                .margin(Margins {
+                    bottom: 30.0,
+                    ..Default::default()
+                })
                 .child(
                     Block::new()
                         .child(h3("BILL TO"))
@@ -141,28 +146,46 @@ fn create_invoice_template() -> Template {
         // --- Items Table ---
         .child(
             Table::new()
-                .margin(Margins { bottom: 20.0, ..Default::default() })
+                .margin(Margins {
+                    bottom: 20.0,
+                    ..Default::default()
+                })
                 .column(Column::new().width(Dimension::Percent(55.0))) // Description
                 .column(Column::new().width(Dimension::Percent(15.0))) // Quantity
                 .column(Column::new().width(Dimension::Percent(15.0))) // Unit Price
                 .column(Column::new().width(Dimension::Percent(15.0))) // Line Total
                 .header_row(
                     Row::new()
-                        .cell(Cell::new().padding(Margins::y(6.0)).child(table_header_text_style("Description")))
-                        .cell(Cell::new().padding(Margins::y(6.0)).child(table_header_text_style("Quantity").text_align(TextAlign::Right)))
-                        .cell(Cell::new().padding(Margins::y(6.0)).child(table_header_text_style("Unit Price").text_align(TextAlign::Right)))
-                        .cell(Cell::new().padding(Margins::y(6.0)).child(table_header_text_style("Total").text_align(TextAlign::Right))),
+                        .cell(
+                            Cell::new()
+                                .padding(Margins::y(6.0))
+                                .child(table_header_text_style("Description")),
+                        )
+                        .cell(Cell::new().padding(Margins::y(6.0)).child(
+                            table_header_text_style("Quantity").text_align(TextAlign::Right),
+                        ))
+                        .cell(Cell::new().padding(Margins::y(6.0)).child(
+                            table_header_text_style("Unit Price").text_align(TextAlign::Right),
+                        ))
+                        .cell(
+                            Cell::new().padding(Margins::y(6.0)).child(
+                                table_header_text_style("Total").text_align(TextAlign::Right),
+                            ),
+                        ),
                 )
-                .child(
-                    Each::new(
-                        "items",
-                        Row::new()
-                            .cell(Cell::new().child(p("{{this.description}}")))
-                            .cell(Cell::new().child(p("{{this.quantity}}").text_align(TextAlign::Right)))
-                            .cell(Cell::new().child(p("${{this.price}}").text_align(TextAlign::Right)))
-                            .cell(Cell::new().child(p("${{this.line_total}}").text_align(TextAlign::Right))),
-                    ),
-                ),
+                .child(Each::new(
+                    "items",
+                    Row::new()
+                        .cell(Cell::new().child(p("{{this.description}}")))
+                        .cell(
+                            Cell::new().child(p("{{this.quantity}}").text_align(TextAlign::Right)),
+                        )
+                        .cell(Cell::new().child(p("${{this.price}}").text_align(TextAlign::Right)))
+                        .cell(
+                            Cell::new()
+                                .child(p("${{this.line_total}}").text_align(TextAlign::Right)),
+                        ),
+                )),
         )
         // --- Summary Section ---
         .child(
@@ -176,8 +199,14 @@ fn create_invoice_template() -> Template {
                         .child(
                             Flex::new()
                                 .justify_content(JustifyContent::SpaceBetween)
-                                .margin(Margins { top: 10.0, ..Default::default() })
-                                .padding(Margins { top: 10.0, ..Default::default() })
+                                .margin(Margins {
+                                    top: 10.0,
+                                    ..Default::default()
+                                })
+                                .padding(Margins {
+                                    top: 10.0,
+                                    ..Default::default()
+                                })
                                 .border_top((1.0, "solid", Color::gray(238)).into())
                                 .child(p("Grand Total:").font_weight(FontWeight::Bold))
                                 .child(
@@ -186,8 +215,8 @@ fn create_invoice_template() -> Template {
                                             .child(Text::new("$"))
                                             .child(Text::new("{{summary.grand_total}}")),
                                     )
-                                        .text_align(TextAlign::Right)
-                                        .font_weight(FontWeight::Bold),
+                                    .text_align(TextAlign::Right)
+                                    .font_weight(FontWeight::Bold),
                                 ),
                         ),
                 ),
@@ -197,7 +226,10 @@ fn create_invoice_template() -> Template {
             p("Payment is due within 30 days.")
                 .text_align(TextAlign::Center)
                 .color(Color::gray(106))
-                .margin(Margins { top: 20.0, ..Default::default() }),
+                .margin(Margins {
+                    top: 20.0,
+                    ..Default::default()
+                }),
         );
 
     Template::new(root).add_page_master(
@@ -215,12 +247,16 @@ fn main() -> Result<(), PipelineError> {
 
     // Initialize the logger to enable debug messages.
     if env::var("RUST_LOG").is_err() {
-        unsafe { env::set_var("RUST_LOG", "petty=info"); }
+        unsafe {
+            env::set_var("RUST_LOG", "petty=info");
+        }
     }
     env_logger::init();
 
     if cfg!(debug_assertions) {
-        println!("\nWARNING: Running in debug build. For accurate results, run with `--release`.\n");
+        println!(
+            "\nWARNING: Running in debug build. For accurate results, run with `--release`.\n"
+        );
     }
     println!("Running Code-based Template Performance Test Example...");
 

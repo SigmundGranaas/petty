@@ -1,0 +1,15 @@
+[package]
+name = "petty-executor"
+version = "0.1.0"
+edition = "2024"
+description = "Executor implementations for parallel processing in Petty PDF"
+
+[dependencies]
+petty-traits = { path = "../traits" }
+
+# Parallel execution (optional)
+rayon = { version = "1.10", optional = true }
+
+[features]
+default = ["rayon"]
+rayon = ["dep:rayon"]
