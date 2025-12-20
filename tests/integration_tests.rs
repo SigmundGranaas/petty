@@ -36,18 +36,14 @@ fn check_font_embedding(pdf_bytes: &[u8]) -> Result<Vec<String>, Box<dyn std::er
 
     // Iterate through all objects to find font dictionaries
     for (_, object) in doc.objects.iter() {
-        if let Ok(dict) = object.as_dict() {
-            if let Ok(type_val) = dict.get(b"Type") {
-                if let Ok(type_name) = type_val.as_name() {
-                    if type_name == b"Font" {
-                        if let Ok(base_font) = dict.get(b"BaseFont") {
-                            if let Ok(font_name) = base_font.as_name() {
-                                embedded_fonts.push(String::from_utf8_lossy(font_name).to_string());
-                            }
-                        }
-                    }
-                }
-            }
+        if let Ok(dict) = object.as_dict()
+            && let Ok(type_val) = dict.get(b"Type")
+            && let Ok(type_name) = type_val.as_name()
+            && type_name == b"Font"
+            && let Ok(base_font) = dict.get(b"BaseFont")
+            && let Ok(font_name) = base_font.as_name()
+        {
+            embedded_fonts.push(String::from_utf8_lossy(font_name).to_string());
         }
     }
 
@@ -62,63 +58,57 @@ fn get_font_descriptors(
     let mut font_info = BTreeMap::new();
 
     for (obj_id, object) in doc.objects.iter() {
-        if let Ok(dict) = object.as_dict() {
-            // Check if this is a Font object
-            if let Ok(type_val) = dict.get(b"Type") {
-                if let Ok(type_name) = type_val.as_name() {
-                    if type_name == b"Font" {
-                        let mut info = BTreeMap::new();
+        if let Ok(dict) = object.as_dict()
+            && let Ok(type_val) = dict.get(b"Type")
+            && let Ok(type_name) = type_val.as_name()
+            && type_name == b"Font"
+        {
+            let mut info = BTreeMap::new();
 
-                        // Get subtype
-                        if let Ok(subtype_val) = dict.get(b"Subtype") {
-                            if let Ok(subtype_name) = subtype_val.as_name() {
-                                info.insert(
-                                    "Subtype".to_string(),
-                                    String::from_utf8_lossy(subtype_name).to_string(),
-                                );
-                            }
-                        }
+            // Get subtype
+            if let Ok(subtype_val) = dict.get(b"Subtype")
+                && let Ok(subtype_name) = subtype_val.as_name()
+            {
+                info.insert(
+                    "Subtype".to_string(),
+                    String::from_utf8_lossy(subtype_name).to_string(),
+                );
+            }
 
-                        // Get base font name
-                        if let Ok(base_font_val) = dict.get(b"BaseFont") {
-                            if let Ok(base_font_name) = base_font_val.as_name() {
-                                info.insert(
-                                    "BaseFont".to_string(),
-                                    String::from_utf8_lossy(base_font_name).to_string(),
-                                );
-                            }
-                        }
+            // Get base font name
+            if let Ok(base_font_val) = dict.get(b"BaseFont")
+                && let Ok(base_font_name) = base_font_val.as_name()
+            {
+                info.insert(
+                    "BaseFont".to_string(),
+                    String::from_utf8_lossy(base_font_name).to_string(),
+                );
+            }
 
-                        // Get encoding
-                        if let Ok(encoding) = dict.get(b"Encoding") {
-                            info.insert("Encoding".to_string(), format!("{:?}", encoding));
-                        }
+            // Get encoding
+            if let Ok(encoding) = dict.get(b"Encoding") {
+                info.insert("Encoding".to_string(), format!("{:?}", encoding));
+            }
 
-                        // Check for font descriptor
-                        if let Ok(font_desc_ref) = dict.get(b"FontDescriptor") {
-                            info.insert("HasDescriptor".to_string(), "true".to_string());
+            // Check for font descriptor
+            if let Ok(font_desc_ref) = dict.get(b"FontDescriptor") {
+                info.insert("HasDescriptor".to_string(), "true".to_string());
 
-                            if let Ok(desc_ref_id) = font_desc_ref.as_reference() {
-                                if let Ok(desc_obj) = doc.get_object(desc_ref_id) {
-                                    if let Ok(desc_dict) = desc_obj.as_dict() {
-                                        if desc_dict.has(b"FontFile")
-                                            || desc_dict.has(b"FontFile2")
-                                            || desc_dict.has(b"FontFile3")
-                                        {
-                                            info.insert(
-                                                "EmbeddedFont".to_string(),
-                                                "true".to_string(),
-                                            );
-                                        }
-                                    }
-                                }
-                            }
-                        }
-
-                        font_info.insert(format!("{:?}", obj_id), info);
-                    }
+                if let Ok(desc_ref_id) = font_desc_ref.as_reference()
+                    && let Ok(desc_obj) = doc.get_object(desc_ref_id)
+                    && let Ok(desc_dict) = desc_obj.as_dict()
+                    && (desc_dict.has(b"FontFile")
+                        || desc_dict.has(b"FontFile2")
+                        || desc_dict.has(b"FontFile3"))
+                {
+                    info.insert(
+                        "EmbeddedFont".to_string(),
+                        "true".to_string(),
+                    );
                 }
             }
+
+            font_info.insert(format!("{:?}", obj_id), info);
         }
     }
 
@@ -134,65 +124,60 @@ fn extract_link_annotations(
 
     let pages = doc.get_pages();
     for (_page_num, page_id) in pages.iter() {
-        if let Ok(page_obj) = doc.get_object(*page_id) {
-            if let Ok(page_dict) = page_obj.as_dict() {
-                // Check for Annots array
-                if let Ok(annots_ref) = page_dict.get(b"Annots") {
-                    // Try to resolve as array
-                    let annots_array = if let Ok(arr) = annots_ref.as_array() {
-                        arr.clone()
-                    } else if let Ok(ref_id) = annots_ref.as_reference() {
-                        if let Ok(annots_obj) = doc.get_object(ref_id) {
-                            if let Ok(arr) = annots_obj.as_array() {
-                                arr.clone()
-                            } else {
-                                continue;
-                            }
-                        } else {
-                            continue;
-                        }
-                    } else {
-                        continue;
-                    };
+        if let Ok(page_obj) = doc.get_object(*page_id)
+            && let Ok(page_dict) = page_obj.as_dict()
+            && let Ok(annots_ref) = page_dict.get(b"Annots")
+        {
+            // Try to resolve as array
+            let annots_array = if let Ok(arr) = annots_ref.as_array() {
+                arr.clone()
+            } else if let Ok(ref_id) = annots_ref.as_reference() {
+                if let Ok(annots_obj) = doc.get_object(ref_id)
+                    && let Ok(arr) = annots_obj.as_array()
+                {
+                    arr.clone()
+                } else {
+                    continue;
+                }
+            } else {
+                continue;
+            };
 
-                    // Iterate through annotations
-                    for annot_ref in annots_array {
-                        if let Ok(annot_id) = annot_ref.as_reference() {
-                            if let Ok(annot_obj) = doc.get_object(annot_id) {
-                                if let Ok(annot_dict) = annot_obj.as_dict() {
-                                    let mut info = BTreeMap::new();
+            // Iterate through annotations
+            for annot_ref in annots_array {
+                if let Ok(annot_id) = annot_ref.as_reference()
+                    && let Ok(annot_obj) = doc.get_object(annot_id)
+                    && let Ok(annot_dict) = annot_obj.as_dict()
+                {
+                    let mut info = BTreeMap::new();
 
-                                    // Get annotation type
-                                    if let Ok(subtype) = annot_dict.get(b"Subtype") {
-                                        if let Ok(subtype_name) = subtype.as_name() {
-                                            info.insert(
-                                                "Subtype".to_string(),
-                                                String::from_utf8_lossy(subtype_name).to_string(),
-                                            );
-                                        }
-                                    }
+                    // Get annotation type
+                    if let Ok(subtype) = annot_dict.get(b"Subtype")
+                        && let Ok(subtype_name) = subtype.as_name()
+                    {
+                        info.insert(
+                            "Subtype".to_string(),
+                            String::from_utf8_lossy(subtype_name).to_string(),
+                        );
+                    }
 
-                                    // Get destination (for Link annotations)
-                                    if let Ok(dest) = annot_dict.get(b"Dest") {
-                                        info.insert("Dest".to_string(), format!("{:?}", dest));
-                                    }
+                    // Get destination (for Link annotations)
+                    if let Ok(dest) = annot_dict.get(b"Dest") {
+                        info.insert("Dest".to_string(), format!("{:?}", dest));
+                    }
 
-                                    // Get action (alternative to Dest)
-                                    if let Ok(action) = annot_dict.get(b"A") {
-                                        info.insert("Action".to_string(), format!("{:?}", action));
-                                    }
+                    // Get action (alternative to Dest)
+                    if let Ok(action) = annot_dict.get(b"A") {
+                        info.insert("Action".to_string(), format!("{:?}", action));
+                    }
 
-                                    // Get rect (position)
-                                    if let Ok(rect) = annot_dict.get(b"Rect") {
-                                        info.insert("Rect".to_string(), format!("{:?}", rect));
-                                    }
+                    // Get rect (position)
+                    if let Ok(rect) = annot_dict.get(b"Rect") {
+                        info.insert("Rect".to_string(), format!("{:?}", rect));
+                    }
 
-                                    if !info.is_empty() {
-                                        annotations.push(info);
-                                    }
-                                }
-                            }
-                        }
+                    if !info.is_empty() {
+                        annotations.push(info);
                     }
                 }
             }

@@ -1,7 +1,7 @@
-use crate::MapRenderError;
 use crate::pipeline::api::{Anchor, Document, PreparedDataSources};
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::renderer::RenderingStrategy;
+use crate::{MapComposerError, MapRenderError};
 use log::{info, warn};
 use lopdf::{Document as LopdfDocument, Object, ObjectId, StringFormat, dictionary};
 use petty_core::error::PipelineError;
@@ -93,12 +93,12 @@ impl RenderingStrategy for ComposingRenderer {
                 let root_node = temp_renderer
                     .layout_engine
                     .build_render_tree(&ir_root, &store)
-                    .map_err(|e| PipelineError::Layout(e.to_string()))?;
+                    .map_err(PipelineError::Layout)?;
 
                 let iterator = temp_renderer
                     .layout_engine
                     .paginate(&stylesheet, root_node, &store)
-                    .map_err(|e| PipelineError::Layout(e.to_string()))?;
+                    .map_err(PipelineError::Layout)?;
 
                 let mut laid_out_pages = Vec::new();
                 for page_res in iterator {
@@ -140,8 +140,7 @@ impl RenderingStrategy for ComposingRenderer {
                         role_page_count, role
                     );
                     prepended_pages += role_page_count;
-                    merge_documents(&mut main_doc, role_doc, true)
-                        .map_err(|e| PipelineError::Render(e.to_string()))?;
+                    merge_documents(&mut main_doc, role_doc, true).map_composer_err()?;
 
                     let current_pages = main_doc.get_pages();
 
@@ -189,12 +188,12 @@ impl RenderingStrategy for ComposingRenderer {
                 let root_node = temp_renderer
                     .layout_engine
                     .build_render_tree(&ir_root, &store)
-                    .map_err(|e| PipelineError::Layout(e.to_string()))?;
+                    .map_err(PipelineError::Layout)?;
 
                 let iterator = temp_renderer
                     .layout_engine
                     .paginate(&stylesheet, root_node, &store)
-                    .map_err(|e| PipelineError::Layout(e.to_string()))?;
+                    .map_err(PipelineError::Layout)?;
 
                 let mut laid_out_pages = Vec::new();
                 for page_res in iterator {
@@ -232,8 +231,7 @@ impl RenderingStrategy for ComposingRenderer {
                         role_doc.get_pages().len(),
                         role
                     );
-                    merge_documents(&mut main_doc, role_doc, false)
-                        .map_err(|e| PipelineError::Render(e.to_string()))?;
+                    merge_documents(&mut main_doc, role_doc, false).map_composer_err()?;
                 }
             }
         }
@@ -263,11 +261,11 @@ impl RenderingStrategy for ComposingRenderer {
                     let ir_root = petty_core::idf::IRNode::Root(ir_nodes);
                     let root_node = layout_engine
                         .build_render_tree(&ir_root, &store)
-                        .map_err(|e| PipelineError::Layout(e.to_string()))?;
+                        .map_err(PipelineError::Layout)?;
 
                     let iterator = layout_engine
                         .paginate(&stylesheet, root_node, &store)
-                        .map_err(|e| PipelineError::Layout(e.to_string()))?;
+                        .map_err(PipelineError::Layout)?;
 
                     let mut overlay_pages = Vec::new();
                     for page_res in iterator {
@@ -296,7 +294,7 @@ impl RenderingStrategy for ComposingRenderer {
                         )
                         .map_render_err()?;
                         overlay_content(&mut main_doc, *page_id, content.encode()?)
-                            .map_err(|e| PipelineError::Render(e.to_string()))?;
+                            .map_composer_err()?;
                     }
                 }
             }

@@ -4,7 +4,7 @@
 //! that doesn't require tokio or async runtimes - suitable for WASM.
 
 use crate::error::PettyError;
-use petty_core::error::PipelineError;
+use petty_core::error::{ExecutionError, PipelineError};
 use petty_idf::IRNode;
 use petty_layout::config::LayoutConfig;
 use petty_layout::fonts::SharedFontLibrary;
@@ -74,7 +74,7 @@ impl WasmPipeline {
             .config
             .compiled_template
             .execute(&data_json, execution_config)
-            .map_err(|e| PipelineError::TemplateExecution(e.to_string()))?;
+            .map_err(|e| PipelineError::TemplateExecution(ExecutionError::Template(e)))?;
 
         if self.config.debug {
             log::debug!("Generated {} IR nodes", ir_nodes.len());
@@ -96,17 +96,17 @@ impl WasmPipeline {
         // Build the render tree
         let root_render_node = layout_engine
             .build_render_tree(&ir_tree, &store)
-            .map_err(|e| PipelineError::Layout(e.to_string()))?;
+            .map_err(|e| PipelineError::Layout(e))?;
 
         // Paginate the document
         let page_iterator = layout_engine
             .paginate(&stylesheet, root_render_node, &store)
-            .map_err(|e| PipelineError::Layout(e.to_string()))?;
+            .map_err(|e| PipelineError::Layout(e))?;
 
         // Collect all pages
         let mut pages = Vec::new();
         for page_result in page_iterator {
-            let page = page_result.map_err(|e| PipelineError::Layout(e.to_string()))?;
+            let page = page_result.map_err(|e| PipelineError::Layout(e))?;
             pages.push(page.elements);
         }
 
@@ -127,12 +127,12 @@ impl WasmPipeline {
         let output: Cursor<Vec<u8>> = Cursor::new(Vec::new());
         let mut renderer: LopdfRenderer<Cursor<Vec<u8>>> =
             LopdfRenderer::new(layout_engine, stylesheet.clone())
-                .map_err(|e| PipelineError::Render(e.to_string()))?;
+                .map_err(|e| PipelineError::Render(e))?;
 
         // Begin document
         renderer
             .begin_document(output)
-            .map_err(|e| PipelineError::Render(e.to_string()))?;
+            .map_err(|e| PipelineError::Render(e))?;
 
         // Render each page using the DocumentRenderer trait
         let mut all_page_ids = Vec::new();
@@ -140,12 +140,12 @@ impl WasmPipeline {
             // Render page content
             let content_id = renderer
                 .render_page_content(page_elements, &font_map, page_width, page_height)
-                .map_err(|e| PipelineError::Render(e.to_string()))?;
+                .map_err(|e| PipelineError::Render(e))?;
 
             // Write page object
             let page_id = renderer
                 .write_page_object(vec![content_id], vec![], page_width, page_height)
-                .map_err(|e| PipelineError::Render(e.to_string()))?;
+                .map_err(|e| PipelineError::Render(e))?;
 
             all_page_ids.push(page_id);
         }
@@ -153,7 +153,7 @@ impl WasmPipeline {
         // Finish the document and get the PDF bytes
         let pdf_bytes = renderer
             .finish_into_buffer(all_page_ids)
-            .map_err(|e| PipelineError::Render(e.to_string()))?;
+            .map_err(|e| PipelineError::Render(e))?;
 
         if self.config.debug {
             log::debug!("Rendering complete: {} bytes", pdf_bytes.len());

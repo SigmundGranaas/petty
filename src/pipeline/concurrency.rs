@@ -235,9 +235,7 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
                 )
                 .map_render_err()?;
                 let writer = renderer.writer_mut().unwrap();
-                let content_id = writer
-                    .write_content_stream(content)
-                    .map_err(|e| PipelineError::Render(e.to_string()))?;
+                let content_id = writer.write_content_stream(content)?;
 
                 let page_dict = dictionary! {
                     "Type" => "Page",

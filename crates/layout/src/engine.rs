@@ -97,9 +97,9 @@ pub struct PageOutput {
 }
 
 pub struct LayoutEngine {
-    pub font_library: SharedFontLibrary,
-    pub cache: LayoutCache,
-    pub profiler: Box<dyn Profiler>,
+    font_library: SharedFontLibrary,
+    cache: LayoutCache,
+    profiler: Box<dyn Profiler>,
     _config: LayoutConfig,
 }
 
@@ -211,22 +211,24 @@ impl LayoutEngine {
         stylesheet: &'a Stylesheet,
         root_node: RenderNode<'a>,
         store: &'a LayoutStore,
-    ) -> Result<impl Iterator<Item = Result<PageOutput, LayoutError>> + 'a, LayoutError> {
+    ) -> Result<Paginator<'a>, LayoutError> {
         let current_master_name = stylesheet
             .default_page_master_name
             .clone()
             .ok_or_else(|| LayoutError::Generic("No default page master defined".to_string()))?;
 
-        Ok(PaginationIterator {
-            engine: self,
-            stylesheet,
-            root_node,
-            arena: &store.bump,
-            current_state: None,
-            current_master_name: Some(current_master_name),
-            page_count: 0,
-            thread_cache: ThreadLocalCache::default(),
-            finished: false,
+        Ok(Paginator {
+            inner: PaginationIterator {
+                engine: self,
+                stylesheet,
+                root_node,
+                arena: &store.bump,
+                current_state: None,
+                current_master_name: Some(current_master_name),
+                page_count: 0,
+                thread_cache: ThreadLocalCache::default(),
+                finished: false,
+            },
         })
     }
 
@@ -372,6 +374,49 @@ impl LayoutEngine {
         if let Ok(mut cache) = self.cache.multi_span.write() {
             cache.insert(key, runs);
         }
+    }
+}
+
+/// A paginator for laying out a document across multiple pages.
+///
+/// This type provides a first-class API for pagination with access to
+/// pagination state and metadata. It implements `Iterator` to yield pages
+/// one at a time.
+///
+/// # Example
+///
+/// ```ignore
+/// let paginator = layout_engine.paginate(&stylesheet, root_node, &store)?;
+///
+/// for page_result in paginator {
+///     let page = page_result?;
+///     println!("Page {} has {} elements", page.page_number, page.elements.len());
+/// }
+/// ```
+pub struct Paginator<'a> {
+    inner: PaginationIterator<'a>,
+}
+
+impl<'a> Paginator<'a> {
+    /// Returns the current page number (1-indexed).
+    ///
+    /// This is the number of the next page to be yielded, or the total
+    /// number of pages if pagination is complete.
+    pub fn current_page(&self) -> usize {
+        self.inner.page_count
+    }
+
+    /// Returns true if pagination has finished (either successfully or due to an error).
+    pub fn is_finished(&self) -> bool {
+        self.inner.finished
+    }
+}
+
+impl<'a> Iterator for Paginator<'a> {
+    type Item = Result<PageOutput, LayoutError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.inner.next()
     }
 }
 

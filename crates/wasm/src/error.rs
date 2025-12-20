@@ -87,11 +87,11 @@ impl From<PipelineError> for PettyError {
             PipelineError::Io(e) => (ErrorCode::Io, e.to_string()),
             PipelineError::StylesheetError(msg) => (ErrorCode::Parse, msg.clone()),
             PipelineError::Parse(e) => (ErrorCode::Parse, e.to_string()),
-            PipelineError::Render(msg) => (ErrorCode::Render, msg.clone()),
-            PipelineError::Layout(msg) => (ErrorCode::Layout, msg.clone()),
+            PipelineError::Render(e) => (ErrorCode::Render, e.to_string()),
+            PipelineError::Layout(e) => (ErrorCode::Layout, e.to_string()),
             PipelineError::Json(e) => (ErrorCode::Json, e.to_string()),
-            PipelineError::TemplateExecution(msg) => (ErrorCode::TemplateExecution, msg.clone()),
-            PipelineError::Pdf(msg) => (ErrorCode::Pdf, msg.clone()),
+            PipelineError::TemplateExecution(e) => (ErrorCode::TemplateExecution, e.to_string()),
+            PipelineError::Pdf(e) => (ErrorCode::Pdf, e.to_string()),
             PipelineError::Other(msg) => (ErrorCode::Unknown, msg.clone()),
         };
 

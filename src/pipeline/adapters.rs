@@ -28,9 +28,8 @@ where
         template_source: &str,
         resource_base_path: PathBuf,
     ) -> Result<TemplateFeatures, PipelineError> {
-        self.inner
-            .parse(template_source, resource_base_path)
-            .map(TemplateFeatures::from_core)
-            .map_err(|e| PipelineError::TemplateExecution(e.to_string()))
+        Ok(TemplateFeatures::from_core(
+            self.inner.parse(template_source, resource_base_path)?,
+        ))
     }
 }
