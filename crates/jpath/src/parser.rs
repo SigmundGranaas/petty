@@ -33,7 +33,8 @@ fn expression(input: &str) -> IResult<&str, Expression> {
         map(literal, Expression::Literal),
         function_call, // Must be before selection to parse `func()` not `func`
         map(selection, Expression::Selection),
-    ))).parse(input)
+    )))
+    .parse(input)
 }
 
 // --- Literal Parsers ---
@@ -42,7 +43,8 @@ fn boolean(input: &str) -> IResult<&str, Value> {
     alt((
         map(tag("true"), |_| json!(true)),
         map(tag("false"), |_| json!(false)),
-    )).parse(input)
+    ))
+    .parse(input)
 }
 
 fn null(input: &str) -> IResult<&str, Value> {
@@ -52,7 +54,8 @@ fn null(input: &str) -> IResult<&str, Value> {
 fn string_literal(input: &str) -> IResult<&str, Value> {
     map(delimited(char('\''), is_not("'"), char('\'')), |s: &str| {
         json!(s)
-    }).parse(input)
+    })
+    .parse(input)
 }
 
 fn number(input: &str) -> IResult<&str, Value> {
@@ -69,19 +72,22 @@ fn identifier(input: &str) -> IResult<&str, &str> {
     recognize(pair(
         alt((alpha1, tag("_"))),
         take_while(|c: char| c.is_alphanumeric() || c == '_'),
-    )).parse(input)
+    ))
+    .parse(input)
 }
 
 fn key_segment(input: &str) -> IResult<&str, PathSegment> {
     map(preceded(char('.'), identifier), |s| {
         PathSegment::Key(s.to_string())
-    }).parse(input)
+    })
+    .parse(input)
 }
 
 fn index_segment(input: &str) -> IResult<&str, PathSegment> {
     map(delimited(char('['), nom_u64, char(']')), |i| {
         PathSegment::Index(i as usize)
-    }).parse(input)
+    })
+    .parse(input)
 }
 
 fn path_segment(input: &str) -> IResult<&str, PathSegment> {
@@ -96,7 +102,8 @@ fn full_path(input: &str) -> IResult<&str, Selection> {
             segments.append(&mut rest);
             Selection::Path(segments)
         },
-    ).parse(input)
+    )
+    .parse(input)
 }
 
 fn selection(input: &str) -> IResult<&str, Selection> {
@@ -106,7 +113,8 @@ fn selection(input: &str) -> IResult<&str, Selection> {
             Selection::Variable(name.to_string())
         }),
         full_path,
-    )).parse(input)
+    ))
+    .parse(input)
 }
 
 // --- Function Call Parser ---
@@ -118,7 +126,8 @@ fn function_call(input: &str) -> IResult<&str, Expression> {
         char('('),
         separated_list0(ws(char(',')), expression),
         char(')'),
-    ).parse(input)?;
+    )
+    .parse(input)?;
 
     Ok((
         input,

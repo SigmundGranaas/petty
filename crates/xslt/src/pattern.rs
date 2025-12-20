@@ -1,11 +1,11 @@
 //! A dedicated engine for parsing and evaluating XSLT `match` patterns.
 use crate::error::XsltError;
-use nom::{IResult, Parser};
 use nom::branch::alt;
 use nom::bytes::complete::tag;
 use nom::combinator::map;
 use nom::multi::{separated_list0, separated_list1};
 use nom::sequence::preceded;
+use nom::{IResult, Parser};
 use petty_xpath1::ast::{NodeTest, NodeTypeTest};
 use petty_xpath1::datasource::{DataSourceNode, NodeType};
 use petty_xpath1::parser as xpath_parser;
@@ -146,7 +146,8 @@ fn step_parser(input: &str) -> IResult<&str, MatchStep> {
             (nt, MatchAxis::Attribute)
         }),
         map(xpath_parser::node_test, |nt| (nt, MatchAxis::Child)),
-    )).parse(input)?;
+    ))
+    .parse(input)?;
 
     Ok((
         remaining_input,

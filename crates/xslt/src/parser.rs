@@ -30,7 +30,9 @@ pub fn parse_stylesheet_content(
             XmlEvent::Text(e) => {
                 use quick_xml::escape::unescape;
                 let raw_text = std::str::from_utf8(e.as_ref())?;
-                let text = unescape(raw_text).map_err(|e| XsltError::Compilation(e.to_string()))?.into_owned();
+                let text = unescape(raw_text)
+                    .map_err(|e| XsltError::Compilation(e.to_string()))?
+                    .into_owned();
                 builder.text(text)?;
             }
             XmlEvent::End(e) => {

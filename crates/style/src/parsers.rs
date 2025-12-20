@@ -9,13 +9,13 @@ use crate::flex::{AlignItems, AlignSelf, FlexDirection, FlexWrap, JustifyContent
 use crate::font::{FontStyle, FontWeight};
 use crate::list::ListStyleType;
 use crate::text::TextAlign;
-use nom::{IResult, Parser};
 use nom::branch::alt;
 use nom::bytes::complete::{tag, tag_no_case, take_while_m_n};
 use nom::character::complete::{char, space0, space1};
 use nom::combinator::{map, map_res, opt, recognize};
 use nom::multi::separated_list1;
 use nom::sequence::{delimited, pair, preceded};
+use nom::{IResult, Parser};
 use petty_types::Color;
 use thiserror::Error;
 
@@ -61,7 +61,8 @@ fn parse_f32(input: &str) -> IResult<&str, f32> {
             )),
         )),
         |s: &str| s.parse::<f32>(),
-    ).parse(input)
+    )
+    .parse(input)
 }
 
 // --- Unit & Dimension Parsers ---
@@ -73,7 +74,8 @@ fn parse_unit(input: &str) -> IResult<&str, f32> {
         map(tag_no_case("in"), |_| 72.0),
         map(tag_no_case("cm"), |_| 28.35),
         map(tag_no_case("mm"), |_| 2.835),
-    )).parse(input)
+    ))
+    .parse(input)
 }
 
 /// Parses a length value with optional unit (e.g., "12pt", "1in", "10mm").
@@ -91,7 +93,8 @@ pub fn parse_dimension(input: &str) -> IResult<&str, Dimension> {
             Dimension::Percent(val)
         }),
         map(parse_length, Dimension::Pt),
-    )).parse(input)
+    ))
+    .parse(input)
 }
 
 /// Parses CSS shorthand margins (1, 2, or 4 values).
@@ -145,10 +148,13 @@ fn hex_primary(input: &str) -> IResult<&str, u8> {
 }
 
 fn hex_color_6(input: &str) -> IResult<&str, Color> {
-    map(
-        (hex_primary, hex_primary, hex_primary),
-        |(r, g, b)| Color { r, g, b, a: 1.0 },
-    ).parse(input)
+    map((hex_primary, hex_primary, hex_primary), |(r, g, b)| Color {
+        r,
+        g,
+        b,
+        a: 1.0,
+    })
+    .parse(input)
 }
 
 fn hex_color_3(input: &str) -> IResult<&str, Color> {
@@ -164,7 +170,8 @@ fn hex_color_3(input: &str) -> IResult<&str, Color> {
             b: from_hex(&format!("{}{}", b_s, b_s)).unwrap(),
             a: 1.0,
         },
-    ).parse(input)
+    )
+    .parse(input)
 }
 
 /// Parses a hex color (e.g., "#FF0000" or "#F00").
@@ -180,7 +187,8 @@ pub fn parse_border_style(input: &str) -> IResult<&str, BorderStyle> {
         map(tag_no_case("dotted"), |_| BorderStyle::Dotted),
         map(tag_no_case("double"), |_| BorderStyle::Double),
         map(tag_no_case("none"), |_| BorderStyle::None),
-    )).parse(input)
+    ))
+    .parse(input)
 }
 
 /// Parses a CSS border shorthand (e.g., "2pt solid #00ff00").
@@ -192,7 +200,8 @@ pub fn parse_border(input: &str) -> IResult<&str, Border> {
             style,
             color,
         },
-    ).parse(input)
+    )
+    .parse(input)
 }
 
 /// Helper to run a nom parser and convert its result to a `Result<T, StyleParseError>`.
