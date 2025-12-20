@@ -13,6 +13,10 @@ env:
   # Rust version to use across all jobs
   RUST_VERSION: "1.92.0"
 
+# Note: The petty-wasm crate is excluded from workspace operations
+# because it requires wasm32-unknown-unknown target and is tested
+# separately in wasm.yml workflow
+
 jobs:
   # ===========================================
   # Build and Test
@@ -47,10 +51,10 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Build workspace
-        run: cargo build --workspace --all-features
+        run: cargo build --workspace --exclude petty-wasm --all-features
 
       - name: Run tests
-        run: cargo test --workspace --all-features
+        run: cargo test --workspace --exclude petty-wasm --all-features
 
   # ===========================================
   # Lint - Clippy
@@ -80,7 +84,7 @@ jobs:
             ${{ runner.os }}-cargo-clippy-
 
       - name: Run Clippy
-        run: cargo clippy --workspace --all-features -- -D warnings
+        run: cargo clippy --workspace --exclude petty-wasm --all-features -- -D warnings
 
   # ===========================================
   # Format Check
@@ -185,7 +189,7 @@ jobs:
             ${{ runner.os }}-cargo-docs-
 
       - name: Build documentation
-        run: cargo doc --workspace --no-deps
+        run: cargo doc --workspace --exclude petty-wasm --no-deps
         env:
           RUSTDOCFLAGS: "-D warnings"
 
@@ -216,4 +220,4 @@ jobs:
             ${{ runner.os }}-cargo-msrv-
 
       - name: Check MSRV
-        run: cargo check --workspace
+        run: cargo check --workspace --exclude petty-wasm

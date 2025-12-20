@@ -7,12 +7,13 @@ use crate::interface::{
 };
 use crate::painting::box_painter::create_background_and_borders;
 use crate::style::ComputedStyle;
+#[cfg(feature = "profiling")]
+use instant::Instant;
 use petty_idf::{IRNode, TextStr};
 use petty_types::geometry::{self, BoxConstraints};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use std::time::Instant;
 use taffy::prelude::*;
 
 #[derive(Debug, Clone)]
@@ -75,6 +76,7 @@ impl<'a> FlexNode<'a> {
         env: &LayoutEnvironment,
         constraints: BoxConstraints,
     ) -> Result<FlexLayoutOutput, LayoutError> {
+        #[cfg(feature = "profiling")]
         let start = Instant::now();
 
         let mut taffy = TaffyTree::<usize>::new();
@@ -176,9 +178,12 @@ impl<'a> FlexNode<'a> {
             child_layouts.push(*l);
         }
 
-        let duration = start.elapsed();
-        env.engine
-            .record_perf("FlexNode::compute_flex_layout_data", duration);
+        #[cfg(feature = "profiling")]
+        {
+            let duration = start.elapsed();
+            env.engine
+                .record_perf("FlexNode::compute_flex_layout_data", duration);
+        }
 
         Ok(FlexLayoutOutput {
             size,

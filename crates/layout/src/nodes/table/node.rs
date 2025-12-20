@@ -7,11 +7,12 @@ use crate::{
 use petty_idf::TableColumnDefinition;
 // Use explicit geometry types from base to match Trait definition
 use crate::algorithms::table_solver::{TableCellInfo, TableSolver};
+#[cfg(feature = "profiling")]
+use instant::Instant;
 use petty_types::geometry::{BoxConstraints as BaseBoxConstraints, Size as BaseSize};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
-use std::time::Instant;
 
 use super::pagination::TablePagination;
 
@@ -215,6 +216,7 @@ impl<'a> TableNode<'a> {
         col_widths: &[f32],
         max_height_hint: Option<f32>,
     ) -> Result<Vec<f32>, LayoutError> {
+        #[cfg(feature = "profiling")]
         let start = Instant::now();
         let mut row_heights = Vec::with_capacity(self.header_rows.len() + self.body_rows.len());
         let mut total_accumulated = 0.0;
@@ -237,6 +239,7 @@ impl<'a> TableNode<'a> {
             total_accumulated += h;
         }
 
+        #[cfg(feature = "profiling")]
         env.engine
             .record_perf("TableNode::calculate_all_row_heights", start.elapsed());
 

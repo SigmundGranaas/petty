@@ -1,3 +1,14 @@
+//! Layout engine implementation.
+//!
+//! # WASM Compatibility
+//!
+//! This module is fully compatible with WASM targets. When the `profiling` feature
+//! is enabled, it uses the `instant` crate instead of `std::time::Instant` for
+//! performance profiling, as std::time is not available in wasm32-unknown-unknown.
+//!
+//! The profiling overhead is completely eliminated when the `profiling` feature
+//! is disabled (default for WASM builds).
+
 use super::PositionedElement;
 use super::fonts::SharedFontLibrary;
 use super::interface::{
@@ -20,6 +31,8 @@ use petty_style::stylesheet::{ElementStyle, Stylesheet};
 use petty_types::geometry::{self as geom, BoxConstraints};
 
 use bumpalo::Bump;
+#[cfg(feature = "profiling")]
+use instant::Instant;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::collections::hash_map::DefaultHasher;
@@ -28,7 +41,7 @@ use std::sync::Arc;
 #[cfg(feature = "system-fonts")]
 use std::sync::RwLock;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub struct LayoutStore {
     pub bump: Bump,
@@ -180,11 +193,16 @@ impl LayoutEngine {
         ir_root: &IRNode,
         store: &'a LayoutStore,
     ) -> Result<RenderNode<'a>, LayoutError> {
+        #[cfg(feature = "profiling")]
         let start = Instant::now();
+
         let default_style = self.get_default_style();
         let res = crate::nodes::build_node_tree(ir_root, self, default_style, store);
+
+        #[cfg(feature = "profiling")]
         self.profiler
             .record("LayoutEngine::build_render_tree", start.elapsed());
+
         res
     }
 
@@ -377,6 +395,7 @@ impl<'a> Iterator for PaginationIterator<'a> {
             return None;
         }
 
+        #[cfg(feature = "profiling")]
         let start = Instant::now();
 
         let result = (|| {
@@ -468,6 +487,7 @@ impl<'a> Iterator for PaginationIterator<'a> {
             }
         })();
 
+        #[cfg(feature = "profiling")]
         self.engine
             .profiler
             .record("PageLayout::generate_page", start.elapsed());

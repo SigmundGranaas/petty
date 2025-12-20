@@ -1,0 +1,161 @@
+name: WASM Tests
+
+on:
+  push:
+    branches: [master, main, js-wasm]
+    paths:
+      - 'crates/wasm/**'
+      - '.github/workflows/wasm.yml'
+  pull_request:
+    branches: [master, main]
+    paths:
+      - 'crates/wasm/**'
+      - '.github/workflows/wasm.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test-wasm-build:
+    name: Build WASM Module
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/registry
+          key: ${{ runner.os }}-cargo-registry-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo index
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/git
+          key: ${{ runner.os }}-cargo-git-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Cache cargo build
+        uses: actions/cache@v4
+        with:
+          path: target
+          key: ${{ runner.os }}-cargo-wasm-${{ hashFiles('**/Cargo.lock') }}
+
+      - name: Check WASM build
+        run: |
+          RUSTFLAGS='--cfg getrandom_backend="wasm_js"' cargo check \
+            --package petty-wasm \
+            --target wasm32-unknown-unknown
+
+      - name: Build WASM (release)
+        run: |
+          RUSTFLAGS='--cfg getrandom_backend="wasm_js"' cargo build \
+            --package petty-wasm \
+            --target wasm32-unknown-unknown \
+            --release
+
+  test-wasm-unit:
+    name: WASM Unit Tests (Headless Browser)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Install Chrome
+        uses: browser-actions/setup-chrome@latest
+
+      - name: Run WASM tests in Chrome
+        run: wasm-pack test --headless --chrome crates/wasm
+
+  test-wasm-integration:
+    name: WASM Integration Tests (PDF Generation)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build WASM package
+        run: |
+          wasm-pack build crates/wasm --target nodejs --release
+          # Also build for bundler target
+          wasm-pack build crates/wasm --target bundler --release --out-dir pkg-bundler
+
+      - name: Install test dependencies
+        working-directory: crates/wasm/integration-tests
+        run: npm install
+
+      - name: Run Node.js integration tests
+        working-directory: crates/wasm/integration-tests
+        run: npm test
+
+      - name: Upload generated PDFs as artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: generated-pdfs
+          path: crates/wasm/integration-tests/output/*.pdf
+          retention-days: 7
+
+  test-wasm-size:
+    name: Check WASM Bundle Size
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - name: Install wasm-pack
+        run: curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+
+      - name: Build with embedded fonts
+        run: wasm-pack build crates/wasm --target bundler --release
+
+      - name: Check bundle size with fonts
+        run: |
+          SIZE=$(stat -f%z crates/wasm/pkg/petty_wasm_bg.wasm 2>/dev/null || stat -c%s crates/wasm/pkg/petty_wasm_bg.wasm)
+          SIZE_MB=$(echo "scale=2; $SIZE / 1024 / 1024" | bc)
+          echo "Bundle size with embedded fonts: ${SIZE_MB} MB"
+          echo "WASM_SIZE_WITH_FONTS=${SIZE_MB}" >> $GITHUB_ENV
+
+      - name: Build without embedded fonts
+        run: |
+          wasm-pack build crates/wasm --target bundler --release --out-dir pkg-no-fonts -- --no-default-features
+
+      - name: Check bundle size without fonts
+        run: |
+          SIZE=$(stat -f%z crates/wasm/pkg-no-fonts/petty_wasm_bg.wasm 2>/dev/null || stat -c%s crates/wasm/pkg-no-fonts/petty_wasm_bg.wasm)
+          SIZE_MB=$(echo "scale=2; $SIZE / 1024 / 1024" | bc)
+          echo "Bundle size without embedded fonts: ${SIZE_MB} MB"
+          echo "WASM_SIZE_NO_FONTS=${SIZE_MB}" >> $GITHUB_ENV
+
+      - name: Summary
+        run: |
+          echo "### WASM Bundle Sizes"
+          echo "- With embedded fonts: ${WASM_SIZE_WITH_FONTS} MB"
+          echo "- Without embedded fonts: ${WASM_SIZE_NO_FONTS} MB"

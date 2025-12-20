@@ -1,10 +1,13 @@
 use crate::error::RenderError;
-use lopdf::ObjectId;
 use petty_idf::SharedData;
 use petty_layout::PositionedElement;
 use std::any::Any;
 use std::collections::HashMap;
 use std::io::{Seek, Write};
+
+/// PDF object identifier - (object number, generation number)
+/// This is decoupled from any specific PDF library
+pub type ObjectId = (u32, u16);
 
 /// A trait for document renderers, abstracting the PDF-writing primitives.
 pub trait DocumentRenderer<W: Write + Seek + Send> {

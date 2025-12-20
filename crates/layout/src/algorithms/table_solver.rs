@@ -1,7 +1,8 @@
 use crate::{LayoutEnvironment, LayoutError};
+#[cfg(feature = "profiling")]
+use instant::Instant;
 use petty_idf::TableColumnDefinition;
 use petty_style::dimension::Dimension;
-use std::time::Instant;
 
 /// Trait to abstract cell properties needed for width solving.
 /// This allows the solver to be decoupled from the specific `TableCellNode` struct.
@@ -37,7 +38,9 @@ impl<'a> TableSolver<'a> {
         R: IntoIterator<Item = C>,
         C: TableCellInfo,
     {
+        #[cfg(feature = "profiling")]
         let start = Instant::now();
+        #[cfg(feature = "profiling")]
         let mut measure_time = std::time::Duration::ZERO;
 
         let num_columns = self.columns.len();
@@ -74,10 +77,13 @@ impl<'a> TableSolver<'a> {
 
         // If no auto columns, we are done
         if auto_indices.is_empty() {
-            let duration = start.elapsed();
-            self.env
-                .engine
-                .record_perf("TableSolver::resolve_widths", duration);
+            #[cfg(feature = "profiling")]
+            {
+                let duration = start.elapsed();
+                self.env
+                    .engine
+                    .record_perf("TableSolver::resolve_widths", duration);
+            }
             return Ok(widths);
         }
 
@@ -104,9 +110,15 @@ impl<'a> TableSolver<'a> {
                     (col_cursor..(col_cursor + colspan)).any(|idx| auto_indices.contains(&idx));
 
                 if involves_auto_col {
+                    #[cfg(feature = "profiling")]
                     let m_start = Instant::now();
+
                     let preferred = cell.measure_max_content(self.env)?;
-                    measure_time += m_start.elapsed();
+
+                    #[cfg(feature = "profiling")]
+                    {
+                        measure_time += m_start.elapsed();
+                    }
 
                     // Simple strategy: if colspan=1, this cell dictates minimum width for this column.
                     // (Spanning cells are harder to attribute, simplistic approach ignores them for min-width)
@@ -152,13 +164,16 @@ impl<'a> TableSolver<'a> {
             }
         }
 
-        let duration = start.elapsed();
-        self.env
-            .engine
-            .record_perf("TableSolver::resolve_widths", duration);
-        self.env
-            .engine
-            .record_perf("TableSolver::resolve_widths::measure_content", measure_time);
+        #[cfg(feature = "profiling")]
+        {
+            let duration = start.elapsed();
+            self.env
+                .engine
+                .record_perf("TableSolver::resolve_widths", duration);
+            self.env
+                .engine
+                .record_perf("TableSolver::resolve_widths::measure_content", measure_time);
+        }
 
         Ok(widths)
     }
