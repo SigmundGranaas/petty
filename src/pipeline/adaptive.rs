@@ -633,6 +633,18 @@ mod tests {
         assert!(controller.should_scale_down());
     }
 
+    #[test]
+    fn test_worker_manager_metrics() {
+        use std::sync::Arc;
+        let controller = Arc::new(AdaptiveController::new(4));
+        let manager = WorkerManager::new(controller.clone());
+
+        // Test metrics() accessor
+        let metrics = manager.metrics();
+        assert_eq!(metrics.current_workers, 4);
+        assert_eq!(metrics.items_processed, 0);
+    }
+
     #[cfg(feature = "adaptive-scaling")]
     #[test]
     fn test_worker_manager() {
@@ -645,6 +657,16 @@ mod tests {
         // Simulate spawning a worker
         manager.worker_spawned();
         assert_eq!(manager.metrics().current_workers, 5);
+    }
+
+    #[test]
+    fn test_worker_manager_pending_shutdowns() {
+        use std::sync::Arc;
+        let controller = Arc::new(AdaptiveController::new(4));
+        let manager = WorkerManager::new(controller);
+
+        // Test pending_shutdowns() accessor - should start at 0
+        assert_eq!(manager.pending_shutdowns(), 0);
     }
 
     #[cfg(feature = "adaptive-scaling")]
@@ -737,6 +759,23 @@ mod tests {
         }
     }
 
+    #[test]
+    fn test_controller_config_accessors() {
+        let custom_config = AdaptiveConfig {
+            min_workers: 2,
+            max_workers: 16,
+            scale_up_threshold: 2.5,
+            scale_down_threshold: 0.3,
+            adjustment_cooldown: Duration::from_millis(1000),
+            scaling_check_interval: 25,
+            max_in_flight_buffer: 3,
+        };
+        let controller = AdaptiveController::with_config(4, custom_config);
+
+        // Test scaling_check_interval accessor
+        assert_eq!(controller.scaling_check_interval(), 25);
+    }
+
     // ========================================
     // Facade Tests
     // ========================================
@@ -770,6 +809,29 @@ mod tests {
 
         #[cfg(not(feature = "adaptive-scaling"))]
         assert!(!facade.supports_dynamic_scaling());
+    }
+
+    #[test]
+    fn test_facade_config_accessors() {
+        let custom_config = AdaptiveConfig {
+            min_workers: 2,
+            max_workers: 16,
+            scale_up_threshold: 2.5,
+            scale_down_threshold: 0.3,
+            adjustment_cooldown: Duration::from_millis(1000),
+            scaling_check_interval: 15,
+            max_in_flight_buffer: 3,
+        };
+        let facade = AdaptiveScalingFacade::new(4, custom_config);
+
+        // Test config() accessor
+        assert_eq!(facade.config().min_workers, 2);
+        assert_eq!(facade.config().max_workers, 16);
+        assert_eq!(facade.config().scaling_check_interval, 15);
+
+        // Test convenience accessors
+        assert_eq!(facade.scaling_check_interval(), 15);
+        assert_eq!(facade.max_in_flight_buffer(), 3);
     }
 
     #[cfg(feature = "adaptive-scaling")]
