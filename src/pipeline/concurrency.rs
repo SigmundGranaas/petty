@@ -435,6 +435,7 @@ impl DynamicWorkerPool {
 /// configure_rayon_pool(num_cpus::get() / 2);
 /// ```
 #[cfg(feature = "parallel-render")]
+#[allow(dead_code)] // Public API - may not be used internally
 pub fn configure_rayon_pool(num_threads: usize) {
     let threads = if num_threads == 0 {
         // Default: use half the cores to avoid Tokio conflicts
@@ -783,15 +784,14 @@ where
             // Parallel page rendering (when feature is enabled)
             #[cfg(feature = "parallel-render")]
             {
-                let contents: Vec<_> = petty_render_lopdf::render_pages_parallel(
+                let content_results = petty_render_lopdf::render_pages_parallel(
                     seq.pages,
                     &font_map,
                     page_width,
                     page_height,
-                )
-                .map_render_err()?;
+                );
 
-                for content_result in contents {
+                for content_result in content_results {
                     let content = content_result.map_render_err()?;
                     let writer = renderer.writer_mut().unwrap();
                     let content_id = writer

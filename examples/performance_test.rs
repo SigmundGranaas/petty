@@ -127,14 +127,11 @@ fn main() -> Result<(), PipelineError> {
         builder = builder.with_worker_count(args.workers);
     }
 
-    // Enable metrics collection if requested (or if adaptive is enabled)
-    if args.metrics || args.adaptive {
-        builder = builder.with_processing_mode(ProcessingMode::WithMetrics);
-    }
-
-    // Enable adaptive scaling if requested
+    // Configure processing mode based on flags
     if args.adaptive {
-        builder = builder.with_adaptive_scaling(true);
+        builder = builder.with_processing_mode(ProcessingMode::Adaptive);
+    } else if args.metrics {
+        builder = builder.with_processing_mode(ProcessingMode::WithMetrics);
     }
 
     let pipeline = builder.build()?;

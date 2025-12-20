@@ -111,6 +111,7 @@ pub struct AdaptiveController {
 
 impl AdaptiveController {
     /// Create a new adaptive controller with the specified initial worker count.
+    #[allow(dead_code)] // Public API - may not be used internally
     pub fn new(initial_workers: usize) -> Self {
         Self::with_config(initial_workers, AdaptiveConfig::default())
     }
@@ -509,6 +510,7 @@ impl AdaptiveScalingFacade {
     }
 
     /// Get a reference to the configuration.
+    #[allow(dead_code)] // Public API - tested but not used internally
     pub fn config(&self) -> &AdaptiveConfig {
         &self.config
     }
@@ -526,11 +528,13 @@ impl AdaptiveScalingFacade {
     /// Check if dynamic scaling is supported at runtime.
     ///
     /// Returns `true` when the `adaptive-scaling` feature is enabled.
+    #[allow(dead_code)] // Public API - tested but not used internally
     pub fn supports_dynamic_scaling(&self) -> bool {
         cfg!(feature = "adaptive-scaling")
     }
 
     /// Get the scaling check interval from config.
+    #[allow(dead_code)] // Public API - tested but not used internally
     pub fn scaling_check_interval(&self) -> usize {
         self.config.scaling_check_interval
     }

@@ -50,4 +50,5 @@ pub use adaptive::{
 
 // Re-export Rayon configuration for parallel rendering
 #[cfg(feature = "parallel-render")]
+#[allow(unused_imports)] // Public API - may not be used internally
 pub use concurrency::configure_rayon_pool;
