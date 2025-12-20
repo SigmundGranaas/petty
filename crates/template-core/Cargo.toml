@@ -13,4 +13,4 @@ petty-style = { path = "../style" }
 petty-idf = { path = "../idf" }
 
 # For error handling
-thiserror = "2.0.12"
+thiserror = "2.0.17"

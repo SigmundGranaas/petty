@@ -22,13 +22,13 @@ petty-template-core = { path = "../template-core" }
 petty-render-core = { path = "../render-core" }
 
 # PDF generation (platform-agnostic, uses Write trait)
-lopdf = { version = "0.36.0", default-features = false }
+lopdf = { version = "0.38.0", default-features = false }
 # Alternative PDF renderer (currently unused, kept as reference implementation)
 printpdf = { version = "0.8.2", features = ["png"], optional = true }
 
 # Layout engine
-taffy = "0.8.1"
-bumpalo = "3.17.0"
+taffy = "0.9.2"
+bumpalo = "3.19.1"
 
 # Text shaping and fonts (platform-agnostic - works with font bytes)
 rustybuzz = "0.20.1"
@@ -38,18 +38,18 @@ ttf-parser = "0.25.1"
 fontdb = { version = "0.23.0", optional = true }
 
 # Parsing
-nom = "7.1"
-roxmltree = "0.20.0"
-quick-xml = { version = "0.37.5", features = ["serialize"] }
+nom = "8.0"
+roxmltree = "0.21.1"
+quick-xml = { version = "0.38.4", features = ["serialize"] }
 handlebars = "6.3.2"
 
 # Data processing
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-image = { version = "0.25.1", default-features = false, features = ["png", "jpeg", "gif"] }
+image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif"] }
 
 # Utilities
-thiserror = "2.0.12"
+thiserror = "2.0.17"
 log = "0.4"
 itoa = "1.0.15"
 itertools = "0.14.0"

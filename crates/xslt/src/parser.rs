@@ -28,7 +28,11 @@ pub fn parse_stylesheet_content(
                 builder.empty_element(&owned_e, attributes, pos as usize, source)?;
             }
             XmlEvent::Text(e) => {
-                let text = e.unescape()?.into_owned();
+                use quick_xml::escape::unescape;
+                let raw_text = std::str::from_utf8(e.as_ref())?;
+                let text = unescape(raw_text)
+                    .map_err(|e| XsltError::Compilation(e.to_string()))?
+                    .into_owned();
                 builder.text(text)?;
             }
             XmlEvent::End(e) => {
