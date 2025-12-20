@@ -26,7 +26,9 @@ pub fn extract_font_names(doc: &LopdfDocument) -> Vec<String> {
                 if let Ok(resources) = page_dict.get(b"Resources") {
                     // Try to resolve Resources as a reference or direct dictionary
                     let resources_dict = if let Ok(ref_id) = resources.as_reference() {
-                        doc.get_object(ref_id).ok().and_then(|obj| obj.as_dict().ok())
+                        doc.get_object(ref_id)
+                            .ok()
+                            .and_then(|obj| obj.as_dict().ok())
                     } else {
                         resources.as_dict().ok()
                     };
@@ -35,7 +37,9 @@ pub fn extract_font_names(doc: &LopdfDocument) -> Vec<String> {
                         if let Ok(font_dict) = resources.get(b"Font") {
                             // Try to resolve Font dictionary
                             let fonts_dict = if let Ok(ref_id) = font_dict.as_reference() {
-                                doc.get_object(ref_id).ok().and_then(|obj| obj.as_dict().ok())
+                                doc.get_object(ref_id)
+                                    .ok()
+                                    .and_then(|obj| obj.as_dict().ok())
                             } else {
                                 font_dict.as_dict().ok()
                             };
@@ -48,7 +52,9 @@ pub fn extract_font_names(doc: &LopdfDocument) -> Vec<String> {
                                         Some(font_dict)
                                     } else if let Ok(font_obj_id) = font_val.as_reference() {
                                         // Try as reference
-                                        doc.get_object(font_obj_id).ok().and_then(|obj| obj.as_dict().ok())
+                                        doc.get_object(font_obj_id)
+                                            .ok()
+                                            .and_then(|obj| obj.as_dict().ok())
                                     } else {
                                         None
                                     };
@@ -56,7 +62,9 @@ pub fn extract_font_names(doc: &LopdfDocument) -> Vec<String> {
                                     if let Some(font_dict) = font_dict_opt {
                                         if let Ok(base_font) = font_dict.get(b"BaseFont") {
                                             if let Ok(font_name) = base_font.as_name() {
-                                                fonts.insert(String::from_utf8_lossy(font_name).to_string());
+                                                fonts.insert(
+                                                    String::from_utf8_lossy(font_name).to_string(),
+                                                );
                                             }
                                         }
                                     }
@@ -119,7 +127,10 @@ pub fn get_font_info(doc: &LopdfDocument) -> BTreeMap<String, BTreeMap<String, S
                                             || desc_dict.has(b"FontFile2")
                                             || desc_dict.has(b"FontFile3")
                                         {
-                                            info.insert("EmbeddedFont".to_string(), "true".to_string());
+                                            info.insert(
+                                                "EmbeddedFont".to_string(),
+                                                "true".to_string(),
+                                            );
                                         }
                                     }
                                 }
@@ -191,8 +202,12 @@ pub fn extract_link_annotations(doc: &LopdfDocument) -> Vec<LinkAnnotation> {
                                                 // Check for Action (could be internal GoTo or external URI)
                                                 if let Ok(action_ref) = annot_dict.get(b"A") {
                                                     // Try to resolve the action dictionary
-                                                    let action_dict = if let Ok(ref_id) = action_ref.as_reference() {
-                                                        doc.get_object(ref_id).ok().and_then(|obj| obj.as_dict().ok())
+                                                    let action_dict = if let Ok(ref_id) =
+                                                        action_ref.as_reference()
+                                                    {
+                                                        doc.get_object(ref_id)
+                                                            .ok()
+                                                            .and_then(|obj| obj.as_dict().ok())
                                                     } else {
                                                         action_ref.as_dict().ok()
                                                     };
@@ -200,7 +215,9 @@ pub fn extract_link_annotations(doc: &LopdfDocument) -> Vec<LinkAnnotation> {
                                                     if let Some(action) = action_dict {
                                                         // Check the action type (S field)
                                                         if let Ok(action_type) = action.get(b"S") {
-                                                            if let Ok(type_name) = action_type.as_name() {
+                                                            if let Ok(type_name) =
+                                                                action_type.as_name()
+                                                            {
                                                                 // GoTo = internal link, URI = external link
                                                                 is_internal = type_name == b"GoTo";
                                                             }
@@ -212,24 +229,25 @@ pub fn extract_link_annotations(doc: &LopdfDocument) -> Vec<LinkAnnotation> {
                                                 }
 
                                                 // Get rect (position)
-                                                let rect = if let Ok(rect_obj) = annot_dict.get(b"Rect") {
-                                                    if let Ok(arr) = rect_obj.as_array() {
-                                                        if arr.len() >= 4 {
-                                                            Some([
-                                                                arr[0].as_f32().unwrap_or(0.0),
-                                                                arr[1].as_f32().unwrap_or(0.0),
-                                                                arr[2].as_f32().unwrap_or(0.0),
-                                                                arr[3].as_f32().unwrap_or(0.0),
-                                                            ])
+                                                let rect =
+                                                    if let Ok(rect_obj) = annot_dict.get(b"Rect") {
+                                                        if let Ok(arr) = rect_obj.as_array() {
+                                                            if arr.len() >= 4 {
+                                                                Some([
+                                                                    arr[0].as_f32().unwrap_or(0.0),
+                                                                    arr[1].as_f32().unwrap_or(0.0),
+                                                                    arr[2].as_f32().unwrap_or(0.0),
+                                                                    arr[3].as_f32().unwrap_or(0.0),
+                                                                ])
+                                                            } else {
+                                                                None
+                                                            }
                                                         } else {
                                                             None
                                                         }
                                                     } else {
                                                         None
-                                                    }
-                                                } else {
-                                                    None
-                                                };
+                                                    };
 
                                                 annotations.push(LinkAnnotation {
                                                     rect,
@@ -404,7 +422,11 @@ macro_rules! assert_pdf_min_internal_links {
 macro_rules! assert_pdf_page_size {
     ($pdf:expr, $page:expr, $width:expr, $height:expr) => {
         let dims = $crate::common::pdf_assertions::get_page_dimensions(&$pdf.doc, $page);
-        assert!(dims.is_some(), "Could not get dimensions for page {}", $page);
+        assert!(
+            dims.is_some(),
+            "Could not get dimensions for page {}",
+            $page
+        );
         let (w, h) = dims.unwrap();
         assert!(
             (w - $width).abs() < 1.0,

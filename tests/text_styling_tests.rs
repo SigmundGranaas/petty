@@ -1,7 +1,7 @@
 mod common;
 
 use common::fixtures::*;
-use common::{generate_pdf_from_json, TestResult};
+use common::{TestResult, generate_pdf_from_json};
 use serde_json::json;
 
 #[test]
@@ -137,7 +137,9 @@ fn test_font_weight_bold() -> TestResult {
     // Bold fonts typically have "Bold" or "B" in the name
     let fonts = common::pdf_assertions::extract_font_names(&pdf.doc);
     assert!(
-        fonts.iter().any(|f| f.contains("Bold") || f.ends_with("-B")),
+        fonts
+            .iter()
+            .any(|f| f.contains("Bold") || f.ends_with("-B")),
         "PDF should contain bold font variant, found: {:?}",
         fonts
     );

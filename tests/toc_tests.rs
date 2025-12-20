@@ -1,6 +1,6 @@
 mod common;
 
-use common::{generate_pdf_from_xslt, TestResult};
+use common::{TestResult, generate_pdf_from_xslt};
 use serde_json::json;
 
 #[test]

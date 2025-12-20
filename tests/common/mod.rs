@@ -70,7 +70,10 @@ pub fn generate_pdf_from_xslt(template: &str, data: Value) -> Result<GeneratedPd
 }
 
 /// Generate a PDF in streaming mode (for testing streaming vs composing)
-pub fn generate_pdf_streaming(template: &Value, data: Value) -> Result<GeneratedPdf, PipelineError> {
+pub fn generate_pdf_streaming(
+    template: &Value,
+    data: Value,
+) -> Result<GeneratedPdf, PipelineError> {
     let template_str = serde_json::to_string(template)?;
     let pipeline = PipelineBuilder::new()
         .with_template_source(&template_str, "json")?

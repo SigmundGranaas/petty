@@ -1,7 +1,7 @@
 mod common;
 
 use common::fixtures::*;
-use common::{generate_pdf_from_json_with_data, generate_pdf_from_xslt, TestResult};
+use common::{TestResult, generate_pdf_from_json_with_data, generate_pdf_from_xslt};
 use serde_json::json;
 
 // ============================================================================

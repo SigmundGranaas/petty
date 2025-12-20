@@ -1,7 +1,7 @@
 mod common;
 
 use common::fixtures::*;
-use common::{generate_pdf_from_json, TestResult};
+use common::{TestResult, generate_pdf_from_json};
 use serde_json::json;
 
 #[test]
@@ -30,7 +30,10 @@ fn test_text_align_right() -> TestResult {
 fn test_text_align_center() -> TestResult {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let content = paragraph_with_style("Center aligned text here.", json!({ "textAlign": "center" }));
+    let content = paragraph_with_style(
+        "Center aligned text here.",
+        json!({ "textAlign": "center" }),
+    );
     let template = template_with_styles(json!({}), content);
     let pdf = generate_pdf_from_json(&template)?;
     assert_pdf_contains_text!(pdf, "Center aligned");
