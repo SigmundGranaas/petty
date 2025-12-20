@@ -641,7 +641,9 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
     match (worker_pool, adaptive_controller) {
         (Some(pool), Some(controller)) => {
             // Full adaptive scaling with pool
-            let scaling = AdaptiveScaling::new(pool, controller, 10);
+            // Get check interval from config, default to 10 if not available
+            let check_interval = controller.scaling_check_interval();
+            let scaling = AdaptiveScaling::new(pool, controller, check_interval);
             run_consumer_unified(rx2, renderer, page_width, page_height, perform_analysis, semaphore, scaling, &mut result_sender)
         }
         (_, controller) => {

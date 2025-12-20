@@ -1,6 +1,6 @@
 use crate::MapRenderError;
 use crate::pipeline::api::PreparedDataSources;
-use crate::pipeline::concurrency::{DynamicWorkerPool, producer_task, run_in_order_streaming_consumer, spawn_workers};
+use crate::pipeline::concurrency::{DynamicWorkerPool, SenderGuard, producer_task, run_in_order_streaming_consumer, spawn_workers};
 use crate::pipeline::config::PdfBackend;
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::renderer::RenderingStrategy;
@@ -141,7 +141,12 @@ impl RenderingStrategy for SinglePassStreamingRenderer {
         let num_layout_threads = self.get_worker_count();
         let channel_buffer_size = num_layout_threads;
 
-        let max_in_flight = num_layout_threads + 2;
+        // Get max_in_flight_buffer from config, default to 2 if no adaptive facade
+        let buffer_headroom = context.adaptive
+            .as_ref()
+            .map(|f| f.max_in_flight_buffer())
+            .unwrap_or(2);
+        let max_in_flight = num_layout_threads + buffer_headroom;
         let semaphore = Arc::new(Semaphore::new(max_in_flight));
 
         info!(
@@ -168,15 +173,18 @@ impl RenderingStrategy for SinglePassStreamingRenderer {
         // Determine if we need adaptive scaling
         let has_adaptive_scaling = worker_pool.is_some();
 
-        // Without adaptive scaling, drop the original senders to allow channel closure
-        // Workers already have clones, so this won't affect them
+        // Use SenderGuard for RAII-based channel cleanup
+        // Workers already have clones, so dropping the guard won't affect them
+        let tx2_guard = SenderGuard::new(tx2);
+
         let result_sender = if has_adaptive_scaling {
             // For adaptive scaling, keep tx2 for the consumer to manage
-            // (it will drop it when work is complete)
-            Some(tx2)
+            // The guard ensures it gets dropped when this function exits
+            Some(tx2_guard.sender().clone())
         } else {
-            drop(tx2);
-            drop(rx1);
+            // Drop guards immediately to close channels
+            drop(tx2_guard);
+            drop(rx1);  // Drop rx1 directly since it's a receiver
             None
         };
 

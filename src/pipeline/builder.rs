@@ -174,6 +174,10 @@ impl PipelineBuilder {
     /// active workers based on queue depth and throughput metrics.
     ///
     /// **Prefer `with_processing_mode(ProcessingMode::Adaptive)`** for new code.
+    #[deprecated(
+        since = "0.2.0",
+        note = "Use `with_processing_mode(ProcessingMode::Adaptive)` instead for clearer intent"
+    )]
     pub fn with_adaptive_scaling(mut self, enabled: bool) -> Self {
         if enabled {
             self.processing_mode = ProcessingMode::Adaptive;

@@ -306,6 +306,14 @@ impl AdaptiveController {
         let now = self.start_time.elapsed().as_nanos() as u64;
         self.last_adjustment_nanos.store(now, Ordering::Release);
     }
+
+    /// Get the scaling check interval from configuration.
+    ///
+    /// This determines how often scaling decisions should be made
+    /// (e.g., every N items processed).
+    pub fn scaling_check_interval(&self) -> usize {
+        self.config.scaling_check_interval
+    }
 }
 
 /// Snapshot of adaptive controller metrics.
