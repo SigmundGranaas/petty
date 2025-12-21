@@ -41,7 +41,6 @@ struct Args {
     /// Workers will dynamically scale up/down based on queue depth
     #[arg(short, long)]
     adaptive: bool,
-
 }
 
 fn generate_perf_test_data_iter(
@@ -116,8 +115,18 @@ fn main() -> Result<(), PipelineError> {
         println!("  Workers: auto (based on CPU count)");
     }
     println!("  Renderer: Streaming");
-    println!("  Metrics: {}", if args.metrics || args.adaptive { "enabled" } else { "disabled" });
-    println!("  Adaptive scaling: {}", if args.adaptive { "enabled" } else { "disabled" });
+    println!(
+        "  Metrics: {}",
+        if args.metrics || args.adaptive {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+    println!(
+        "  Adaptive scaling: {}",
+        if args.adaptive { "enabled" } else { "disabled" }
+    );
 
     // Build pipeline with configurable options
     let mut builder = PipelineBuilder::new()
@@ -144,7 +153,10 @@ fn main() -> Result<(), PipelineError> {
 
     println!("\nSuccess! Generated {}", output_path);
     println!("Total time: {:.2}s", duration.as_secs_f64());
-    println!("Records/sec: {:.1}", num_records as f64 / duration.as_secs_f64());
+    println!(
+        "Records/sec: {:.1}",
+        num_records as f64 / duration.as_secs_f64()
+    );
 
     // Display metrics if available
     if let Some(metrics) = pipeline.metrics() {
@@ -156,7 +168,14 @@ fn main() -> Result<(), PipelineError> {
             println!("  Avg item time: {:?}", avg_time);
         }
         println!("  Queue high water: {}", metrics.queue_high_water);
-        println!("  Pipeline health: {}", if metrics.is_healthy() { "healthy" } else { "backlogged" });
+        println!(
+            "  Pipeline health: {}",
+            if metrics.is_healthy() {
+                "healthy"
+            } else {
+                "backlogged"
+            }
+        );
         println!("  Utilization: {:.1}%", metrics.utilization() * 100.0);
     }
 

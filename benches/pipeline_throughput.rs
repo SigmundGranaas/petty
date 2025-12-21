@@ -68,27 +68,23 @@ fn benchmark_pipeline_throughput(c: &mut Criterion) {
         let records = generate_records(count);
         let template = simple_template();
 
-        group.bench_with_input(
-            BenchmarkId::new("records", count),
-            &count,
-            |b, _| {
-                b.iter(|| {
-                    let pipeline = PipelineBuilder::new()
-                        .with_template_source(template, "json")
-                        .expect("Failed to parse template")
-                        .build()
-                        .expect("Failed to build pipeline");
+        group.bench_with_input(BenchmarkId::new("records", count), &count, |b, _| {
+            b.iter(|| {
+                let pipeline = PipelineBuilder::new()
+                    .with_template_source(template, "json")
+                    .expect("Failed to parse template")
+                    .build()
+                    .expect("Failed to build pipeline");
 
-                    let writer = Cursor::new(Vec::new());
-                    rt.block_on(async {
-                        pipeline
-                            .generate(records.clone().into_iter(), writer)
-                            .await
-                            .expect("Failed to generate PDF")
-                    })
-                });
-            },
-        );
+                let writer = Cursor::new(Vec::new());
+                rt.block_on(async {
+                    pipeline
+                        .generate(records.clone().into_iter(), writer)
+                        .await
+                        .expect("Failed to generate PDF")
+                })
+            });
+        });
     }
 
     group.finish();

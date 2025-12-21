@@ -173,7 +173,6 @@ fn extract_link_annotations(
                         info.insert("Rect".to_string(), format!("{:?}", rect));
                     }
 
-
                     if !info.is_empty() {
                         annotations.push(info);
                     }

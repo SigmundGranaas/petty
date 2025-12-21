@@ -4,20 +4,20 @@
 //!   cargo run --release --example streaming_benchmark -- 2000
 
 use clap::Parser;
+use petty::pipeline::adapters::TemplateParserAdapter;
 use petty::pipeline::config::PdfBackend;
 use petty::pipeline::context::PipelineContext;
-use petty::pipeline::provider::passthrough::PassThroughProvider;
 use petty::pipeline::provider::DataSourceProvider;
-use petty::pipeline::renderer::streaming::SinglePassStreamingRenderer;
+use petty::pipeline::provider::passthrough::PassThroughProvider;
 use petty::pipeline::renderer::RenderingStrategy;
-use petty::pipeline::adapters::TemplateParserAdapter;
+use petty::pipeline::renderer::streaming::SinglePassStreamingRenderer;
 use petty_core::layout::fonts::SharedFontLibrary;
 use petty_core::parser::processor::TemplateParser;
 use petty_json_template::JsonParser;
+use rand::SeedableRng;
 use rand::prelude::*;
 use rand::rngs::StdRng;
-use rand::SeedableRng;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -102,9 +102,10 @@ fn run_streaming_benchmark(context: &PipelineContext, data: Vec<Value>) -> f64 {
     // Run in blocking context since streaming uses tokio
     let rt = tokio::runtime::Runtime::new().unwrap();
     rt.block_on(async {
-        tokio::task::spawn_blocking(move || {
-            renderer.render(&context_clone, prepared, writer)
-        }).await.unwrap().unwrap()
+        tokio::task::spawn_blocking(move || renderer.render(&context_clone, prepared, writer))
+            .await
+            .unwrap()
+            .unwrap()
     });
 
     start.elapsed().as_secs_f64()

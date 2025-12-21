@@ -90,7 +90,9 @@ impl DocumentPipeline {
     /// `adaptive-scaling` feature, `None` otherwise.
     #[cfg(feature = "adaptive-scaling")]
     pub fn pending_shutdowns(&self) -> Option<usize> {
-        self.adaptive.as_ref().map(|f| f.manager().pending_shutdowns())
+        self.adaptive
+            .as_ref()
+            .map(|f| f.manager().pending_shutdowns())
     }
 
     /// Get worker manager metrics (separate from controller metrics).

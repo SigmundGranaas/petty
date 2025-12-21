@@ -1,6 +1,8 @@
 use crate::MapRenderError;
 use crate::pipeline::api::{Anchor, Document, Heading, Hyperlink, PreparedDataSources};
-use crate::pipeline::concurrency::{DynamicWorkerPool, producer_task, run_in_order_streaming_consumer, spawn_workers};
+use crate::pipeline::concurrency::{
+    DynamicWorkerPool, producer_task, run_in_order_streaming_consumer, spawn_workers,
+};
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::provider::DataSourceProvider;
 use chrono::Utc;
@@ -11,6 +13,8 @@ use petty_render_core::DocumentRenderer;
 use petty_render_core::Pass1Result;
 use petty_render_lopdf::LopdfRenderer;
 use serde_json::Value;
+#[cfg(not(feature = "tempfile"))]
+use std::io::Cursor;
 use std::io::{BufWriter, Seek, SeekFrom};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
@@ -69,7 +73,9 @@ impl DataSourceProvider for MetadataGeneratingProvider {
                 "Worker count ({}) exceeds physical cores ({}). \
                  Performance may degrade due to hyperthreading overhead. \
                  Consider using {} workers for optimal throughput.",
-                num_layout_threads, physical_cores, physical_cores.saturating_sub(1).max(2)
+                num_layout_threads,
+                physical_cores,
+                physical_cores.saturating_sub(1).max(2)
             );
         }
 
@@ -78,7 +84,8 @@ impl DataSourceProvider for MetadataGeneratingProvider {
         let channel_buffer_size = num_layout_threads * 2;
 
         // Get max_in_flight_buffer from config, default to 2 if no adaptive facade
-        let buffer_headroom = context.adaptive
+        let buffer_headroom = context
+            .adaptive
             .as_ref()
             .map(|f| f.max_in_flight_buffer())
             .unwrap_or(2);
@@ -116,10 +123,10 @@ impl DataSourceProvider for MetadataGeneratingProvider {
         // For adaptive mode: clone tx2 FIRST, then drop original
         let result_sender = if has_adaptive_scaling {
             let sender_for_consumer = tx2.clone();
-            drop(tx2);  // Drop original - workers + consumer clone remain
+            drop(tx2); // Drop original - workers + consumer clone remain
             Some(sender_for_consumer)
         } else {
-            drop(tx2);  // Drop original - only worker clones remain
+            drop(tx2); // Drop original - only worker clones remain
             None
         };
 
@@ -207,7 +214,7 @@ impl DataSourceProvider for MetadataGeneratingProvider {
 
         let mut temp_file = final_buf_writer
             .into_inner()
-            .map_err(|e| PipelineError::Io(e.into_error()))?;
+            .map_err(|e: std::io::IntoInnerError<_>| PipelineError::Io(e.into_error()))?;
 
         temp_file.seek(SeekFrom::Start(0))?;
 

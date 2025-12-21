@@ -35,6 +35,7 @@ use petty_render_core::DocumentRenderer;
 use petty_render_core::{HyperlinkLocation, Pass1Result, ResolvedAnchor};
 use petty_render_lopdf::LopdfRenderer;
 use petty_template_core::{DataSourceFormat, ExecutionConfig};
+#[cfg(feature = "rayon-executor")]
 use rayon::prelude::*;
 use serde_json::Value;
 use std::collections::{BTreeMap, HashMap};
@@ -300,10 +301,7 @@ impl DynamicWorkerPool {
         let worker_manager = Some(Arc::clone(&self.worker_manager));
 
         let handle = task::spawn_blocking(move || {
-            info!(
-                "[WORKER-{}] Dynamically spawned for scale-up.",
-                worker_id
-            );
+            info!("[WORKER-{}] Dynamically spawned for scale-up.", worker_id);
 
             let mut layout_engine = LayoutEngine::new(&current_font_lib, cache_config);
 
@@ -349,7 +347,10 @@ impl DynamicWorkerPool {
                 if let Some(ref manager) = worker_manager
                     && manager.should_worker_shutdown()
                 {
-                    info!("[WORKER-{}] Received shutdown signal, scaling down.", worker_id);
+                    info!(
+                        "[WORKER-{}] Received shutdown signal, scaling down.",
+                        worker_id
+                    );
                     break;
                 }
             }
@@ -413,7 +414,10 @@ pub fn configure_rayon_pool(num_threads: usize) {
             e
         );
     } else {
-        log::debug!("[RAYON] Configured global thread pool with {} threads", threads);
+        log::debug!(
+            "[RAYON] Configured global thread pool with {} threads",
+            threads
+        );
     }
 }
 
@@ -436,7 +440,10 @@ pub(crate) async fn producer_task<I>(
 ) where
     I: Iterator<Item = Value> + Send + 'static,
 {
-    info!("[PRODUCER] Starting batched producer with batch_size={}.", PRODUCER_BATCH_SIZE);
+    info!(
+        "[PRODUCER] Starting batched producer with batch_size={}.",
+        PRODUCER_BATCH_SIZE
+    );
 
     // Move iterator processing to a blocking task for Rayon access
     let (batch_tx, batch_rx) = async_channel::bounded::<Vec<SerializedWorkItem>>(4);
@@ -451,12 +458,27 @@ pub(crate) async fn producer_task<I>(
             global_idx += 1;
 
             if batch.len() >= PRODUCER_BATCH_SIZE {
-                // Parallel serialize the batch using Rayon
+                // Serialize the batch (parallel with rayon, sequential without)
+                #[cfg(feature = "rayon-executor")]
                 let serialized_batch: Vec<SerializedWorkItem> = batch
                     .par_drain(..)
                     .map(|(idx, value)| {
-                        let serialized = serde_json::to_string(&value)
-                            .unwrap_or_else(|_| "{}".to_string());
+                        let serialized =
+                            serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string());
+                        SerializedWorkItem {
+                            index: idx,
+                            serialized: Arc::new(serialized),
+                            data: Arc::new(value),
+                        }
+                    })
+                    .collect();
+
+                #[cfg(not(feature = "rayon-executor"))]
+                let serialized_batch: Vec<SerializedWorkItem> = batch
+                    .drain(..)
+                    .map(|(idx, value)| {
+                        let serialized =
+                            serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string());
                         SerializedWorkItem {
                             index: idx,
                             serialized: Arc::new(serialized),
@@ -473,11 +495,26 @@ pub(crate) async fn producer_task<I>(
 
         // Process remaining items in the last partial batch
         if !batch.is_empty() {
+            #[cfg(feature = "rayon-executor")]
             let serialized_batch: Vec<SerializedWorkItem> = batch
                 .par_drain(..)
                 .map(|(idx, value)| {
-                    let serialized = serde_json::to_string(&value)
-                        .unwrap_or_else(|_| "{}".to_string());
+                    let serialized =
+                        serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string());
+                    SerializedWorkItem {
+                        index: idx,
+                        serialized: Arc::new(serialized),
+                        data: Arc::new(value),
+                    }
+                })
+                .collect();
+
+            #[cfg(not(feature = "rayon-executor"))]
+            let serialized_batch: Vec<SerializedWorkItem> = batch
+                .drain(..)
+                .map(|(idx, value)| {
+                    let serialized =
+                        serde_json::to_string(&value).unwrap_or_else(|_| "{}".to_string());
                     SerializedWorkItem {
                         index: idx,
                         serialized: Arc::new(serialized),
@@ -489,7 +526,10 @@ pub(crate) async fn producer_task<I>(
             let _ = batch_tx.send_blocking(serialized_batch);
         }
 
-        info!("[PRODUCER] Batch producer finished, {} items total.", global_idx);
+        info!(
+            "[PRODUCER] Batch producer finished, {} items total.",
+            global_idx
+        );
     });
 
     // Receive batches and send items to workers
@@ -565,7 +605,11 @@ pub(crate) fn spawn_workers(
             info!(
                 "[WORKER-{}] Started with shared font library{}.",
                 worker_id,
-                if adaptive_controller.is_some() { " and metrics" } else { "" }
+                if adaptive_controller.is_some() {
+                    " and metrics"
+                } else {
+                    ""
+                }
             );
 
             let mut layout_engine = LayoutEngine::new(&current_font_lib, cache_config);
@@ -625,7 +669,10 @@ pub(crate) fn spawn_workers(
                 if let Some(ref manager) = worker_manager
                     && manager.should_worker_shutdown()
                 {
-                    info!("[WORKER-{}] Received shutdown signal, scaling down.", worker_id);
+                    info!(
+                        "[WORKER-{}] Received shutdown signal, scaling down.",
+                        worker_id
+                    );
                     break;
                 }
             }
@@ -676,13 +723,31 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
             // Get check interval from config, default to 10 if not available
             let check_interval = controller.scaling_check_interval();
             let scaling = AdaptiveScaling::new(pool, controller, check_interval);
-            run_consumer_unified(rx2, renderer, page_width, page_height, perform_analysis, semaphore, scaling, &mut result_sender)
+            run_consumer_unified(
+                rx2,
+                renderer,
+                page_width,
+                page_height,
+                perform_analysis,
+                semaphore,
+                scaling,
+                &mut result_sender,
+            )
         }
         (_, controller) => {
             // No pool - drop sender and use NoScaling
             drop(result_sender);
             let scaling = NoScaling::new(controller);
-            run_consumer_unified(rx2, renderer, page_width, page_height, perform_analysis, semaphore, scaling, &mut None)
+            run_consumer_unified(
+                rx2,
+                renderer,
+                page_width,
+                page_height,
+                perform_analysis,
+                semaphore,
+                scaling,
+                &mut None,
+            )
         }
     }
 }

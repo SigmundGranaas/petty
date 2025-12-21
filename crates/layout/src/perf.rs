@@ -107,7 +107,8 @@ impl DebugProfiler {
         self.items_processed.fetch_add(1, Ordering::Release);
         // Saturating conversion to prevent overflow on very long durations
         let nanos = u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX);
-        self.total_processing_time_ns.fetch_add(nanos, Ordering::Release);
+        self.total_processing_time_ns
+            .fetch_add(nanos, Ordering::Release);
     }
 
     /// Get the current throughput in items per second.

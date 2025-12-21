@@ -7,7 +7,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let count: usize = args.get(1).and_then(|s| s.parse().ok()).unwrap_or(5000);
     let workers: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(19);
 
-    println!("Generating {} records with {} workers (metrics enabled)...", count, workers);
+    println!(
+        "Generating {} records with {} workers (metrics enabled)...",
+        count, workers
+    );
 
     let pipeline = PipelineBuilder::new()
         .with_template_file("templates/perf_test_template.xsl")?
@@ -16,11 +19,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build()?;
 
     let data: Vec<_> = (0..count)
-        .map(|i| json!({
-            "id": i,
-            "name": format!("Record {}", i),
-            "value": i * 100,
-        }))
+        .map(|i| {
+            json!({
+                "id": i,
+                "name": format!("Record {}", i),
+                "value": i * 100,
+            })
+        })
         .collect();
 
     let start = Instant::now();
@@ -31,7 +36,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Records: {}", count);
     println!("Workers: {}", workers);
     println!("Time: {:.3}s", elapsed.as_secs_f64());
-    println!("Throughput: {:.1} records/sec", count as f64 / elapsed.as_secs_f64());
+    println!(
+        "Throughput: {:.1} records/sec",
+        count as f64 / elapsed.as_secs_f64()
+    );
 
     if let Some(metrics) = pipeline.metrics() {
         println!("\n=== Pipeline Metrics ===");
@@ -47,7 +55,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let theoretical_max = workers as f64 / avg_time.as_secs_f64();
             let efficiency = (metrics.throughput / theoretical_max) * 100.0;
             println!("\n=== Efficiency Analysis ===");
-            println!("Theoretical max throughput: {:.1} items/sec", theoretical_max);
+            println!(
+                "Theoretical max throughput: {:.1} items/sec",
+                theoretical_max
+            );
             println!("Actual throughput: {:.1} items/sec", metrics.throughput);
             println!("Parallel efficiency: {:.1}%", efficiency);
         }

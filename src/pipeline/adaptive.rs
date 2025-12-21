@@ -492,7 +492,10 @@ impl AdaptiveScalingFacade {
     /// * `initial_workers` - Initial number of workers
     /// * `config` - Configuration for adaptive behavior
     pub fn new(initial_workers: usize, config: AdaptiveConfig) -> Self {
-        let controller = Arc::new(AdaptiveController::with_config(initial_workers, config.clone()));
+        let controller = Arc::new(AdaptiveController::with_config(
+            initial_workers,
+            config.clone(),
+        ));
         let manager = Arc::new(WorkerManager::new(Arc::clone(&controller)));
 
         Self {
@@ -795,7 +798,9 @@ mod tests {
     #[test]
     fn test_facade_metrics() {
         let facade = AdaptiveScalingFacade::new(4, AdaptiveConfig::default());
-        facade.controller().record_item_processed(Duration::from_millis(50));
+        facade
+            .controller()
+            .record_item_processed(Duration::from_millis(50));
         facade.controller().record_queue_depth(5);
 
         let metrics = facade.metrics();

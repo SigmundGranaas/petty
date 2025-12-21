@@ -303,9 +303,9 @@ impl PipelineBuilder {
             self.processing_mode,
             ProcessingMode::WithMetrics | ProcessingMode::Adaptive
         ) {
-            let initial_workers = self.worker_count.unwrap_or_else(|| {
-                num_cpus::get().saturating_sub(1).max(2)
-            });
+            let initial_workers = self
+                .worker_count
+                .unwrap_or_else(|| num_cpus::get().saturating_sub(1).max(2));
 
             // Use custom bounds if provided
             let config = if let Some(max) = self.max_workers {
@@ -314,7 +314,10 @@ impl PipelineBuilder {
                 AdaptiveConfig::default()
             };
 
-            Some(Arc::new(AdaptiveScalingFacade::new(initial_workers, config)))
+            Some(Arc::new(AdaptiveScalingFacade::new(
+                initial_workers,
+                config,
+            )))
         } else {
             None
         };
@@ -355,8 +358,9 @@ impl PipelineBuilder {
                     log::info!(
                         "Template uses advanced features. Selecting Metadata Generating pipeline."
                     );
-                    provider =
-                        Provider::Metadata(MetadataGeneratingProvider::with_worker_count(self.worker_count));
+                    provider = Provider::Metadata(MetadataGeneratingProvider::with_worker_count(
+                        self.worker_count,
+                    ));
                     renderer = Renderer::Composing(ComposingRenderer);
                 } else {
                     log::info!("Template is streamable. Selecting simple pipeline.");
@@ -373,7 +377,8 @@ impl PipelineBuilder {
     fn create_simple_renderer(&self) -> Renderer {
         log::info!(
             "Using streaming renderer with {} workers, buffer_size={}.",
-            self.worker_count.map_or("auto".to_string(), |w| w.to_string()),
+            self.worker_count
+                .map_or("auto".to_string(), |w| w.to_string()),
             self.render_buffer_size
         );
         Renderer::Streaming(SinglePassStreamingRenderer::with_config(

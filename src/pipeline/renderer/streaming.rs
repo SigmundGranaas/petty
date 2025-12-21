@@ -1,6 +1,8 @@
 use crate::MapRenderError;
 use crate::pipeline::api::PreparedDataSources;
-use crate::pipeline::concurrency::{DynamicWorkerPool, producer_task, run_in_order_streaming_consumer, spawn_workers};
+use crate::pipeline::concurrency::{
+    DynamicWorkerPool, producer_task, run_in_order_streaming_consumer, spawn_workers,
+};
 use crate::pipeline::config::PdfBackend;
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::renderer::RenderingStrategy;
@@ -169,7 +171,9 @@ impl RenderingStrategy for SinglePassStreamingRenderer {
                 "Worker count ({}) exceeds physical cores ({}). \
                  Performance may degrade due to hyperthreading overhead. \
                  Consider using {} workers for optimal throughput.",
-                num_layout_threads, physical_cores, physical_cores.saturating_sub(1).max(2)
+                num_layout_threads,
+                physical_cores,
+                physical_cores.saturating_sub(1).max(2)
             );
         }
 
@@ -180,7 +184,8 @@ impl RenderingStrategy for SinglePassStreamingRenderer {
         let results_channel_size = self.render_buffer_size;
 
         // Get max_in_flight_buffer from config, default to 2 if no adaptive facade
-        let buffer_headroom = context.adaptive
+        let buffer_headroom = context
+            .adaptive
             .as_ref()
             .map(|f| f.max_in_flight_buffer())
             .unwrap_or(2);
@@ -218,10 +223,10 @@ impl RenderingStrategy for SinglePassStreamingRenderer {
         // For adaptive mode: clone tx2 FIRST, then drop original
         let result_sender = if has_adaptive_scaling {
             let sender_for_consumer = tx2.clone();
-            drop(tx2);  // Drop original - workers + consumer clone remain
+            drop(tx2); // Drop original - workers + consumer clone remain
             Some(sender_for_consumer)
         } else {
-            drop(tx2);  // Drop original - only worker clones remain
+            drop(tx2); // Drop original - only worker clones remain
             None
         };
 

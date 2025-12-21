@@ -3,10 +3,10 @@
 //! Run with: cargo run --release --example bench_config
 
 use petty::{PdfBackend, PipelineBuilder, PipelineError};
+use rand::SeedableRng;
 use rand::prelude::*;
 use rand::rngs::StdRng;
-use rand::SeedableRng;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::Cursor;
 use std::time::Instant;
 
@@ -71,16 +71,27 @@ fn main() -> Result<(), PipelineError> {
 
     let physical_cores = num_cpus::get_physical();
     let logical_cores = num_cpus::get();
-    println!("Physical cores: {}, Logical cores: {}", physical_cores, logical_cores);
+    println!(
+        "Physical cores: {}, Logical cores: {}",
+        physical_cores, logical_cores
+    );
     println!();
 
     // Test combined configurations (workers x buffer)
     println!("=== Combined Configuration Tests ===");
     let configs = [
-        (8, 16), (8, 32), (8, 64),
-        (12, 16), (12, 32), (12, 64),
-        (14, 16), (14, 32), (14, 64),
-        (16, 16), (16, 32), (16, 64),
+        (8, 16),
+        (8, 32),
+        (8, 64),
+        (12, 16),
+        (12, 32),
+        (12, 64),
+        (14, 16),
+        (14, 32),
+        (14, 64),
+        (16, 16),
+        (16, 32),
+        (16, 64),
     ];
 
     let mut results: Vec<(usize, usize, f64, f64)> = Vec::new();
@@ -94,14 +105,20 @@ fn main() -> Result<(), PipelineError> {
         let throughput = RECORDS as f64 / avg;
         let peak = RECORDS as f64 / times.first().unwrap();
         results.push((workers, buffer, throughput, peak));
-        println!("W={:>2} B={:>3}: {:.0} rec/s (peak: {:.0})", workers, buffer, throughput, peak);
+        println!(
+            "W={:>2} B={:>3}: {:.0} rec/s (peak: {:.0})",
+            workers, buffer, throughput, peak
+        );
     }
 
     // Find best configuration
     results.sort_by(|a, b| b.2.partial_cmp(&a.2).unwrap());
     let best = &results[0];
     println!();
-    println!(">>> BEST: Workers={}, Buffer={} -> {:.0} rec/s <<<", best.0, best.1, best.2);
+    println!(
+        ">>> BEST: Workers={}, Buffer={} -> {:.0} rec/s <<<",
+        best.0, best.1, best.2
+    );
 
     println!();
     println!("Done!");
