@@ -21,6 +21,53 @@
 //!
 //! pipeline.generate_to_file(vec![data], "output.pdf")?;
 //! ```
+//!
+//! ## Feature Flags
+//!
+//! Petty supports optional features that can be enabled in your `Cargo.toml`:
+//!
+//! ### `parallel-render`
+//!
+//! Enables parallel PDF content rendering using Rayon. This can significantly improve
+//! throughput when generating multi-page documents by parallelizing page content
+//! stream generation.
+//!
+//! ```toml
+//! [dependencies]
+//! petty = { version = "...", features = ["parallel-render"] }
+//! ```
+//!
+//! When enabled, use `pipeline::configure_rayon_pool()` to customize the thread pool size:
+//!
+//! ```ignore
+//! use petty::pipeline::configure_rayon_pool;
+//!
+//! // Use half of available CPUs for PDF rendering
+//! configure_rayon_pool(num_cpus::get() / 2);
+//! ```
+//!
+//! ## Worker Configuration
+//!
+//! The number of layout worker threads can be configured in order of priority:
+//!
+//! 1. Explicit configuration via [`PipelineBuilder::with_worker_count`]
+//! 2. The `PETTY_WORKER_COUNT` environment variable
+//! 3. Auto-detection based on CPU count (`num_cpus - 1`, minimum 2)
+//!
+//! ### Adaptive Scaling (Experimental)
+//!
+//! The [`pipeline::adaptive`] module provides experimental support for dynamic worker
+//! scaling based on workload. Enable with [`PipelineBuilder::with_adaptive_scaling`]:
+//!
+//! ```ignore
+//! let pipeline = PipelineBuilder::new()
+//!     .with_template_file("template.json")?
+//!     .with_adaptive_scaling(true)
+//!     .build()?;
+//! ```
+//!
+//! See [`AdaptiveController`](pipeline::AdaptiveController) and
+//! [`WorkerManager`](pipeline::WorkerManager) for lower-level control.
 
 // ============================================================================
 // Foundation Crates - Basic types and abstractions
@@ -125,10 +172,10 @@ pub use types_base::{AnchorId, BoxConstraints, Color, IndexTerm, Rect, ResourceU
 pub use traits::{Executor, FontProvider, ResourceProvider};
 
 // Pipeline module (orchestration layer - stays in main crate)
-mod pipeline;
+pub mod pipeline;
 
 // Public API
-pub use crate::pipeline::{GenerationMode, PdfBackend, PipelineBuilder};
+pub use crate::pipeline::{GenerationMode, PdfBackend, PipelineBuilder, ProcessingMode};
 
 // Helper trait for error conversion
 pub(crate) trait MapRenderError<T> {

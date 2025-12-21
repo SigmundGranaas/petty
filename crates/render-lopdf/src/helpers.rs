@@ -225,6 +225,27 @@ pub fn render_elements_to_content(
     Ok(page_ctx.finish())
 }
 
+/// Render multiple pages in parallel using rayon.
+///
+/// This function takes a vector of pages (each page is a vector of positioned elements)
+/// and renders them in parallel, returning the results in the same order.
+///
+/// Only available when the `parallel-render` feature is enabled.
+#[cfg(feature = "parallel-render")]
+pub fn render_pages_parallel(
+    pages: Vec<Vec<PositionedElement>>,
+    font_map: &HashMap<String, String>,
+    page_width: f32,
+    page_height: f32,
+) -> Vec<Result<Content, RenderError>> {
+    use rayon::prelude::*;
+
+    pages
+        .into_par_iter()
+        .map(|elements| render_elements_to_content(elements, font_map, page_width, page_height))
+        .collect()
+}
+
 // --- Internal Page Drawing Context ---
 
 use once_cell::sync::Lazy;

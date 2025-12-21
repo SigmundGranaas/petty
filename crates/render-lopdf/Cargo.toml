@@ -21,3 +21,9 @@ lopdf = { version = "0.38.0", default-features = false }
 thiserror = "2.0.17"
 log = "0.4"
 once_cell = "1.21.3"
+
+# Optional parallel rendering
+rayon = { version = "1.10", optional = true }
+
+[features]
+parallel-render = ["rayon"]

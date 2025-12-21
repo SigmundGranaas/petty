@@ -1,6 +1,8 @@
 use crate::MapRenderError;
 use crate::pipeline::api::{Anchor, Document, Heading, Hyperlink, PreparedDataSources};
-use crate::pipeline::concurrency::{producer_task, run_in_order_streaming_consumer, spawn_workers};
+use crate::pipeline::concurrency::{
+    DynamicWorkerPool, producer_task, run_in_order_streaming_consumer, spawn_workers,
+};
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::provider::DataSourceProvider;
 use chrono::Utc;
@@ -11,6 +13,8 @@ use petty_render_core::DocumentRenderer;
 use petty_render_core::Pass1Result;
 use petty_render_lopdf::LopdfRenderer;
 use serde_json::Value;
+#[cfg(not(feature = "tempfile"))]
+use std::io::Cursor;
 use std::io::{BufWriter, Seek, SeekFrom};
 use std::sync::Arc;
 use tokio::sync::Semaphore;
@@ -18,7 +22,37 @@ use tokio::task;
 
 /// A data source provider that performs a full analysis pass on the data.
 #[derive(Clone)]
-pub struct MetadataGeneratingProvider;
+pub struct MetadataGeneratingProvider {
+    /// Optional override for worker count (None = auto-detect from env or CPU count)
+    worker_count: Option<usize>,
+}
+
+impl MetadataGeneratingProvider {
+    pub fn new() -> Self {
+        Self { worker_count: None }
+    }
+
+    pub fn with_worker_count(worker_count: Option<usize>) -> Self {
+        Self { worker_count }
+    }
+
+    /// Determine the number of layout threads to use based on configuration
+    fn get_worker_count(&self) -> usize {
+        // Priority: explicit config > env var > auto-detect
+        self.worker_count.unwrap_or_else(|| {
+            std::env::var("PETTY_WORKER_COUNT")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or_else(|| num_cpus::get().saturating_sub(1).max(2))
+        })
+    }
+}
+
+impl Default for MetadataGeneratingProvider {
+    fn default() -> Self {
+        Self::new()
+    }
+}
 
 impl DataSourceProvider for MetadataGeneratingProvider {
     fn provide<I>(
@@ -29,10 +63,33 @@ impl DataSourceProvider for MetadataGeneratingProvider {
     where
         I: Iterator<Item = Value> + Send + 'static,
     {
-        let num_layout_threads = num_cpus::get().saturating_sub(1).clamp(2, 6);
-        let channel_buffer_size = num_layout_threads;
+        // Use dynamic worker count configuration (no artificial cap)
+        let num_layout_threads = self.get_worker_count();
 
-        let max_in_flight = num_layout_threads + 2;
+        // Warn if worker count exceeds physical cores (hyperthreading overhead)
+        let physical_cores = num_cpus::get_physical();
+        if num_layout_threads > physical_cores {
+            log::warn!(
+                "Worker count ({}) exceeds physical cores ({}). \
+                 Performance may degrade due to hyperthreading overhead. \
+                 Consider using {} workers for optimal throughput.",
+                num_layout_threads,
+                physical_cores,
+                physical_cores.saturating_sub(1).max(2)
+            );
+        }
+
+        // Use 2x worker count for channel buffers to reduce blocking contention
+        // when workers produce faster than consumer can process
+        let channel_buffer_size = num_layout_threads * 2;
+
+        // Get max_in_flight_buffer from config, default to 2 if no adaptive facade
+        let buffer_headroom = context
+            .adaptive
+            .as_ref()
+            .map(|f| f.max_in_flight_buffer())
+            .unwrap_or(2);
+        let max_in_flight = num_layout_threads + buffer_headroom;
         let semaphore = Arc::new(Semaphore::new(max_in_flight));
 
         info!(
@@ -44,7 +101,34 @@ impl DataSourceProvider for MetadataGeneratingProvider {
         let (tx2, rx2) = async_channel::bounded(channel_buffer_size);
 
         let producer = task::spawn(producer_task(data_iterator, tx1, semaphore.clone()));
-        let workers = spawn_workers(num_layout_threads, context, rx1, tx2);
+        let workers = spawn_workers(num_layout_threads, context, rx1.clone(), tx2.clone());
+
+        // Create dynamic worker pool for adaptive scaling (when worker manager is available)
+        let mut worker_pool = context.worker_manager().map(|wm| {
+            DynamicWorkerPool::new(
+                Arc::new(context.clone()),
+                rx1.clone(),
+                wm,
+                num_layout_threads,
+            )
+        });
+
+        // Determine if we need adaptive scaling (dynamic worker spawning)
+        let has_adaptive_scaling = worker_pool.is_some();
+
+        // CRITICAL: Drop original tx2 BEFORE consumer starts!
+        // Workers already have clones. If we hold tx2, the channel won't close
+        // when workers finish, causing consumer to block forever.
+        //
+        // For adaptive mode: clone tx2 FIRST, then drop original
+        let result_sender = if has_adaptive_scaling {
+            let sender_for_consumer = tx2.clone();
+            drop(tx2); // Drop original - workers + consumer clone remain
+            Some(sender_for_consumer)
+        } else {
+            drop(tx2); // Drop original - only worker clones remain
+            None
+        };
 
         // --- Analysis Pass (Render to Temporary Storage via In-Order Streaming Consumer) ---
         #[cfg(feature = "tempfile")]
@@ -96,7 +180,11 @@ impl DataSourceProvider for MetadataGeneratingProvider {
                 page_height,
                 true,
                 semaphore,
+                context.adaptive_controller(),
+                worker_pool.as_mut(),
+                result_sender,
             )?;
+
             pass1_result = p1_result;
 
             Box::new(renderer).finish(page_ids).map_render_err()?
@@ -115,11 +203,18 @@ impl DataSourceProvider for MetadataGeneratingProvider {
             worker.abort();
         }
 
+        // Abort dynamically spawned workers
+        if let Some(pool) = worker_pool {
+            for handle in pool.abort_all() {
+                drop(handle);
+            }
+        }
+
         let document = build_document_from_pass1_result(pass1_result);
 
         let mut temp_file = final_buf_writer
             .into_inner()
-            .map_err(|e| PipelineError::Io(e.into_error()))?;
+            .map_err(|e: std::io::IntoInnerError<_>| PipelineError::Io(e.into_error()))?;
 
         temp_file.seek(SeekFrom::Start(0))?;
 
@@ -289,15 +384,16 @@ mod tests {
             font_library: Arc::new(library),
             resource_provider: Arc::new(petty_resource::InMemoryResourceProvider::new()),
             cache_config: Default::default(),
+            adaptive: None,
         };
 
-        let provider = MetadataGeneratingProvider;
+        let provider = MetadataGeneratingProvider::new();
         let data = vec![json!({
             "section1": { "title": "First Section" },
             "section2": { "title": "Second Section" },
         })];
 
-        let sources =
+        let sources: PreparedDataSources =
             tokio::task::spawn_blocking(move || provider.provide(&context, data.into_iter()))
                 .await
                 .unwrap()

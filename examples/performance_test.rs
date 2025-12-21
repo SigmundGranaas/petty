@@ -1,5 +1,5 @@
 use clap::Parser;
-use petty::{PdfBackend, PipelineBuilder, PipelineError};
+use petty::{PdfBackend, PipelineBuilder, PipelineError, ProcessingMode};
 use rand::SeedableRng;
 use rand::prelude::*;
 use rand::rngs::StdRng;
@@ -28,6 +28,19 @@ struct Args {
     /// Maximum items per record
     #[arg(default_value_t = 15)]
     max_items: usize,
+
+    /// Number of worker threads (0 = auto-detect based on CPU count)
+    #[arg(short, long, default_value_t = 0)]
+    workers: usize,
+
+    /// Enable metrics collection for throughput analysis
+    #[arg(short, long)]
+    metrics: bool,
+
+    /// Enable adaptive scaling (requires --features adaptive-scaling)
+    /// Workers will dynamically scale up/down based on queue depth
+    #[arg(short, long)]
+    adaptive: bool,
 }
 
 fn generate_perf_test_data_iter(
@@ -96,11 +109,43 @@ fn main() -> Result<(), PipelineError> {
     println!("Starting Pipeline...");
     println!("  Records: {}", num_records);
     println!("  Template: {}", template_path);
+    if args.workers > 0 {
+        println!("  Workers: {}", args.workers);
+    } else {
+        println!("  Workers: auto (based on CPU count)");
+    }
+    println!("  Renderer: Streaming");
+    println!(
+        "  Metrics: {}",
+        if args.metrics || args.adaptive {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+    println!(
+        "  Adaptive scaling: {}",
+        if args.adaptive { "enabled" } else { "disabled" }
+    );
 
-    let pipeline = PipelineBuilder::new()
+    // Build pipeline with configurable options
+    let mut builder = PipelineBuilder::new()
         .with_template_file(template_path)?
-        .with_pdf_backend(PdfBackend::LopdfParallel)
-        .build()?;
+        .with_pdf_backend(PdfBackend::LopdfParallel);
+
+    // Set worker count if specified
+    if args.workers > 0 {
+        builder = builder.with_worker_count(args.workers);
+    }
+
+    // Configure processing mode based on flags
+    if args.adaptive {
+        builder = builder.with_processing_mode(ProcessingMode::Adaptive);
+    } else if args.metrics {
+        builder = builder.with_processing_mode(ProcessingMode::WithMetrics);
+    }
+
+    let pipeline = builder.build()?;
 
     let start_time = Instant::now();
     pipeline.generate_to_file(data_iterator, output_path)?;
@@ -108,6 +153,44 @@ fn main() -> Result<(), PipelineError> {
 
     println!("\nSuccess! Generated {}", output_path);
     println!("Total time: {:.2}s", duration.as_secs_f64());
+    println!(
+        "Records/sec: {:.1}",
+        num_records as f64 / duration.as_secs_f64()
+    );
+
+    // Display metrics if available
+    if let Some(metrics) = pipeline.metrics() {
+        println!("\n=== Pipeline Metrics ===");
+        println!("  Items processed: {}", metrics.items_processed);
+        println!("  Active workers: {}", metrics.current_workers);
+        println!("  Throughput: {:.1} items/sec", metrics.throughput);
+        if let Some(avg_time) = metrics.avg_item_time {
+            println!("  Avg item time: {:?}", avg_time);
+        }
+        println!("  Queue high water: {}", metrics.queue_high_water);
+        println!(
+            "  Pipeline health: {}",
+            if metrics.is_healthy() {
+                "healthy"
+            } else {
+                "backlogged"
+            }
+        );
+        println!("  Utilization: {:.1}%", metrics.utilization() * 100.0);
+    }
+
+    // Display adaptive scaling metrics if available (requires --features adaptive-scaling)
+    #[cfg(feature = "adaptive-scaling")]
+    if args.adaptive {
+        if let Some(pending) = pipeline.pending_shutdowns() {
+            println!("  Pending shutdowns: {}", pending);
+        }
+        if let Some(wm_metrics) = pipeline.worker_manager_metrics() {
+            println!("\n=== Worker Manager Metrics ===");
+            println!("  Final worker count: {}", wm_metrics.current_workers);
+            println!("  Queue depth (final): {}", wm_metrics.queue_depth);
+        }
+    }
 
     Ok(())
 }
