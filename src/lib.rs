@@ -37,7 +37,7 @@
 //! petty = { version = "...", features = ["parallel-render"] }
 //! ```
 //!
-//! When enabled, use [`pipeline::configure_rayon_pool`] to customize the thread pool size:
+//! When enabled, use `pipeline::configure_rayon_pool()` to customize the thread pool size:
 //!
 //! ```ignore
 //! use petty::pipeline::configure_rayon_pool;
