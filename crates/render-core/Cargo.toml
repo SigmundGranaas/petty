@@ -9,5 +9,5 @@ petty-types = { path = "../types" }
 petty-style = { path = "../style" }
 petty-idf = { path = "../idf" }
 petty-layout = { path = "../layout" }
-handlebars = "6.3.2"
+handlebars = "6.4.0"
 thiserror = "2.0.17"
