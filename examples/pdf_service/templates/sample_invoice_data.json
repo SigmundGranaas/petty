@@ -1,0 +1,31 @@
+{
+  "template": "invoice",
+  "data": {
+    "customers": {
+      "item": {
+        "invoiceNumber": "INV-2025-001",
+        "name": "Acme Corporation",
+        "address": "123 Main Street, San Francisco, CA 94102",
+        "items": {
+          "item": [
+            {
+              "product": "PDF Generation Service - Premium Plan",
+              "quantity": "1",
+              "price": "$299.00"
+            },
+            {
+              "product": "Additional API Calls (10,000 requests)",
+              "quantity": "5",
+              "price": "$49.00"
+            },
+            {
+              "product": "Priority Support",
+              "quantity": "1",
+              "price": "$99.00"
+            }
+          ]
+        }
+      }
+    }
+  }
+}

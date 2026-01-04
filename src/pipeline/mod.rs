@@ -40,6 +40,7 @@ pub(crate) mod worker;
 // Core public API
 pub use builder::PipelineBuilder;
 pub use config::{GenerationMode, PdfBackend, ProcessingMode};
+pub use orchestrator::DocumentPipeline;
 
 // Adaptive scaling API
 // Public API exports for adaptive scaling and metrics collection (always available)

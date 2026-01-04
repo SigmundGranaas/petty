@@ -1,0 +1,22 @@
+[server]
+host = "0.0.0.0"
+port = 3000
+max_request_size_mb = 10
+
+[concurrency]
+max_sync_requests = 10
+worker_count = 4
+worker_poll_interval_ms = 500
+
+[pipeline]
+template_dir = "./examples/pdf_service/templates"
+worker_threads = 4
+render_buffer_size = 32
+
+[storage]
+backend = "filesystem"
+path = "./examples/pdf_service/output"
+result_ttl_hours = 24
+
+[database]
+max_connections = 10

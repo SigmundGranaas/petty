@@ -6,7 +6,7 @@ use crate::pipeline::concurrency::{
 use crate::pipeline::config::PdfBackend;
 use crate::pipeline::context::PipelineContext;
 use crate::pipeline::renderer::RenderingStrategy;
-use log::{info, warn};
+use log::{debug, info, warn};
 use petty_core::error::PipelineError;
 use petty_render_core::DocumentRenderer;
 use petty_render_lopdf::LopdfRenderer;
@@ -224,9 +224,11 @@ impl RenderingStrategy for SinglePassStreamingRenderer {
         let result_sender = if has_adaptive_scaling {
             let sender_for_consumer = tx2.clone();
             drop(tx2); // Drop original - workers + consumer clone remain
+            debug!("[STREAMING] Dropped original tx2 (adaptive mode), keeping consumer clone");
             Some(sender_for_consumer)
         } else {
             drop(tx2); // Drop original - only worker clones remain
+            debug!("[STREAMING] Dropped original tx2 (non-adaptive mode)");
             None
         };
 

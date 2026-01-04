@@ -169,16 +169,31 @@ impl ScalingBehavior for AdaptiveScaling<'_> {
 
     fn check_scaling(&mut self, result_sender: Option<&LayoutResultSender>) -> bool {
         self.check_counter = self.check_counter.wrapping_add(1);
+
+        // ALWAYS check if work is complete on every call, not just at intervals!
+        // This is critical for single-item workloads where the work finishes
+        // before the first check_interval is reached.
+        let work_complete = self.pool.is_work_complete();
+        if work_complete {
+            debug!(
+                "[ADAPTIVE] Work complete detected (counter={})",
+                self.check_counter
+            );
+            return true; // Signal to drop sender
+        }
+
+        // Only do expensive scaling checks at intervals
         if !self.check_counter.is_multiple_of(self.check_interval) {
             return false;
         }
 
-        // Check if work is complete first
-        let work_complete = self.pool.is_work_complete();
-        if work_complete {
-            debug!("[ADAPTIVE] Work complete detected");
-            return true; // Signal to drop sender
-        }
+        // Periodic scaling check
+        let is_closed = self.pool.work_receiver.is_closed();
+        let is_empty = self.pool.work_receiver.is_empty();
+        debug!(
+            "[ADAPTIVE] Periodic check (counter={}): work_complete={}, is_closed={}, is_empty={}",
+            self.check_counter, work_complete, is_closed, is_empty
+        );
 
         // If sender is available, check for scaling opportunities
         if let Some(sender) = result_sender {
@@ -614,7 +629,13 @@ pub(crate) fn spawn_workers(
 
             let mut layout_engine = LayoutEngine::new(&current_font_lib, cache_config);
 
+            debug!("[WORKER-{}] Entering receive loop on rx1...", worker_id);
             while let Ok(result) = rx_clone.recv_blocking() {
+                debug!(
+                    "[WORKER-{}] Received work item: index={:?}",
+                    worker_id,
+                    result.as_ref().ok().map(|w| w.index)
+                );
                 let item_start = Instant::now();
 
                 let (index, work_result) = match result {
@@ -660,10 +681,21 @@ pub(crate) fn spawn_workers(
                     controller.record_item_processed(item_start.elapsed());
                 }
 
+                debug!(
+                    "[WORKER-{}] Sending result for index {} to consumer via tx2",
+                    worker_id, index
+                );
                 if tx_clone.send_blocking((index, work_result)).is_err() {
-                    warn!("[WORKER-{}] Consumer channel closed.", worker_id);
+                    warn!(
+                        "[WORKER-{}] Consumer channel (tx2) closed, cannot send result.",
+                        worker_id
+                    );
                     break;
                 }
+                debug!(
+                    "[WORKER-{}] Successfully sent result for index {}",
+                    worker_id, index
+                );
 
                 // Check for cooperative shutdown signal (adaptive scaling)
                 if let Some(ref manager) = worker_manager
@@ -677,11 +709,15 @@ pub(crate) fn spawn_workers(
                 }
             }
             info!("[WORKER-{}] Shutting down.", worker_id);
+            drop(tx_clone);
+            debug!("[WORKER-{}] Dropped tx_clone", worker_id);
         });
         handles.push(worker_handle);
     }
     drop(rx);
+    debug!("[spawn_workers] Dropped rx passed to spawn_workers");
     drop(tx);
+    debug!("[spawn_workers] Dropped tx passed to spawn_workers");
     handles
 }
 
@@ -720,6 +756,9 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
     match (worker_pool, adaptive_controller) {
         (Some(pool), Some(controller)) => {
             // Full adaptive scaling with pool
+            debug!(
+                "[run_in_order_streaming_consumer] Using AdaptiveScaling mode (pool + controller)"
+            );
             // Get check interval from config, default to 10 if not available
             let check_interval = controller.scaling_check_interval();
             let scaling = AdaptiveScaling::new(pool, controller, check_interval);
@@ -736,7 +775,11 @@ pub(crate) fn run_in_order_streaming_consumer<W: Write + Seek + Send + 'static>(
         }
         (_, controller) => {
             // No pool - drop sender and use NoScaling
+            debug!(
+                "[run_in_order_streaming_consumer] Using NoScaling mode, dropping result_sender immediately"
+            );
             drop(result_sender);
+            debug!("[run_in_order_streaming_consumer] result_sender dropped");
             let scaling = NoScaling::new(controller);
             run_consumer_unified(
                 rx2,
@@ -800,9 +843,16 @@ where
         }
 
         // Always use blocking receive - efficient and no CPU waste
+        debug!("[CONSUMER] Blocking on rx2.recv_blocking()...");
         let (index, result) = match rx2.recv_blocking() {
-            Ok(item) => item,
-            Err(_) => break, // Channel closed
+            Ok(item) => {
+                debug!("[CONSUMER] Received item with index: {}", item.0);
+                item
+            }
+            Err(_) => {
+                debug!("[CONSUMER] rx2 channel closed, exiting loop");
+                break; // Channel closed
+            }
         };
 
         let wait_time = last_processed_time.elapsed();

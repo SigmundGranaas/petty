@@ -175,7 +175,9 @@ pub use traits::{Executor, FontProvider, ResourceProvider};
 pub mod pipeline;
 
 // Public API
-pub use crate::pipeline::{GenerationMode, PdfBackend, PipelineBuilder, ProcessingMode};
+pub use crate::pipeline::{
+    DocumentPipeline, GenerationMode, PdfBackend, PipelineBuilder, ProcessingMode,
+};
 
 // Helper trait for error conversion
 pub(crate) trait MapRenderError<T> {
