@@ -1,3 +1,5 @@
+//! Variable and parameter handlers: xsl:variable, xsl:param, xsl:with-param, xsl:number.
+
 use crate::ast::{
     Avt3, GlobalParam, GlobalVariable, IterateParam, NextIterationParam, NumberLevel, Param3,
     PreparsedTemplate, WithParam3, Xslt3Instruction,

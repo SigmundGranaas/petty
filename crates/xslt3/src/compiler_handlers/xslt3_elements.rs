@@ -1,3 +1,5 @@
+//! XSLT 3.0-specific element handlers: xsl:map, xsl:array, merge components.
+
 use crate::ast::{
     ArrayMemberInstruction, MapEntryInstruction, MergeAction, MergeKey, MergeSource,
     PreparsedTemplate, Xslt3Instruction,

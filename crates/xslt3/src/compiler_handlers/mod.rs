@@ -1,3 +1,27 @@
+//! XSLT 3.0 Compiler Handlers
+//!
+//! This module implements the compilation phase handlers that transform XSLT 3.0
+//! XML elements into the internal AST representation (`Xslt3Instruction`).
+//!
+//! # Architecture
+//!
+//! The compiler uses a state machine with a stack-based approach:
+//! - `state_stack`: Tracks nested element contexts (e.g., inside a function, template)
+//! - `instruction_stack`: Accumulates compiled instructions for the current scope
+//!
+//! Each handler follows the pattern:
+//! - `handle_*_start`: Called when an opening tag is encountered, pushes state
+//! - `handle_*_end`: Called when closing tag is found, pops state and creates instruction
+//!
+//! # Modules
+//!
+//! - `control_flow`: xsl:if, xsl:choose, xsl:try-catch, xsl:assert, xsl:mode
+//! - `loops`: xsl:iterate, xsl:for-each, xsl:for-each-group
+//! - `streaming`: xsl:fork, xsl:merge, xsl:stream, xsl:accumulator
+//! - `stylesheet`: xsl:template, xsl:function, xsl:output, xsl:key
+//! - `variables`: xsl:variable, xsl:param, xsl:with-param
+//! - `xslt3_elements`: xsl:map, xsl:array, xsl:evaluate, xsl:source-document
+
 pub(crate) mod control_flow;
 pub(crate) mod loops;
 pub(crate) mod streaming;

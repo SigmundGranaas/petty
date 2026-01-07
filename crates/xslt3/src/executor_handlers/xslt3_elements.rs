@@ -1,3 +1,5 @@
+//! XSLT 3.0 element execution: xsl:map, xsl:array, xsl:analyze-string, xsl:where-populated.
+
 use crate::ast::{
     ArrayMemberInstruction, MapEntryInstruction, PreparsedTemplate, SortKey3, WithParam3,
 };

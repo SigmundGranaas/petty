@@ -1,3 +1,5 @@
+//! Literal output execution: content tags, xsl:number, xsl:copy, xsl:copy-of.
+
 #![allow(clippy::too_many_arguments)]
 
 use crate::ast::{Avt3, NumberLevel, PreparsedTemplate, ShadowAttribute};

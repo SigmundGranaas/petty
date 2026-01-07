@@ -1,3 +1,5 @@
+//! Streaming instruction execution: xsl:fork, xsl:merge, xsl:source-document.
+
 #![allow(clippy::too_many_arguments)]
 
 use crate::ast::{ForkBranch, MergeAction, MergeKey, MergeSource};

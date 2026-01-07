@@ -1,3 +1,5 @@
+//! Variable execution: xsl:variable, xsl:param, xsl:with-param.
+
 #![allow(clippy::too_many_arguments)]
 
 use crate::ast::PreparsedTemplate;

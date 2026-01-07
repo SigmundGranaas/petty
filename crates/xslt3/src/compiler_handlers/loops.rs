@@ -1,3 +1,5 @@
+//! Loop instruction handlers: xsl:for-each, xsl:for-each-group, xsl:iterate, xsl:sort.
+
 use crate::ast::{PreparsedTemplate, SortKey3, Xslt3Instruction};
 use crate::compiler::{
     BuilderState3, CompilerBuilder3, OwnedAttributes, get_attr_optional, get_attr_required,

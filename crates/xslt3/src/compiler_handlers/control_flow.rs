@@ -1,3 +1,6 @@
+//! Control flow instruction handlers: xsl:if, xsl:choose/when/otherwise, xsl:try/catch,
+//! xsl:assert, xsl:mode, and xsl:analyze-string.
+
 use crate::ast::{
     CatchClause, ModeDeclaration, OnMultipleMatch, OnNoMatch, PreparsedTemplate, TypedMode, When3,
     Xslt3Instruction,

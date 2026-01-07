@@ -1,3 +1,5 @@
+//! Text output execution: xsl:text, xsl:value-of, text value templates.
+
 #![allow(clippy::too_many_arguments)]
 
 use crate::ast::{PreparsedTemplate, TextValueTemplate};

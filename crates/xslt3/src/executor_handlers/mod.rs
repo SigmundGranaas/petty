@@ -1,3 +1,5 @@
+//! Runtime execution handlers for XSLT 3.0 instructions.
+
 pub(crate) mod accumulators;
 pub(crate) mod control_flow;
 pub(crate) mod diagnostics;

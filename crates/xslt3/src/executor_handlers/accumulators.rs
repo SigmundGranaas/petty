@@ -1,3 +1,5 @@
+//! Accumulator execution: xsl:accumulator initialization and rule processing.
+
 use crate::ast::{Accumulator, AccumulatorPhase};
 use crate::executor::{ExecutionError, TemplateExecutor3};
 use petty_xpath1::datasource::{DataSourceNode, NodeType};

@@ -1,3 +1,5 @@
+//! Diagnostic instruction execution: xsl:assert, xsl:message.
+
 #![allow(clippy::too_many_arguments)]
 
 use crate::ast::PreparsedTemplate;

@@ -1,3 +1,5 @@
+//! Streaming instruction handlers: xsl:stream, xsl:fork, xsl:merge, xsl:accumulator.
+
 use crate::ast::{
     Accumulator, AccumulatorPhase, AccumulatorRule, Pattern3, PreparsedTemplate, Xslt3Instruction,
 };

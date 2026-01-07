@@ -1,3 +1,5 @@
+//! Control flow execution: xsl:if, xsl:choose/when/otherwise, xsl:try/catch, xsl:next-match.
+
 #![allow(clippy::too_many_arguments)]
 
 use crate::ast::{CatchClause, PreparsedTemplate, When3};
@@ -320,5 +322,71 @@ impl<'s, 'a, N: DataSourceNode<'a> + 'a> TemplateExecutor3<'s, 'a, N> {
             )?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_error_info_from_dynamic_error() {
+        let error = ExecutionError::DynamicError {
+            code: "XPTY0004".to_string(),
+            message: "Type error".to_string(),
+        };
+        let info = ErrorInfo::from_execution_error(&error);
+        assert_eq!(info.code, "XPTY0004");
+        assert_eq!(info.description, "Type error");
+    }
+
+    #[test]
+    fn test_error_info_from_xpath_error() {
+        let error = ExecutionError::XPath("Invalid expression".to_string());
+        let info = ErrorInfo::from_execution_error(&error);
+        assert_eq!(info.code, "XPTY0004");
+        assert_eq!(info.description, "Invalid expression");
+    }
+
+    #[test]
+    fn test_error_info_from_type_error() {
+        let error = ExecutionError::TypeError("Cannot convert".to_string());
+        let info = ErrorInfo::from_execution_error(&error);
+        assert_eq!(info.code, "XPTY0004");
+        assert_eq!(info.description, "Cannot convert");
+    }
+
+    #[test]
+    fn test_error_info_from_assertion_failed() {
+        let error = ExecutionError::AssertionFailed("Check failed".to_string());
+        let info = ErrorInfo::from_execution_error(&error);
+        assert_eq!(info.code, "XTTE0000");
+        assert_eq!(info.description, "Check failed");
+    }
+
+    #[test]
+    fn test_error_info_from_unknown_template() {
+        let error = ExecutionError::UnknownNamedTemplate("myTemplate".to_string());
+        let info = ErrorInfo::from_execution_error(&error);
+        assert_eq!(info.code, "XTDE0040");
+        assert!(info.description.contains("myTemplate"));
+    }
+
+    #[test]
+    fn test_error_info_from_unknown_function() {
+        let error = ExecutionError::UnknownFunction("my:function".to_string());
+        let info = ErrorInfo::from_execution_error(&error);
+        assert_eq!(info.code, "XPST0017");
+        assert!(info.description.contains("my:function"));
+    }
+
+    #[test]
+    fn test_error_info_from_no_matching_template() {
+        let error = ExecutionError::NoMatchingTemplate {
+            node_name: "item".to_string(),
+        };
+        let info = ErrorInfo::from_execution_error(&error);
+        assert_eq!(info.code, "XTDE0555");
+        assert!(info.description.contains("item"));
     }
 }

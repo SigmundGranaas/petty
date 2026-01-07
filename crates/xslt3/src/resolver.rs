@@ -163,7 +163,8 @@ pub fn resolve_uri(href: &str, base_uri: Option<&str>) -> String {
             let base_path = Path::new(base);
             let base_dir = base_path.parent().unwrap_or(Path::new(""));
             let resolved = base_dir.join(href);
-            normalize_path(&resolved.to_string_lossy())
+            let resolved_str = resolved.to_string_lossy().replace('\\', "/");
+            normalize_path(&resolved_str)
         }
         None => href.to_string(),
     }

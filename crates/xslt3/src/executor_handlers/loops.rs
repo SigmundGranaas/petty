@@ -1,3 +1,5 @@
+//! Loop execution: xsl:for-each, xsl:for-each-group, xsl:iterate, xsl:sort.
+
 #![allow(clippy::too_many_arguments)]
 
 use crate::ast::{IterateParam, NextIterationParam, PreparsedTemplate, SortKey3, WithParam3};
@@ -423,5 +425,58 @@ impl<'s, 'a, N: DataSourceNode<'a> + 'a> TemplateExecutor3<'s, 'a, N> {
 
     pub(crate) fn handle_break(&self) -> Result<(), ExecutionError> {
         Err(ExecutionError::Break)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn compare_sort_values(a: &SortValue, b: &SortValue) -> Ordering {
+        match (a, b) {
+            (SortValue::Text(ta), SortValue::Text(tb)) => ta.cmp(tb),
+            (SortValue::Number(na), SortValue::Number(nb)) => {
+                na.partial_cmp(nb).unwrap_or(Ordering::Equal)
+            }
+            _ => Ordering::Equal,
+        }
+    }
+
+    #[test]
+    fn test_sort_value_text_comparison() {
+        let a = SortValue::Text("apple".to_string());
+        let b = SortValue::Text("banana".to_string());
+        assert_eq!(compare_sort_values(&a, &b), Ordering::Less);
+
+        let c = SortValue::Text("zebra".to_string());
+        assert_eq!(compare_sort_values(&c, &a), Ordering::Greater);
+    }
+
+    #[test]
+    fn test_sort_value_number_comparison() {
+        let a = SortValue::Number(10.0);
+        let b = SortValue::Number(2.0);
+        assert_eq!(compare_sort_values(&a, &b), Ordering::Greater);
+
+        let c = SortValue::Number(-5.0);
+        assert_eq!(compare_sort_values(&c, &a), Ordering::Less);
+    }
+
+    #[test]
+    fn test_sort_value_number_nan_handling() {
+        let a = SortValue::Number(f64::NAN);
+        let b = SortValue::Number(5.0);
+        assert_eq!(compare_sort_values(&a, &b), Ordering::Equal);
+    }
+
+    #[test]
+    fn test_sort_value_equal() {
+        let a = SortValue::Text("same".to_string());
+        let b = SortValue::Text("same".to_string());
+        assert_eq!(compare_sort_values(&a, &b), Ordering::Equal);
+
+        let c = SortValue::Number(42.0);
+        let d = SortValue::Number(42.0);
+        assert_eq!(compare_sort_values(&c, &d), Ordering::Equal);
     }
 }
