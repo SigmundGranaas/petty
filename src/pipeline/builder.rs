@@ -16,6 +16,7 @@ use petty_json_template::JsonParser;
 use petty_resource::FilesystemResourceProvider;
 use petty_template_dsl::Template;
 use petty_xslt::XsltParser;
+use petty_xslt3::{Xslt3Parser, XsltVersion, detect_xslt_version};
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -74,6 +75,7 @@ impl PipelineBuilder {
 
     /// Configures the pipeline by loading a template from a file.
     /// The template language (XSLT, JSON) is inferred from the file extension.
+    /// For XSLT files, the version is auto-detected from the version attribute.
     pub fn with_template_file<P: AsRef<Path>>(mut self, path: P) -> Result<Self, PipelineError> {
         let path_ref = path.as_ref();
         let extension = path_ref.extension().and_then(|s| s.to_str()).unwrap_or("");
@@ -92,20 +94,27 @@ impl PipelineBuilder {
             ))
         })?;
 
-        let parser = self.get_parser_for_extension(extension)?;
+        let parser = match extension {
+            "xslt" | "xsl" | "fo" => self.get_xslt_parser_for_source(&template_source),
+            _ => self.get_parser_for_extension(extension)?,
+        };
         self.template_features = Some(parser.parse(&template_source, resource_base_path)?);
         Ok(self)
     }
 
     /// Configures the pipeline with a template from a string.
     /// The `extension` argument is used to select the correct parser ("json", "xslt", etc.).
+    /// For XSLT, the version is auto-detected from the version attribute.
     pub fn with_template_source(
         mut self,
         source: &str,
         extension: &str,
     ) -> Result<Self, PipelineError> {
-        let resource_base_path = PathBuf::new(); // No base path for string-based templates
-        let parser = self.get_parser_for_extension(extension)?;
+        let resource_base_path = PathBuf::new();
+        let parser = match extension {
+            "xslt" | "xsl" | "fo" => self.get_xslt_parser_for_source(source),
+            _ => self.get_parser_for_extension(extension)?,
+        };
         self.template_features = Some(parser.parse(source, resource_base_path)?);
         Ok(self)
     }
@@ -401,6 +410,25 @@ impl PipelineBuilder {
                 "Unsupported template file extension: .{}",
                 extension
             ))),
+        }
+    }
+
+    fn get_xslt_parser_for_source(&self, source: &str) -> Box<dyn TemplateParser> {
+        use crate::pipeline::adapters::TemplateParserAdapter;
+
+        match detect_xslt_version(source) {
+            XsltVersion::V30 => {
+                log::info!("Detected XSLT 3.0 stylesheet, using XSLT 3.0 parser");
+                Box::new(TemplateParserAdapter::new(Xslt3Parser::new()))
+            }
+            XsltVersion::V20 => {
+                log::info!("Detected XSLT 2.0 stylesheet, falling back to XSLT 1.0 parser");
+                Box::new(TemplateParserAdapter::new(XsltParser))
+            }
+            XsltVersion::V10 => {
+                log::info!("Detected XSLT 1.0 stylesheet");
+                Box::new(TemplateParserAdapter::new(XsltParser))
+            }
         }
     }
 }

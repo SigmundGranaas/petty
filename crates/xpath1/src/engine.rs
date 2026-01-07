@@ -152,6 +152,7 @@ where
             let val = evaluate(expr, e_ctx)?;
             match op {
                 UnaryOperator::Minus => Ok(XPathValue::Number(-val.to_number())),
+                UnaryOperator::Plus => Ok(XPathValue::Number(val.to_number())),
             }
         }
     }

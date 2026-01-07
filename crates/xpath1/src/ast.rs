@@ -38,6 +38,7 @@ impl Expression {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UnaryOperator {
     Minus,
+    Plus,
 }
 
 /// A binary operator used in an expression.

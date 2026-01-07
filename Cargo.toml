@@ -7,12 +7,14 @@ members = [
     "crates/traits",
     # Algorithm crates
     "crates/xpath1",
+    "crates/xpath31",
     "crates/layout",
     "crates/jpath",
     # Template crates
     "crates/template-core",
     "crates/json-template",
     "crates/xslt",
+    "crates/xslt3",
     # Render crates
     "crates/render-core",
     "crates/render-lopdf",
@@ -44,6 +46,7 @@ petty-traits = { path = "crates/traits" }
 
 # Algorithm crates
 petty-xpath1 = { path = "crates/xpath1" }
+petty-xpath31 = { path = "crates/xpath31" }
 petty-layout = { path = "crates/layout" }
 petty-jpath = { path = "crates/jpath" }
 
@@ -51,6 +54,7 @@ petty-jpath = { path = "crates/jpath" }
 petty-template-core = { path = "crates/template-core" }
 petty-json-template = { path = "crates/json-template" }
 petty-xslt = { path = "crates/xslt" }
+petty-xslt3 = { path = "crates/xslt3" }
 
 # Render crates
 petty-render-core = { path = "crates/render-core" }

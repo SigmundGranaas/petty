@@ -19,6 +19,24 @@ pub struct PreparsedStyles {
     pub style_override: Option<ElementStyle>,
 }
 
+impl PreparsedStyles {
+    pub fn from_meta(meta: &petty_idf::NodeMetadata) -> Self {
+        Self {
+            id: meta.id.clone(),
+            style_sets: meta.style_sets.clone(),
+            style_override: meta.style_override.clone(),
+        }
+    }
+
+    pub fn from_inline_meta(meta: &petty_idf::InlineMetadata) -> Self {
+        Self {
+            id: None,
+            style_sets: meta.style_sets.clone(),
+            style_override: meta.style_override.clone(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct WithParam {
     pub name: String,
