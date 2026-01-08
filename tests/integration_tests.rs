@@ -861,3 +861,302 @@ fn test_anchor_and_link_basic() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+#[test]
+fn test_xslt3_text_value_templates() -> Result<(), Box<dyn std::error::Error>> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let xslt_template = r#"<?xml version="1.0" encoding="UTF-8"?>
+<xsl:stylesheet version="3.0"
+                xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+                xmlns:fo="http://www.w3.org/1999/XSL/Format"
+                expand-text="yes">
+
+    <fo:simple-page-master page-width="210mm" page-height="297mm" margin="2cm"/>
+
+    <xsl:template match="/">
+        <fo:block>
+            <fo:block font-size="18pt" font-weight="bold" margin-bottom="1cm">
+                Invoice for {invoice/customer}
+            </fo:block>
+            <fo:block margin-bottom="0.5cm">
+                Invoice Number: {invoice/number}
+            </fo:block>
+            <fo:block margin-bottom="0.5cm">
+                Date: {invoice/date}
+            </fo:block>
+            <fo:block margin-bottom="0.5cm">
+                Total: ${invoice/total}
+            </fo:block>
+        </fo:block>
+    </xsl:template>
+
+</xsl:stylesheet>"#;
+
+    let pipeline = PipelineBuilder::new()
+        .with_template_source(xslt_template, "xslt")?
+        .build()?;
+
+    let data = vec![json!({
+        "invoice": {
+            "customer": "Acme Corporation",
+            "number": "INV-2024-001",
+            "date": "2024-01-15",
+            "total": "1,250.00"
+        }
+    })];
+    let writer = Cursor::new(Vec::new());
+
+    let result = tokio::runtime::Runtime::new()?
+        .block_on(async { pipeline.generate(data.into_iter(), writer).await })?;
+
+    let pdf_bytes = result.into_inner();
+
+    std::fs::write("test_xslt3_tvt.pdf", &pdf_bytes)?;
+    println!("Saved test_xslt3_tvt.pdf");
+
+    assert!(pdf_bytes.len() > 100, "PDF should have content");
+
+    let extracted_text = extract_text_from_pdf(&pdf_bytes)?;
+    println!("XSLT 3.0 TVT extracted text:\n{}", extracted_text);
+
+    assert!(
+        extracted_text.contains("Acme Corporation"),
+        "Should contain customer name"
+    );
+    assert!(
+        extracted_text.contains("INV-2024-001"),
+        "Should contain invoice number"
+    );
+    assert!(extracted_text.contains("2024-01-15"), "Should contain date");
+    assert!(extracted_text.contains("1,250.00"), "Should contain total");
+
+    Ok(())
+}
+
+#[test]
+fn test_xslt3_iterate_instruction() -> Result<(), Box<dyn std::error::Error>> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let xslt_template = r#"<?xml version="1.0" encoding="UTF-8"?>
+<xsl:stylesheet version="3.0"
+                xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+                xmlns:fo="http://www.w3.org/1999/XSL/Format"
+                expand-text="yes">
+
+    <fo:simple-page-master page-width="210mm" page-height="297mm" margin="2cm"/>
+
+    <xsl:template match="/">
+        <fo:block>
+            <fo:block font-size="16pt" font-weight="bold" margin-bottom="1cm">
+                Order Items
+            </fo:block>
+            <xsl:iterate select="order/items/item/item">
+                <xsl:param name="running-total" select="0"/>
+                <fo:block margin-bottom="0.3cm">
+                    • {name}: ${price}
+                </fo:block>
+                <xsl:next-iteration>
+                    <xsl:with-param name="running-total" select="$running-total + number(price)"/>
+                </xsl:next-iteration>
+                <xsl:on-completion>
+                    <fo:block margin-top="0.5cm" font-weight="bold">
+                        Total Items: {count(//item/item)}
+                    </fo:block>
+                </xsl:on-completion>
+            </xsl:iterate>
+        </fo:block>
+    </xsl:template>
+
+</xsl:stylesheet>"#;
+
+    let pipeline = PipelineBuilder::new()
+        .with_template_source(xslt_template, "xslt")?
+        .build()?;
+
+    let data = vec![json!({
+        "order": {
+            "items": {
+                "item": [
+                    {"name": "Widget A", "price": "10.00"},
+                    {"name": "Widget B", "price": "15.50"},
+                    {"name": "Widget C", "price": "8.25"}
+                ]
+            }
+        }
+    })];
+    let writer = Cursor::new(Vec::new());
+
+    let result = tokio::runtime::Runtime::new()?
+        .block_on(async { pipeline.generate(data.into_iter(), writer).await })?;
+
+    let pdf_bytes = result.into_inner();
+
+    std::fs::write("test_xslt3_iterate.pdf", &pdf_bytes)?;
+    println!("Saved test_xslt3_iterate.pdf");
+
+    assert!(pdf_bytes.len() > 100, "PDF should have content");
+
+    let extracted_text = extract_text_from_pdf(&pdf_bytes)?;
+    println!("XSLT 3.0 iterate extracted text:\n{}", extracted_text);
+
+    assert!(
+        extracted_text.contains("Widget A"),
+        "Should contain first item"
+    );
+    assert!(
+        extracted_text.contains("Widget B"),
+        "Should contain second item"
+    );
+    assert!(
+        extracted_text.contains("Widget C"),
+        "Should contain third item"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_xslt3_try_catch_in_pdf() -> Result<(), Box<dyn std::error::Error>> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let xslt_template = r#"<?xml version="1.0" encoding="UTF-8"?>
+<xsl:stylesheet version="3.0"
+                xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+                xmlns:fo="http://www.w3.org/1999/XSL/Format"
+                xmlns:err="http://www.w3.org/2005/xqt-errors">
+
+    <fo:simple-page-master page-width="210mm" page-height="297mm" margin="2cm"/>
+
+    <xsl:template match="/">
+        <fo:block>
+            <fo:block font-size="16pt" font-weight="bold" margin-bottom="1cm">
+                Error Handling Demo
+            </fo:block>
+            <xsl:try>
+                <fo:block>
+                    Valid data: <xsl:value-of select="report/title"/>
+                </fo:block>
+                <xsl:catch>
+                    <fo:block color="red">
+                        Error occurred while processing
+                    </fo:block>
+                </xsl:catch>
+            </xsl:try>
+        </fo:block>
+    </xsl:template>
+
+</xsl:stylesheet>"#;
+
+    let pipeline = PipelineBuilder::new()
+        .with_template_source(xslt_template, "xslt")?
+        .build()?;
+
+    let data = vec![json!({
+        "report": {
+            "title": "Monthly Sales Report"
+        }
+    })];
+    let writer = Cursor::new(Vec::new());
+
+    let result = tokio::runtime::Runtime::new()?
+        .block_on(async { pipeline.generate(data.into_iter(), writer).await })?;
+
+    let pdf_bytes = result.into_inner();
+
+    std::fs::write("test_xslt3_try_catch.pdf", &pdf_bytes)?;
+    println!("Saved test_xslt3_try_catch.pdf");
+
+    assert!(pdf_bytes.len() > 100, "PDF should have content");
+
+    let extracted_text = extract_text_from_pdf(&pdf_bytes)?;
+    println!("XSLT 3.0 try/catch extracted text:\n{}", extracted_text);
+
+    assert!(
+        extracted_text.contains("Monthly Sales Report"),
+        "Should contain report title from successful try block"
+    );
+    assert!(
+        !extracted_text.contains("Error occurred"),
+        "Should NOT contain catch block output"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn test_xslt3_for_each_group() -> Result<(), Box<dyn std::error::Error>> {
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    let xslt_template = r#"<?xml version="1.0" encoding="UTF-8"?>
+<xsl:stylesheet version="3.0"
+                xmlns:xsl="http://www.w3.org/1999/XSL/Transform"
+                xmlns:fo="http://www.w3.org/1999/XSL/Format"
+                expand-text="yes">
+
+    <fo:simple-page-master page-width="210mm" page-height="297mm" margin="2cm"/>
+
+    <xsl:template match="/">
+        <fo:block>
+            <fo:block font-size="18pt" font-weight="bold" margin-bottom="1cm">
+                Sales by Category
+            </fo:block>
+            <xsl:for-each-group select="sales/item/item" group-by="category">
+                <fo:block font-weight="bold" margin-top="0.5cm" margin-bottom="0.3cm">
+                    Category: {current-grouping-key()}
+                </fo:block>
+                <xsl:for-each select="current-group()">
+                    <fo:block margin-left="1cm">
+                        - {product}: ${amount}
+                    </fo:block>
+                </xsl:for-each>
+            </xsl:for-each-group>
+        </fo:block>
+    </xsl:template>
+
+</xsl:stylesheet>"#;
+
+    let pipeline = PipelineBuilder::new()
+        .with_template_source(xslt_template, "xslt")?
+        .build()?;
+
+    let data = vec![json!({
+        "sales": {
+            "item": [
+                {"category": "Electronics", "product": "Laptop", "amount": "999.00"},
+                {"category": "Electronics", "product": "Phone", "amount": "599.00"},
+                {"category": "Clothing", "product": "Shirt", "amount": "29.99"},
+                {"category": "Clothing", "product": "Pants", "amount": "49.99"},
+                {"category": "Books", "product": "Novel", "amount": "14.99"}
+            ]
+        }
+    })];
+    let writer = Cursor::new(Vec::new());
+
+    let result = tokio::runtime::Runtime::new()?
+        .block_on(async { pipeline.generate(data.into_iter(), writer).await })?;
+
+    let pdf_bytes = result.into_inner();
+
+    std::fs::write("test_xslt3_for_each_group.pdf", &pdf_bytes)?;
+    println!("Saved test_xslt3_for_each_group.pdf");
+
+    assert!(pdf_bytes.len() > 100, "PDF should have content");
+
+    let extracted_text = extract_text_from_pdf(&pdf_bytes)?;
+    println!(
+        "XSLT 3.0 for-each-group extracted text:\n{}",
+        extracted_text
+    );
+
+    assert!(
+        extracted_text.contains("Sales by Category"),
+        "Should contain title"
+    );
+    assert!(
+        extracted_text.contains("Laptop") || extracted_text.contains("Phone"),
+        "Should contain electronics products"
+    );
+
+    Ok(())
+}

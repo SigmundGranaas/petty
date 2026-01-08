@@ -1,0 +1,38 @@
+[package]
+name = "petty-xslt3"
+version = "0.1.0"
+edition = "2024"
+description = "XSLT 3.0 template processor with streaming, higher-order functions, and maps/arrays"
+
+[features]
+default = []
+testing = []
+
+[dependencies]
+petty-types = { path = "../types" }
+petty-style = { path = "../style" }
+petty-idf = { path = "../idf" }
+petty-xpath1 = { path = "../xpath1" }
+petty-xpath31 = { path = "../xpath31" }
+petty-xslt = { path = "../xslt" }
+petty-template-core = { path = "../template-core" }
+petty-traits = { path = "../traits" }
+
+roxmltree = "0.21.1"
+quick-xml = { version = "0.38.4", features = ["serialize"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "2.0.17"
+log = "0.4"
+nom = "8.0"
+regex = "1.10"
+
+[dev-dependencies]
+roxmltree = "0.21.1"
+serde_json = "1.0"
+criterion = "0.5"
+
+[[bench]]
+name = "xslt3_bench"
+harness = false
+required-features = ["testing"]

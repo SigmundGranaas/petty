@@ -3,6 +3,7 @@
 //! This crate provides a full XSLT 1.0 processor with support for both XML and JSON data sources.
 
 pub mod ast;
+pub mod buffering_builder;
 pub mod compiler;
 pub mod datasources;
 pub mod error;
@@ -19,4 +20,8 @@ mod executor_handlers;
 
 pub use datasources::{DataSourceNode, NodeType, QName};
 pub use error::{Location, XsltError};
+pub use output::{
+    CollectedOutput, DocumentOutput, MultiOutputCollector, OutputError, OutputSink,
+    SingleOutputSink,
+};
 pub use processor::{XsltParser, XsltTemplate};
