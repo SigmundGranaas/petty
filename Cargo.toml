@@ -79,7 +79,7 @@ memory-stats = "1.0"
 num_cpus = "1.16"
 
 # Async runtime (feature-gated in future)
-tokio = { version = "1.48.0", features = ["macros", "rt", "sync", "rt-multi-thread"] }
+tokio = { version = "1.49.0", features = ["macros", "rt", "sync", "rt-multi-thread"] }
 async-channel = "2.2.0"
 
 # Parallel execution
