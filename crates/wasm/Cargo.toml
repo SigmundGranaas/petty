@@ -53,7 +53,7 @@ petty-source = { path = "../source" }
 getrandom = { version = "0.3", features = ["wasm_js"] }
 
 # PDF generation (for lopdf dictionary macro)
-lopdf = { version = "0.38.0", default-features = false }
+lopdf = { version = "0.39.0", default-features = false }
 
 [features]
 default = ["embedded-fonts"]
