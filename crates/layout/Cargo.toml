@@ -25,7 +25,7 @@ ttf-parser = "0.25.1"
 fontdb = { version = "0.23.0", optional = true }
 
 # Error handling
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 
 # Logging
 log = "0.4"
