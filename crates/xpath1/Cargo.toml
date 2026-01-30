@@ -5,7 +5,7 @@ edition = "2024"
 
 [dependencies]
 nom = "8.0"
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 
 [dev-dependencies]
 # For testing XML/JSON data sources
