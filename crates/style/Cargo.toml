@@ -5,6 +5,6 @@ edition = "2024"
 
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
-thiserror = "2.0.17"
+thiserror = "2.0.18"
 petty-types = { path = "../types" }
 nom = "8.0"
